@@ -50,6 +50,9 @@ export const CATEGORY_LINK = 'a[href*="/c/"]';
 /** Appendix A list URLs: `/c/<slug>/<id>` with optional parent slugs, plus the new/unread lists. */
 export const CATEGORY_PATH = /^\/c\/((?:[^/?#]+\/)*[^/?#]+)\/(\d+)\/?$/;
 
+/** Any rendered post of a topic; it marks entry when a one-floor topic shows no floor counter. */
+export const TOPIC_POST = '.topic-post';
+
 export const rowSelector = (topicId: string) => `tr.topic-list-item[data-topic-id="${topicId}"]`;
 
 /** T08: the topic URL shape that confirms entry. */

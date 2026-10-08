@@ -130,7 +130,7 @@ describe('CLI-003 exit codes (§11.1)', () => {
     [{ outcome: 'failed', stopCause: 'error', failure: { code: 'selector-contract-broken', message: '' } }, EXIT.contract],
     [{ outcome: 'failed', stopCause: 'no-progress', failure: { code: 'no-progress', message: '' } }, EXIT.noProgress],
     [{ outcome: 'failed', stopCause: 'error', failure: { code: 'no-candidates', message: '' } }, EXIT.noProgress],
-    [{ outcome: 'failed', stopCause: 'user', failure: { code: 'page-timeout', message: '' } }, EXIT.environment],
+    [{ outcome: 'failed', stopCause: 'error', failure: { code: 'internal', message: 'page crashed' } }, EXIT.environment],
   ] as const)('%j → %i', (result, code) => {
     expect(exitCodeFor(result)).toBe(code);
   });

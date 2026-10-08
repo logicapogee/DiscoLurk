@@ -1,8 +1,8 @@
 import type { Page } from 'playwright-core';
-import { pauseBetween, RunError, stopRequest, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site } from '@disco-lurk/core';
+import { pauseBetween, RunError, untilAbort, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site } from '@disco-lurk/core';
 import { launchProfile, type BrowserSession } from './browser';
 import { DiscourseForum, titleLinkSelector, type Credentials, type LoginForm, type TitleLinks } from './forum';
-import { closedAsStop, PageView, targetClosed } from './page';
+import { PAGE_TIMEOUTS, PageView, TargetWatch, targetClosed } from './page';
 import { SELECTORS } from './selectors';
 
 export interface OpenForumOptions {
@@ -30,21 +30,41 @@ function retryable(err: unknown): boolean {
   return code !== 'EACCES' && code !== 'EPERM' && code !== 'EROFS';
 }
 
-function titleLinks(page: Page, call: ReturnType<typeof closedAsStop>): TitleLinks {
-  return { click: (topicId) => call(() => page.locator(titleLinkSelector(topicId)).first().click()) };
+type PageCall = TargetWatch['call'];
+
+function titleLinks(page: Page, call: PageCall): TitleLinks {
+  return { click: (topicId) => call(() => page.locator(titleLinkSelector(topicId)).first().click({ timeout: PAGE_TIMEOUTS.actionMs })) };
 }
 
-function loginForm(page: Page, deps: RuntimeDeps, call: ReturnType<typeof closedAsStop>): LoginForm {
+/**
+ * Playwright's messages for a failed fill can quote the value typed, so a failed step is reported
+ * by its name and the error's class only; the credentials never reach a message, event or log.
+ */
+async function loginStep(step: string, action: () => Promise<void>): Promise<void> {
+  try {
+    await action();
+  } catch (err) {
+    if (targetClosed(err)) throw err;
+    const name = err instanceof Error ? err.name : typeof err;
+    throw new RunError(name === 'TimeoutError' ? 'page-timeout' : 'needs-auth', `${step} failed: ${name}`);
+  }
+}
+
+export function loginForm(page: Pick<Page, 'locator'>, deps: RuntimeDeps, call: PageCall): LoginForm {
   const pause = (signal: AbortSignal) => pauseBetween(deps, 0.5, 1, signal);
+  const timeout = PAGE_TIMEOUTS.actionMs;
   return {
     submit: (credentials, signal) =>
-      call(async () => {
-        await page.locator(SELECTORS.loginUsername).fill(credentials.username);
-        await pause(signal);
-        await page.locator(SELECTORS.loginPassword).fill(credentials.password);
-        await pause(signal);
-        await page.locator(SELECTORS.loginButton).click();
-      }),
+      untilAbort(
+        call(async () => {
+          await loginStep('username', () => page.locator(SELECTORS.loginUsername).fill(credentials.username, { timeout }));
+          await pause(signal);
+          await loginStep('password', () => page.locator(SELECTORS.loginPassword).fill(credentials.password, { timeout }));
+          await pause(signal);
+          await loginStep('submit', () => page.locator(SELECTORS.loginButton).click({ timeout }));
+        }),
+        signal,
+      ),
   };
 }
 
@@ -64,14 +84,14 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
       if (attempt >= LAUNCH_ATTEMPTS || !retryable(err)) throw err;
     }
   }
-  const closed = new AbortController();
-  const onClose = () => closed.abort(stopRequest('browser-closed'));
-  browser.context.on('close', onClose);
-  browser.page.on('close', onClose);
-  const call = closedAsStop(closed);
+  const watch = new TargetWatch();
+  browser.context.on('close', () => watch.markClosed());
+  browser.page.on('close', () => watch.markClosed());
+  browser.page.on('crash', () => watch.markCrashed());
+  const call = watch.call;
   const forum = new DiscourseForum({
     site: opts.site,
-    page: new PageView(browser.page, closed),
+    page: new PageView(browser.page, watch),
     titleLinks: titleLinks(browser.page, call),
     deps: opts.deps,
     headless: opts.headless,
@@ -81,7 +101,7 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
   const session = browser;
   return {
     forum,
-    closed: closed.signal,
+    closed: watch.closed.signal,
     // Closing a browser the user already closed must still release the Profile lock.
     close: () =>
       session.close().catch((err: unknown) => {

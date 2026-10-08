@@ -36,6 +36,31 @@ export function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw abortError(signal);
 }
 
+/** Settles with `promise`, or rejects as soon as `signal` aborts; `onAbort` releases whatever `promise` holds. */
+export function untilAbort<T>(promise: Promise<T>, signal: AbortSignal, onAbort?: () => void): Promise<T> {
+  if (signal.aborted) {
+    onAbort?.();
+    return Promise.reject(abortError(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      onAbort?.();
+      reject(abortError(signal));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (v) => {
+        signal.removeEventListener('abort', abort);
+        resolve(v);
+      },
+      (e: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(e);
+      },
+    );
+  });
+}
+
 export const systemClock: Clock = {
   now: () => Date.now(),
   monotonic: () => performance.now(),

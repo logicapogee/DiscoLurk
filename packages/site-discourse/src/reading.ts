@@ -4,6 +4,8 @@ import type { FloorReading } from './parse';
 /** The two things reading needs from a topic page; tests drive the strategies through a scripted one. */
 export interface FloorSurface {
   readCounter(): Promise<FloorReading | null>;
+  /** Rendered posts on the page; 0 when none can be counted. */
+  countPosts(): Promise<number>;
   scroll(dy: number): Promise<void>;
 }
 
@@ -27,7 +29,8 @@ interface Tracker {
   last: number | null;
   /** Reports an advance; true when the strategy asked to stop (F06). */
   advance(reading: FloorReading): boolean;
-  estimate(): boolean;
+  /** Reports floors seen without a counter, never as confirmed. */
+  estimate(floors: number): boolean;
 }
 
 function tracker(start: FloorReading | null, strategy: ReadStrategy): Tracker {
@@ -50,11 +53,10 @@ function tracker(start: FloorReading | null, strategy: ReadStrategy): Tracker {
       if (verdict === 'stop') t.result.stoppedByTarget = true;
       return verdict === 'stop';
     },
-    estimate() {
-      // F08 / Q04: without a counter one blind step stands for one floor, and it is never confirmed.
+    estimate(floors) {
       const from = t.result.endFloor ?? 0;
-      t.result.endFloor = from + 1;
-      const verdict = strategy.onFloor({ from, to: from + 1, confirmed: false });
+      t.result.endFloor = from + floors;
+      const verdict = strategy.onFloor({ from, to: from + floors, confirmed: false });
       if (verdict === 'stop') t.result.stoppedByTarget = true;
       return verdict === 'stop';
     },
@@ -87,13 +89,17 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
     t.result.scrolls++;
   };
 
+  // Without a counter the topic is credited with the posts it rendered, at least the one floor every
+  // topic has (a one-floor topic shows no counter at all); scrolling while reading adds nothing to it.
+  const estimateFromPosts = async () => t.estimate(Math.max(1, await surface.countPosts()));
+
   if (strategy.browseMode === 'quick') {
     if (!first) {
       for (let i = 0; i < QUICK.blindScrolls; i++) {
         await pause(QUICK.dwellSec);
         await scroll(px(QUICK.stepPx));
-        if (t.estimate()) break;
       }
+      await estimateFromPosts();
       return t.result;
     }
     const goal = randomInt(deps.random, QUICK.floors[0], QUICK.floors[1]);
@@ -116,31 +122,41 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
       await scroll(px(TRADITIONAL.stepPx));
       await pause(TRADITIONAL.intervalSec);
       const r = first ? await surface.readCounter() : null;
-      if (first ? r !== null && t.advance(r) : t.estimate()) break;
+      if (r !== null && t.advance(r)) break;
     }
+    if (!first) await estimateFromPosts();
     return t.result;
   }
 
   let stuck = 0;
+  // Set once the big step has been taken for the current stall; a stall that outlasts it ends the topic.
+  let escalated = false;
   while (t.result.scrolls < DEEP.maxScrolls) {
     // F03: read first, then scroll, then let the counter catch up.
     await pause(DEEP.dwellSec);
     await scroll(px(DEEP.stepPx));
     await sleep(DEEP.settleMs);
+    let before = t.last;
     let r = await surface.readCounter();
-    const before = t.last;
     if (r && t.advance(r)) break;
     if (r && r.current >= r.total) break;
-    stuck = t.last === before ? stuck + 1 : 0;
-    if (stuck >= DEEP.stuckLimit && t.result.scrolls < DEEP.maxScrolls) {
-      // F04
-      await scroll(DEEP.bigStepPx);
-      await sleep(DEEP.bigSettleMs);
+    if (t.last !== before) {
       stuck = 0;
-      r = await surface.readCounter();
-      if (r && t.advance(r)) break;
-      if (r && r.current >= r.total) break;
+      escalated = false;
+      continue;
     }
+    if (++stuck < DEEP.stuckLimit) continue;
+    if (escalated) break;
+    if (t.result.scrolls >= DEEP.maxScrolls) break;
+    // F04
+    await scroll(DEEP.bigStepPx);
+    await sleep(DEEP.bigSettleMs);
+    stuck = 0;
+    before = t.last;
+    r = await surface.readCounter();
+    if (r && t.advance(r)) break;
+    if (r && r.current >= r.total) break;
+    escalated = t.last === before;
   }
   return t.result;
 }

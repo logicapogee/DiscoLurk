@@ -4,6 +4,7 @@ import {
   pauseBetween,
   RunError,
   throwIfAborted,
+  untilAbort,
   type ActionPolicy,
   type ActionResult,
   type AuthMode,
@@ -42,6 +43,7 @@ import {
   rowSelector,
   SELECTORS,
   SORTED_BY_POSTS_QUERY,
+  TOPIC_POST,
   topicUrlPattern,
 } from './selectors';
 
@@ -131,25 +133,6 @@ const missAs =
     throw err;
   };
 
-/** Resolves with `promise`, or rejects as soon as `signal` aborts, so long page waits honour a stop (S05). */
-function untilAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(abortError(signal));
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError(signal));
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (v) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(v);
-      },
-      (e: unknown) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(e);
-      },
-    );
-  });
-}
-
 /** A topic page as reading sees it: the floor counters' text and wheel input over the post stream. */
 class PageFloorSurface implements FloorSurface {
   private pointed = false;
@@ -162,6 +145,10 @@ class PageFloorSurface implements FloorSurface {
   async readCounter(): Promise<FloorReading | null> {
     const texts = await Promise.all([this.page.text(SELECTORS.floorWide), this.page.texts(SELECTORS.floorNarrow)]).catch(missAs(null));
     return texts && floorCounterFromText(...texts);
+  }
+
+  countPosts(): Promise<number> {
+    return this.page.count(TOPIC_POST).catch(missAs(0));
   }
 
   async scroll(dy: number): Promise<void> {
@@ -325,23 +312,50 @@ export class DiscourseForum implements ForumPort {
     // T08: the title link on the current list page is the only way into a candidate; there is no URL fallback.
     const link = titleLinkSelector(topic.id);
     if ((await this.opts.page.count(link)) === 0) return { topic, entered: false, reason: 'row-not-on-list' };
-    await untilAbort(this.opts.page.scrollIntoView(link), signal);
-    await this.pause(0.5, 1.5, signal);
-    await untilAbort(this.opts.titleLinks.click(topic.id), signal);
+    try {
+      await untilAbort(this.opts.page.scrollIntoView(link), signal);
+      await this.pause(0.5, 1.5, signal);
+      await untilAbort(this.opts.titleLinks.click(topic.id), signal);
+    } catch (err) {
+      // A row that never becomes clickable costs this topic only; the next candidate is on the same list.
+      if (err instanceof Error && err.name === 'TimeoutError') return { topic, entered: false, reason: 'click-failed' };
+      throw err;
+    }
 
     const onTopic = await untilAbort(this.opts.page.waitForURL(topicUrlPattern(topic.id), { timeout: ENTER_URL_MS }).then(() => true, missAs(false)), signal);
-    const rendered = onTopic && (await this.appears(`${SELECTORS.floorWide}, ${SELECTORS.floorNarrow}, .topic-post`, ENTER_CONTENT_MS, signal));
+    const rendered = onTopic && (await this.appears(`${SELECTORS.floorWide}, ${SELECTORS.floorNarrow}, ${TOPIC_POST}`, ENTER_CONTENT_MS, signal));
     if (rendered) return { topic, entered: true };
 
-    await this.backToList(signal);
+    await this.backToList(topic.id, signal);
     return { topic, entered: false, reason: onTopic ? 'topic-content-missing' : 'url-unchanged' };
   }
 
-  /** After a failed entry the next candidate is clicked on the same list, so the list is restored first. */
-  private async backToList(signal: AbortSignal): Promise<void> {
-    if (!this.listUrl || this.opts.page.url() === this.listUrl) return;
-    await untilAbort(this.opts.page.goBack('commit').catch(missAs(undefined)), signal);
-    if (await this.appears(SELECTORS.topicRow, RETURN_ROW_MS, signal)) return;
+  /**
+   * Whether the page shows the list the current topic was entered from. Discourse may rewrite the
+   * address (a trailing slash, extra query parameters), so the path and the sort order decide.
+   */
+  private onList(): boolean {
+    if (!this.listUrl) return false;
+    try {
+      const current = new URL(this.opts.page.url());
+      const wanted = new URL(this.listUrl);
+      const path = (u: URL) => u.pathname.replace(/\/+$/, '');
+      return current.origin === wanted.origin && path(current) === path(wanted) && sortKept(this.listUrl, current.href);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * After a failed entry the next candidate is clicked on the same list, so the list is restored
+   * first: one step back from the topic that was opened, otherwise a fresh load of the list.
+   */
+  private async backToList(topicId: string, signal: AbortSignal): Promise<void> {
+    if (!this.listUrl || this.onList()) return;
+    if (topicUrlPattern(topicId).test(this.opts.page.url())) {
+      await untilAbort(this.opts.page.goBack('commit').catch(missAs(undefined)), signal);
+      if (this.onList() && (await this.appears(SELECTORS.topicRow, RETURN_ROW_MS, signal))) return;
+    }
     await this.goto(this.listUrl, signal);
     await this.appears(SELECTORS.topicRow, LIST_WAIT_MS, signal);
   }
@@ -400,7 +414,7 @@ export class DiscourseForum implements ForumPort {
     }
     await this.opts.deps.sleeper.sleep(CONNECT_SETTLE_MS, signal);
     await untilAbort(this.opts.page.reload('domcontentloaded'), signal);
-    await ready();
+    if (!(await ready())) throw new RunError('page-timeout', `${new URL(url).host} showed no progress within ${PROGRESS_READY_MS / 1000} s after the reload`);
     return parseConnect(await this.content());
   }
 
@@ -436,6 +450,7 @@ export class DiscourseForum implements ForumPort {
   private async readTrustLevel(url: string, signal: AbortSignal): Promise<LevelSnapshot> {
     const untilRows = async () => {
       if (await this.appears(TRUST_LEVEL_SELECTORS.rows, TRUST_LEVEL_READY_MS, signal)) return;
+      await this.explainMissingPage();
       const page = parseTrustLevel(await this.content());
       if (page.state === 'loading') throw new RunError('page-timeout', `No ${TRUST_LEVEL_SELECTORS.rows} within ${TRUST_LEVEL_READY_MS / 1000} s`);
     };
@@ -444,7 +459,10 @@ export class DiscourseForum implements ForumPort {
     await untilAbort(this.opts.page.reload('commit'), signal);
     await untilRows();
     const parsed = parseTrustLevel(await this.content());
-    if (parsed.state !== 'ready') throw new RunError('page-timeout', 'Trust level table disappeared after reload');
+    if (parsed.state !== 'ready') {
+      await this.explainMissingPage();
+      throw new RunError('page-timeout', 'Trust level table disappeared after reload');
+    }
     // B04: the username comes from where /my/trust-level redirected.
     const user = usernameFromUrl(this.opts.page.url());
     return user && !parsed.snapshot.username ? { ...parsed.snapshot, username: user } : parsed.snapshot;

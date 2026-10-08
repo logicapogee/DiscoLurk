@@ -1,8 +1,11 @@
+import type { Page } from 'playwright-core';
 import { describe, expect, it } from 'vitest';
+import { DiscoLurkCoordinator, type RunEvent, type RunPlanSnapshot } from '@disco-lurk/core';
 import { fixtureSite, VirtualTime } from '@disco-lurk/core/testing';
 import { classifyReturn, discoveredCategories, DiscourseForum, listUrlFor, navigationFailure, sortKept } from './forum';
 import { expectedMiss, type ReadOnlyPage } from './page';
 import { usernameFromUrl } from './auth';
+import { loginForm } from './session';
 import { parseDocument } from './parse';
 
 const site = { baseUrl: 'https://forum.docofcard.com' };
@@ -78,6 +81,89 @@ describe('username from the /my redirect (B04)', () => {
   });
 });
 
+/**
+ * A page whose address and DOM are set by the test; waits answer at once from the current DOM.
+ * Navigations are recorded but change nothing by themselves; `onNavigate` decides what the next page shows.
+ */
+class StaticPage implements ReadOnlyPage {
+  readonly navigations: string[] = [];
+  onNavigate: (kind: 'goto' | 'reload' | 'goBack', url?: string) => void = () => {};
+  scrollError: Error | null = null;
+
+  constructor(
+    public address: string,
+    public html: string,
+  ) {}
+  private all(selector: string) {
+    return Array.from(parseDocument(this.html).querySelectorAll(selector));
+  }
+  async goto(url: string) {
+    this.navigations.push(`goto ${url}`);
+    this.onNavigate('goto', url);
+  }
+  async reload() {
+    this.navigations.push('reload');
+    this.onNavigate('reload');
+  }
+  async goBack() {
+    this.navigations.push('goBack');
+    this.onNavigate('goBack');
+  }
+  url() {
+    return this.address;
+  }
+  async title() {
+    return '';
+  }
+  isClosed() {
+    return false;
+  }
+  async viewportSize() {
+    return { width: 1280, height: 800 };
+  }
+  async setViewportSize() {}
+  async content() {
+    return this.html;
+  }
+  async count(selector: string) {
+    return this.all(selector).length;
+  }
+  async text(selector: string) {
+    return (await this.texts(selector))[0] ?? null;
+  }
+  async texts(selector: string) {
+    return this.all(selector).map((e) => (e.textContent ?? '').trim());
+  }
+  async waitFor(selector: string) {
+    if (this.all(selector).length === 0) throw timeoutError(`waitFor ${selector}`);
+  }
+  async waitForURL(url: RegExp) {
+    if (!url.test(this.address)) throw timeoutError(`waitForURL ${url}`);
+  }
+  async scrollIntoView() {
+    if (this.scrollError) throw this.scrollError;
+  }
+  async moveMouse() {}
+  async wheel() {}
+}
+
+const timeoutError = (message: string) => Object.assign(new Error(message), { name: 'TimeoutError' });
+
+function forumWith(page: ReadOnlyPage, over: Partial<ConstructorParameters<typeof DiscourseForum>[0]> = {}) {
+  const time = new VirtualTime();
+  const warnings: string[] = [];
+  const forum = new DiscourseForum({
+    site: fixtureSite({ baseUrl: 'https://linux.do' }),
+    page,
+    titleLinks: { click: async () => {} },
+    deps: time.deps(),
+    headless: true,
+    warn: (code) => warnings.push(code),
+    ...over,
+  });
+  return { time, forum, warnings };
+}
+
 describe('connect OAuth authorization page (§5.1)', () => {
   const CONNECT = 'https://connect.linux.do/';
   const AUTHORIZE_URL = 'https://connect.linux.do/oauth2/authorize?client_id=x';
@@ -86,64 +172,9 @@ describe('connect OAuth authorization page (§5.1)', () => {
     '<html><body><div class="card-subtitle">@alice · 用户</div>' +
     '<div class="tl3-bar-item"><span class="tl3-bar-label">浏览话题</span><span class="tl3-bar-nums">120/500</span></div></body></html>';
 
-  /** A page whose address and DOM are set by the test; waits answer at once from the current DOM. */
-  class StaticPage implements ReadOnlyPage {
-    constructor(
-      public address: string,
-      public html: string,
-    ) {}
-    private all(selector: string) {
-      return Array.from(parseDocument(this.html).querySelectorAll(selector));
-    }
-    async goto() {}
-    async reload() {}
-    async goBack() {}
-    url() {
-      return this.address;
-    }
-    async title() {
-      return '';
-    }
-    isClosed() {
-      return false;
-    }
-    async viewportSize() {
-      return { width: 1280, height: 800 };
-    }
-    async setViewportSize() {}
-    async content() {
-      return this.html;
-    }
-    async count(selector: string) {
-      return this.all(selector).length;
-    }
-    async text(selector: string) {
-      return (await this.texts(selector))[0] ?? null;
-    }
-    async texts(selector: string) {
-      return this.all(selector).map((e) => (e.textContent ?? '').trim());
-    }
-    async waitFor(selector: string) {
-      if (this.all(selector).length === 0) throw Object.assign(new Error(`waitFor ${selector}`), { name: 'TimeoutError' });
-    }
-    async waitForURL() {}
-    async scrollIntoView() {}
-    async moveMouse() {}
-    async wheel() {}
-  }
-
   function forumOn(page: StaticPage, headless: boolean) {
-    const time = new VirtualTime();
-    const warnings: string[] = [];
-    const forum = new DiscourseForum({
-      site: fixtureSite({ baseUrl: 'https://linux.do', progressSource: 'connect-linuxdo', progressUrl: CONNECT }),
-      page,
-      titleLinks: { click: async () => {} },
-      deps: time.deps(),
-      headless,
-      warn: (code) => warnings.push(code),
-    });
-    return { time, forum, warnings, read: () => time.drive(forum.readProgress('final', new AbortController().signal)) };
+    const t = forumWith(page, { site: fixtureSite({ baseUrl: 'https://linux.do', progressSource: 'connect-linuxdo', progressUrl: CONNECT }), headless });
+    return { ...t, read: () => t.time.drive(t.forum.readProgress('final', new AbortController().signal)) };
   }
 
   it('headed: waits for the user to authorize, then reads the progress page', async () => {
@@ -180,5 +211,166 @@ describe('connect OAuth authorization page (§5.1)', () => {
   it('a connect page that is neither progress nor authorization still breaks the contract', async () => {
     const t = forumOn(new StaticPage(CONNECT, '<html><body><a href="/oauth2/log">授权日志</a></body></html>'), true);
     await expect(t.read()).rejects.toMatchObject({ code: 'selector-contract-broken' });
+  });
+
+  it('a page that loses its progress on the forced reload is a page-timeout, not a broken contract', async () => {
+    const page = new StaticPage(CONNECT, progressHtml);
+    page.onNavigate = (kind) => {
+      if (kind === 'reload') page.html = '<html><body><div class="spinner"></div></body></html>';
+    };
+    await expect(forumOn(page, true).read()).rejects.toMatchObject({ code: 'page-timeout' });
+  });
+});
+
+describe('docofcard trust level page while signed out', () => {
+  const TRUST = 'https://forum.docofcard.com/my/trust-level';
+  const site = fixtureSite({ baseUrl: 'https://forum.docofcard.com', progressSource: 'trust-level-docofcard', progressUrl: TRUST });
+  const read = (page: StaticPage) => {
+    const t = forumWith(page, { site });
+    return t.time.drive(t.forum.readProgress('final', new AbortController().signal));
+  };
+
+  it('reports needs-auth when the site shows its login page instead of the table', async () => {
+    const login = '<html><body><header class="d-header"><button class="login-button">登录</button></header><input id="login-account-name"></body></html>';
+    await expect(read(new StaticPage('https://forum.docofcard.com/login', login))).rejects.toMatchObject({ code: 'needs-auth' });
+  });
+
+  it('reports needs-auth when the table is gone after the reload because the session ended', async () => {
+    const loader = '<div class="docofcard-tools-trust-level-progress-loader"></div>';
+    const table =
+      '<header><a id="current-user"></a></header><table class="docofcard-tools-trust-level-progress__table"><tbody>' +
+      '<tr class="is-complete"><th scope="row">进入过的主题</th><td>✓</td><td>9</td><td>5</td></tr></tbody></table>';
+    const page = new StaticPage(TRUST, table);
+    page.onNavigate = (kind) => {
+      if (kind === 'reload') page.html = loader;
+    };
+    await expect(read(page)).rejects.toMatchObject({ code: 'needs-auth' });
+  });
+});
+
+describe('entering from the list and getting back to it (T08, T10)', () => {
+  const LIST = 'https://linux.do/c/develop/4?order=posts';
+  const listHtml =
+    '<header><a id="current-user"></a></header><table><tbody>' +
+    '<tr class="topic-list-item" data-topic-id="7"><td><a class="title raw-link raw-topic-link" href="/t/seven/7">Seven</a>' +
+    '<span class="badge badge-notification new-topic"></span></td></tr></tbody></table>';
+  const topic = { id: '7', title: 'Seven', unread: true, pinned: false };
+
+  async function onList(over: Partial<ConstructorParameters<typeof DiscourseForum>[0]> = {}) {
+    const page = new StaticPage('https://linux.do/', listHtml);
+    const t = forumWith(page, over);
+    const signal = new AbortController().signal;
+    await t.time.drive(t.forum.collectTopics({ name: 'develop', path: '/c/develop/4', id: 4, enabledByDefault: true }, { browseMode: 'deep' }, signal));
+    page.navigations.length = 0;
+    page.address = LIST;
+    return { ...t, page, enter: () => t.time.drive(t.forum.enterFromList(topic, signal)) };
+  }
+
+  it('a title link that never becomes clickable skips only that topic as click-failed', async () => {
+    const t = await onList({
+      titleLinks: {
+        click: async () => {
+          throw timeoutError('locator.click: Timeout 10000ms exceeded.');
+        },
+      },
+    });
+    await expect(t.enter()).resolves.toEqual({ topic, entered: false, reason: 'click-failed' });
+    expect(t.page.navigations).toEqual([]);
+  });
+
+  it('a row that cannot be scrolled into view is click-failed as well', async () => {
+    const t = await onList();
+    t.page.scrollError = timeoutError('locator.scrollIntoViewIfNeeded: Timeout 10000ms exceeded.');
+    await expect(t.enter()).resolves.toMatchObject({ entered: false, reason: 'click-failed' });
+  });
+
+  it('a click that left the sorted list in place (address rewritten with a trailing slash) navigates nowhere', async () => {
+    const t = await onList();
+    t.page.address = 'https://linux.do/c/develop/4/?order=posts';
+    await expect(t.enter()).resolves.toMatchObject({ entered: false, reason: 'url-unchanged' });
+    expect(t.page.navigations).toEqual([]);
+  });
+
+  it('a list that lost its sort order is reloaded by address', async () => {
+    const t = await onList();
+    t.page.address = 'https://linux.do/c/develop/4';
+    await expect(t.enter()).resolves.toMatchObject({ entered: false, reason: 'url-unchanged' });
+    expect(t.page.navigations).toEqual([`goto ${LIST}`]);
+  });
+
+  it('a topic page that never rendered goes one step back to the list', async () => {
+    const t = await onList({
+      titleLinks: {
+        click: async () => {
+          t.page.address = 'https://linux.do/t/seven/7';
+          t.page.html = '<html><body></body></html>';
+        },
+      },
+    });
+    t.page.onNavigate = (kind) => {
+      if (kind !== 'goBack') return;
+      t.page.address = LIST;
+      t.page.html = listHtml;
+    };
+    await expect(t.enter()).resolves.toMatchObject({ entered: false, reason: 'topic-content-missing' });
+    expect(t.page.navigations).toEqual(['goBack']);
+  });
+});
+
+describe('B10 password login keeps the credentials out of every report', () => {
+  const SECRET = 'hunter2-Sup3rSecret';
+
+  it('a failing login form yields a RunResult and events that never contain the password', async () => {
+    const site = fixtureSite({ baseUrl: 'https://forum.docofcard.com', login: 'password' });
+    const page = new StaticPage('https://forum.docofcard.com/', '<header><button class="login-button"></button></header><input id="login-account-name">');
+    // Playwright quotes the value it was asked to type in some failures.
+    const leaky = (value: string) => Object.assign(new Error(`locator.fill: Element is not an <input> while filling "${value}"`), { name: 'Error' });
+    const fakePage = {
+      locator: () => ({
+        fill: async (value: string) => {
+          if (value === SECRET) throw leaky(value);
+        },
+        click: async () => {},
+      }),
+    } as unknown as Pick<Page, 'locator'>;
+    const time = new VirtualTime();
+    const forum = new DiscourseForum({
+      site,
+      page,
+      titleLinks: { click: async () => {} },
+      deps: time.deps(),
+      headless: true,
+      login: { credentials: { username: 'alice', password: SECRET }, form: loginForm(fakePage, time.deps(), (fn) => fn()) },
+    });
+    const coordinator = new DiscoLurkCoordinator({
+      deps: time.deps(),
+      resolveProfile: async (id) => ({ profile: { id, siteId: site.id, channel: 'chrome' }, site }),
+      open: async () => ({ forum, closed: new AbortController().signal, close: async () => {} }),
+      categories: { load: async () => [], save: async () => {} },
+    });
+    const events: RunEvent[] = [];
+    const plan = {
+      id: 'run-1',
+      siteId: site.id,
+      profileId: 'fixture/main',
+      browserMode: 'headless',
+      seed: 1,
+      plannedAt: '2026-10-08T00:00:00.000Z',
+      materializedAt: '2026-10-08T00:00:00.000Z',
+      preset: {
+        presetId: 'p',
+        browseMode: 'quick',
+        runMode: { kind: 'endless' },
+        categories: [{ name: 'a', path: '/c/a/1', id: 1, enabledByDefault: true }],
+        interaction: { like: { enabled: false, topicRate: 0, replyRate: 0, maxReplies: 0 }, reply: { enabled: false, rate: 0 } },
+        extraWait: { enabled: false, minSec: 1, maxSec: 3 },
+        samplePerCategory: { min: 1, max: 1 },
+      },
+    } as const satisfies RunPlanSnapshot;
+    const result = await time.drive(coordinator.run(structuredClone(plan) as RunPlanSnapshot, new AbortController().signal, (e) => events.push(e)));
+    expect(result.failure).toEqual({ code: 'needs-auth', message: 'password failed: Error' });
+    const report = JSON.stringify({ result, events });
+    expect(report).not.toContain(SECRET);
+    expect(report).not.toContain('alice');
   });
 });

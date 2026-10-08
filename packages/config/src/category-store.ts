@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Category, CategoryStore, SiteId } from '@disco-lurk/core';
@@ -13,13 +14,17 @@ const fileSchema = z.object({
 /** §11.1: temp file + rename, so a crash mid-write leaves the previous file intact. */
 export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
+  // Unique per write: two writers in one process (or two processes) never share a temp file.
+  const tmp = `${path}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
   await rename(tmp, path);
 }
 
 /** A discovered site's category list, one file per site under `<appData>/disco-lurk/sites/<siteId>/`. */
 export class FileCategoryStore implements CategoryStore {
+  /** The last write queued per site; writes to one site's file run one after another, in call order. */
+  private readonly writes = new Map<SiteId, Promise<void>>();
+
   constructor(private readonly sitesDir: string) {}
 
   path(siteId: SiteId): string {
@@ -34,12 +39,22 @@ export class FileCategoryStore implements CategoryStore {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw err;
     }
-    const parsed = fileSchema.safeParse(JSON.parse(raw));
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`${this.path(siteId)} is not valid JSON (${(err as Error).message}); fix or delete it`);
+    }
+    const parsed = fileSchema.safeParse(json);
     if (!parsed.success || parsed.data.siteId !== siteId) throw new Error(`${this.path(siteId)} is not a valid category file for ${siteId}`);
     return parsed.data.categories;
   }
 
-  async save(siteId: SiteId, categories: Category[]): Promise<void> {
-    await writeJsonAtomic(this.path(siteId), { schemaVersion: 1, siteId, categories });
+  save(siteId: SiteId, categories: Category[]): Promise<void> {
+    const value = { schemaVersion: 1, siteId, categories: structuredClone(categories) };
+    const previous = this.writes.get(siteId) ?? Promise.resolve();
+    const write = previous.catch(() => {}).then(() => writeJsonAtomic(this.path(siteId), value));
+    this.writes.set(siteId, write);
+    return write;
   }
 }

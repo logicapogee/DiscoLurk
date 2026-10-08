@@ -8,14 +8,21 @@ import { DEEP, QUICK, readFloors, type FloorSurface } from './reading';
  * A topic page whose counter follows the scroll offset: one floor per `pxPerFloor`, capped at
  * `total`. `renderAfterMs` delays the counter's first appearance; `frozen` never moves it.
  */
-function topic(time: VirtualTime, opts: { total: number; pxPerFloor?: number; renderAfterMs?: number; frozen?: boolean; counter?: boolean }) {
+function topic(
+  time: VirtualTime,
+  opts: { total: number; pxPerFloor?: number; renderAfterMs?: number; frozen?: boolean; counter?: boolean; posts?: number; floorEvery?: number },
+) {
   let offset = 0;
   const scrolls: number[] = [];
   const surface: FloorSurface = {
     async readCounter(): Promise<FloorReading | null> {
       if (opts.counter === false || time.clock.monotonic() < (opts.renderAfterMs ?? 0)) return null;
-      const current = opts.frozen ? 1 : Math.min(opts.total, 1 + Math.floor(offset / (opts.pxPerFloor ?? 300)));
+      const climbed = opts.floorEvery ? Math.floor(scrolls.length / opts.floorEvery) : Math.floor(offset / (opts.pxPerFloor ?? 300));
+      const current = opts.frozen ? 1 : Math.min(opts.total, 1 + climbed);
       return { layout: 'wide', current, total: opts.total };
+    },
+    async countPosts() {
+      return opts.posts ?? 0;
     },
     async scroll(dy) {
       scrolls.push(dy);
@@ -74,19 +81,50 @@ describe('FLOOR-002 delta accounting (F02, F03)', () => {
   });
 });
 
+const normalStep = (dy: number) => dy >= DEEP.stepPx[0] && dy <= DEEP.stepPx[1];
+
 describe('FLOOR-003 stuck counter (F04)', () => {
   it('takes one 1500 px step after three readings without progress', async () => {
     const time = new VirtualTime();
     const { surface, scrolls } = topic(time, { total: 100, frozen: true });
     await read(time, surface, strategy('deep').s);
-    expect(scrolls.slice(0, 4).map((dy, i) => (i === 3 ? dy : dy >= 600 && dy <= 1200))).toEqual([true, true, true, DEEP.bigStepPx]);
+    expect(scrolls.slice(0, 4).map((dy, i) => (i === 3 ? dy : normalStep(dy)))).toEqual([true, true, true, DEEP.bigStepPx]);
+  });
+
+  it('ends the topic when three more readings after the big step still show no progress', async () => {
+    const time = new VirtualTime();
+    const { surface, scrolls } = topic(time, { total: 100, frozen: true });
+    const out = await read(time, surface, strategy('deep').s);
+    expect(scrolls.map((dy) => (dy === DEEP.bigStepPx ? 'big' : normalStep(dy)))).toEqual([true, true, true, 'big', true, true, true]);
+    expect(out.scrolls).toBe(2 * DEEP.stuckLimit + 1);
+  });
+
+  it('a counter that moves again resets the stall, so a later stall gets its own big step', async () => {
+    const time = new VirtualTime();
+    // Floor 2 appears with the big step; afterwards the counter freezes again.
+    let scrolled = 0;
+    const surface = {
+      async readCounter() {
+        return { layout: 'wide' as const, current: scrolled >= 4 ? 2 : 1, total: 100 };
+      },
+      async countPosts() {
+        return 0;
+      },
+      async scroll() {
+        scrolled++;
+      },
+    };
+    const out = await read(time, surface, strategy('deep').s);
+    expect(out.endFloor).toBe(2);
+    // 3 stuck + big (advances) + 3 stuck + big + 3 stuck.
+    expect(out.scrolls).toBe(11);
   });
 });
 
 describe('FLOOR-004 hard stop (F05)', () => {
   it('never scrolls a topic more than 200 times', async () => {
     const time = new VirtualTime();
-    const { surface, scrolls } = topic(time, { total: 10_000, frozen: true });
+    const { surface, scrolls } = topic(time, { total: 10_000, floorEvery: 2 });
     const out = await read(time, surface, strategy('deep').s);
     expect(scrolls).toHaveLength(DEEP.maxScrolls);
     expect(out.scrolls).toBe(DEEP.maxScrolls);
@@ -104,14 +142,22 @@ describe('FLOOR-005 traditional scrolling (F07, F08)', () => {
     expect(advances.reduce((n, a) => n + a.to - a.from, 0)).toBe((out.endFloor ?? 0) - 1);
   });
 
-  it('without any counter records estimated floors only', async () => {
+  it('without any counter credits one estimated floor however long it scrolls', async () => {
     const time = new VirtualTime();
-    const { surface } = topic(time, { total: 50, counter: false });
+    const { surface, scrolls } = topic(time, { total: 1, counter: false });
     const { s, advances } = strategy('deep');
     const out = await read(time, surface, s);
-    expect(advances.length).toBeGreaterThan(0);
-    expect(advances.every((a) => !a.confirmed)).toBe(true);
+    expect(scrolls.length).toBeGreaterThan(1);
+    expect(advances).toEqual([{ from: 0, to: 1, confirmed: false }]);
     expect(out.layout).toBeNull();
+  });
+
+  it('without any counter credits the rendered posts when they can be counted', async () => {
+    const time = new VirtualTime();
+    const { surface } = topic(time, { total: 1, counter: false, posts: 4 });
+    const { s, advances } = strategy('deep');
+    await read(time, surface, s);
+    expect(advances).toEqual([{ from: 0, to: 4, confirmed: false }]);
   });
 });
 
@@ -149,14 +195,13 @@ describe('QUICK-001 quick reading (Q01–Q03)', () => {
 });
 
 describe('QUICK-002 quick without a counter (Q04)', () => {
-  it('blind-scrolls at most 3 times, all estimated', async () => {
+  it('blind-scrolls at most 3 times and credits one estimated floor, not one per scroll', async () => {
     const time = new VirtualTime();
-    const { surface, scrolls } = topic(time, { total: 50, counter: false });
+    const { surface, scrolls } = topic(time, { total: 1, counter: false });
     const { s, advances } = strategy('quick');
     await read(time, surface, s);
     expect(scrolls).toHaveLength(QUICK.blindScrolls);
-    expect(advances).toHaveLength(QUICK.blindScrolls);
-    expect(advances.every((a) => !a.confirmed)).toBe(true);
+    expect(advances).toEqual([{ from: 0, to: 1, confirmed: false }]);
   });
 
   it('a stop interrupts blind scrolling at once', async () => {

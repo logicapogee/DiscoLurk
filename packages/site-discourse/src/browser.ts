@@ -3,6 +3,8 @@ import { chromium, type BrowserContext, type Page } from 'playwright-core';
 import { RunError, type BrowserChannel } from '@disco-lurk/core';
 import { acquireProfileLock, type ProfileLock } from './profile-lock';
 
+type LaunchPersistentContextOptions = NonNullable<Parameters<typeof chromium.launchPersistentContext>[1]>;
+
 export interface LaunchOptions {
   profileDir: string;
   runId: string;
@@ -28,20 +30,31 @@ export const HEADLESS_VIEWPORT = { width: 1280, height: 1600 } as const;
 export const LAUNCH_ARGS = ['--disable-blink-features=AutomationControlled'];
 export const IGNORE_DEFAULT_ARGS = ['--enable-automation'];
 
+/**
+ * Signals stay with the CLI's stop handlers: a first Ctrl+C is a graceful stop that still reads the
+ * progress page, so Playwright must not close the browser on SIGINT/SIGTERM/SIGHUP by itself.
+ */
+export function launchOptions(opts: Omit<LaunchOptions, 'profileDir' | 'runId'>): LaunchPersistentContextOptions {
+  return {
+    ...(opts.executablePath ? { executablePath: opts.executablePath } : { channel: opts.channel }),
+    headless: opts.headless,
+    args: opts.headless ? LAUNCH_ARGS : [...LAUNCH_ARGS, `--window-size=${HEADED_WIDTH},1000`],
+    ignoreDefaultArgs: IGNORE_DEFAULT_ARGS,
+    viewport: opts.headless ? HEADLESS_VIEWPORT : null,
+    handleSIGINT: false,
+    handleSIGTERM: false,
+    handleSIGHUP: false,
+    ...(opts.proxy ? { proxy: { server: opts.proxy } } : {}),
+  };
+}
+
 /** B01/B02/B07: one app-owned Profile directory, locked for the lifetime of the browser. */
 export async function launchProfile(opts: LaunchOptions): Promise<BrowserSession> {
   await mkdir(opts.profileDir, { recursive: true });
   const lock = await acquireProfileLock(opts.profileDir, opts.runId);
   let context: BrowserContext;
   try {
-    context = await chromium.launchPersistentContext(opts.profileDir, {
-      ...(opts.executablePath ? { executablePath: opts.executablePath } : { channel: opts.channel }),
-      headless: opts.headless,
-      args: opts.headless ? LAUNCH_ARGS : [...LAUNCH_ARGS, `--window-size=${HEADED_WIDTH},1000`],
-      ignoreDefaultArgs: IGNORE_DEFAULT_ARGS,
-      viewport: opts.headless ? HEADLESS_VIEWPORT : null,
-      ...(opts.proxy ? { proxy: { server: opts.proxy } } : {}),
-    });
+    context = await chromium.launchPersistentContext(opts.profileDir, launchOptions(opts));
   } catch (err) {
     await lock.release();
     const message = String((err as Error).message ?? err);

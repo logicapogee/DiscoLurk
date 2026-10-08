@@ -86,6 +86,9 @@ function setup(opts: Setup = {}) {
   const categoryStore = new MemoryCategories();
   const browser = new AbortController();
   let closed = 0;
+  const events: RunEvent[] = [];
+  /** How many events had been emitted when the session closed. */
+  let eventsAtClose = -1;
   const env: CoordinatorEnv = {
     deps: time.deps(1),
     resolveProfile: async (profileId) => ({ profile: { id: profileId, siteId: s.id, channel: 'chrome' }, site: s }),
@@ -96,6 +99,7 @@ function setup(opts: Setup = {}) {
         closed: browser.signal,
         close: async () => {
           closed++;
+          eventsAtClose = events.length;
         },
       };
     },
@@ -103,11 +107,10 @@ function setup(opts: Setup = {}) {
     ...(opts.exit ? { exitSignal: opts.exit.signal } : {}),
   };
   const coordinator = new DiscoLurkCoordinator(env);
-  const events: RunEvent[] = [];
   const controller = new AbortController();
   const run = (p: RunPlanSnapshot) => time.drive(coordinator.run(p, controller.signal, (e) => events.push(e)));
   const states = () => events.filter((e) => e.type === 'state').map((e) => (e as { state: RunState }).state);
-  return { time, forum, coordinator, events, controller, browser, run, states, categoryStore, closed: () => closed };
+  return { time, forum, coordinator, events, controller, browser, run, states, categoryStore, closed: () => closed, eventsAtClose: () => eventsAtClose };
 }
 
 /** A headed login that only succeeds once the virtual clock passes `atMs`; it polls like B04. */
@@ -484,14 +487,35 @@ describe('S07 connect lag: one interruptible re-read of the final progress', () 
     expect(t.events.some((e) => e.type === 'warning' && /Stopped while waiting/.test(e.message))).toBe(true);
   });
 
-  it('a browser closed during the wait cancels the run like any final read', async () => {
+  it('a browser closed during the wait keeps the first final read, like a user stop', async () => {
     const { t, finalReadsAt } = lagging([100, 103], (t, n) => {
       if (n === 0) t.time.at(t.time.clock.monotonic() + 60_000, () => t.browser.abort(stopRequest('browser-closed')));
     });
     const out = await t.run(plan({ kind: 'topics', count: 3 }));
     expect(finalReadsAt).toHaveLength(1);
-    expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'browser-closed' });
+    expect(out).toMatchObject({ outcome: 'completed', stopCause: 'target' });
+    expect(out.failure).toBeUndefined();
+    expect(out.stats.reported?.topicsViewed).toEqual({ initial: 100, final: 100 });
+    expect(t.events.some((e) => e.type === 'warning' && /Stopped while waiting/.test(e.message))).toBe(true);
     expect(t.closed()).toBe(1);
+  });
+
+  it('a re-read that fails keeps the first final read and the outcome', async () => {
+    let n = 0;
+    const t = setup({
+      site: connect,
+      forum: {
+        progress: async (kind) => {
+          if (kind === 'initial') return viewed(100);
+          if (n++ === 0) return viewed(100);
+          throw new RunError('page-timeout', 'no progress');
+        },
+      },
+    });
+    const out = await t.run(plan({ kind: 'topics', count: 3 }));
+    expect(out).toMatchObject({ outcome: 'completed', stopCause: 'target' });
+    expect(out.levels.final?.metrics[0]?.current).toBe(100);
+    expect(t.events.some((e) => e.type === 'warning' && e.code === 'final-progress-failed')).toBe(true);
   });
 
   it('a run the user already stopped still waits, and the second stop request cuts the wait', async () => {
@@ -531,5 +555,92 @@ describe('§5.1 progress page waiting on an authorization the run cannot get', (
     expect(out).toMatchObject({ outcome: 'cancelled', failure: { code: 'needs-auth' } });
     expect(t.forum.calls.some((c) => c.op === 'collectTopics')).toBe(false);
     expect(t.closed()).toBe(1);
+  });
+});
+
+describe('STATE-001 a failed end-of-run progress read (S07)', () => {
+  const failingFinal = (code: 'page-timeout' | 'selector-contract-broken' = 'page-timeout') => async (kind: 'initial' | 'final') => {
+    if (kind === 'initial') return level(21, 175);
+    throw new RunError(code, 'final read broke');
+  };
+  const warnings = (t: ReturnType<typeof setup>, code: string) => t.events.filter((e) => e.type === 'warning' && e.code === code);
+
+  it('a met target still completes: warning final-progress-failed, no final levels, no failure', async () => {
+    const t = setup({ forum: { progress: failingFinal('selector-contract-broken') } });
+    const out = await t.run(plan({ kind: 'topics', count: 3 }));
+    expect(t.states().slice(-2)).toEqual(['verifying', 'completed']);
+    expect(out).toMatchObject({ outcome: 'completed', stopCause: 'target' });
+    expect(out.failure).toBeUndefined();
+    expect(out.levels.final).toBeNull();
+    expect(warnings(t, 'final-progress-failed')).toHaveLength(1);
+    expect(t.events.some((e) => e.type === 'error')).toBe(false);
+  });
+
+  it('a user stop still completes with stop cause user', async () => {
+    const t = setup({ forum: { progress: failingFinal() } });
+    t.time.at(40_000, () => t.controller.abort(stopRequest('user')));
+    const out = await t.run(plan({ kind: 'endless' }));
+    expect(t.states().slice(-4)).toEqual(['browsing', 'stopping', 'verifying', 'completed']);
+    expect(out).toMatchObject({ outcome: 'completed', stopCause: 'user' });
+    expect(out.failure).toBeUndefined();
+    expect(warnings(t, 'final-progress-failed')).toHaveLength(1);
+  });
+
+  it('a browsing failure stays the failure; the read failure is only a warning', async () => {
+    let collects = 0;
+    const t = setup({
+      forum: {
+        progress: failingFinal(),
+        topics: (path, call) => {
+          if (++collects > 1) throw new RunError('network-failed', 'offline');
+          return unread(path, call);
+        },
+      },
+    });
+    const out = await t.run(plan({ kind: 'endless' }));
+    expect(out).toMatchObject({ outcome: 'failed', failure: { code: 'network-failed' } });
+    expect(warnings(t, 'final-progress-failed')).toHaveLength(1);
+  });
+});
+
+describe('STATE-001 terminal state after the browser is closed', () => {
+  it('emits the terminal state only once the session (and its Profile lock) is closed', async () => {
+    const t = setup({ forum: { progress: async (k) => level(k === 'initial' ? 21 : 24, 175) } });
+    await t.run(plan({ kind: 'topics', count: 3 }));
+    const terminal = t.events.findIndex((e) => e.type === 'state' && e.state === 'completed');
+    expect(t.eventsAtClose()).toBeGreaterThan(0);
+    expect(terminal).toBeGreaterThanOrEqual(t.eventsAtClose());
+  });
+
+  it('also for a run that ends before browsing, with its error event', async () => {
+    const t = setup({ forum: { auth: async () => ({ status: 'challenge-detected' }) } });
+    await t.run(plan({ kind: 'endless' }));
+    const after = t.events.slice(t.eventsAtClose());
+    expect(after.map((e) => e.type)).toEqual(['error', 'state']);
+    expect(after[1]).toMatchObject({ state: 'failed' });
+  });
+});
+
+describe('inspect never rejects on a stopped check', () => {
+  it('maps an AbortError from the check to broken', async () => {
+    const t = setup({
+      forum: {
+        auth: async () => {
+          throw new DOMException('The operation was aborted due to timeout', 'AbortError');
+        },
+      },
+    });
+    expect((await t.time.drive(t.coordinator.inspect('fixture/main'))).status).toBe('broken');
+    expect(t.closed()).toBe(1);
+  });
+
+  it('maps a check that hangs until the browser closes to broken', async () => {
+    const t = setup({
+      forum: {
+        auth: (_mode, signal) => t.time.sleeper.sleep(600_000, signal).then(() => ({ status: 'authenticated' as const })),
+      },
+    });
+    t.time.at(10_000, () => t.browser.abort(stopRequest('browser-closed')));
+    expect((await t.time.drive(t.coordinator.inspect('fixture/main'))).status).toBe('broken');
   });
 });

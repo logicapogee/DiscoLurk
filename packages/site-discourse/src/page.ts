@@ -1,5 +1,5 @@
 import type { Page } from 'playwright-core';
-import { abortError, stopRequest } from '@disco-lurk/core';
+import { abortError, RunError, stopRequest } from '@disco-lurk/core';
 
 export type LoadState = 'domcontentloaded' | 'commit';
 
@@ -45,23 +45,71 @@ export function expectedMiss(err: unknown): boolean {
   return err.name === 'TimeoutError' || err.message.includes('Execution context was destroyed');
 }
 
-/** Playwright's error for a call on a page, context or browser that has gone away. */
+/** Playwright's error for a call on a page, context or browser that has gone away or crashed. */
 export function targetClosed(err: unknown): boolean {
   return err instanceof Error && err.name === 'TargetClosedError';
 }
 
+/** Explicit ceilings for every page call that can wait, so none falls back to Playwright's 30 s default unseen. */
+export const PAGE_TIMEOUTS = {
+  navigationMs: 30_000,
+  actionMs: 10_000,
+  /** How long a `TargetClosedError` waits for the `close` or `crash` event that explains it. */
+  goneEventMs: 2_000,
+} as const;
+
 /**
- * Runs page calls so that a browser closed from outside surfaces as the session's stop request,
- * also when Playwright rejects an in-flight call before the page's `close` event fires.
+ * Tells why page calls fail with `TargetClosedError`. A window the user closed and a crashed
+ * renderer raise the same error, so the page's `close` and `crash` events decide: a close is the
+ * session's `browser-closed` stop request, a crash is an internal failure. Playwright may reject an
+ * in-flight call before either event arrives, so an unexplained error waits briefly for one.
  */
-export function closedAsStop(closed: AbortController | undefined): <T>(call: () => Promise<T>) => Promise<T> {
-  return async (call) => {
+export class TargetWatch {
+  readonly closed = new AbortController();
+  private gone: 'closed' | 'crashed' | null = null;
+  private readonly waiters = new Set<() => void>();
+
+  markClosed(): void {
+    if (this.gone) return;
+    this.gone = 'closed';
+    this.closed.abort(stopRequest('browser-closed'));
+    this.wake();
+  }
+
+  markCrashed(): void {
+    if (this.gone) return;
+    this.gone = 'crashed';
+    this.wake();
+  }
+
+  private wake(): void {
+    for (const w of this.waiters) w();
+    this.waiters.clear();
+  }
+
+  private settle(ms: number): Promise<'closed' | 'crashed' | null> {
+    if (this.gone) return Promise.resolve(this.gone);
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.waiters.delete(done);
+        resolve(this.gone);
+      };
+      const timer = setTimeout(done, ms);
+      this.waiters.add(done);
+    });
+  }
+
+  /** Runs a page call and turns a `TargetClosedError` into the stop request or failure behind it. */
+  readonly call = async <T>(fn: () => Promise<T>): Promise<T> => {
     try {
-      return await call();
+      return await fn();
     } catch (err) {
-      if (!closed || !targetClosed(err)) throw err;
-      closed.abort(stopRequest('browser-closed'));
-      throw abortError(closed.signal);
+      if (!targetClosed(err)) throw err;
+      const gone = await this.settle(PAGE_TIMEOUTS.goneEventMs);
+      if (gone === 'crashed') throw new RunError('internal', 'page crashed');
+      if (gone === 'closed') throw abortError(this.closed.signal);
+      throw err;
     }
   };
 }
@@ -71,24 +119,24 @@ const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
 export class PageView implements ReadOnlyPage {
   private readonly call: <T>(fn: () => Promise<T>) => Promise<T>;
 
-  /** `closed` is the session's browser-closed controller; without one, Playwright's errors pass through. */
+  /** Without a `watch`, Playwright's errors pass through unchanged. */
   constructor(
     private readonly page: Page,
-    closed?: AbortController,
+    watch?: TargetWatch,
   ) {
-    this.call = closedAsStop(closed);
+    this.call = watch ? watch.call : (fn) => fn();
   }
 
   goto(url: string, waitUntil: LoadState = 'domcontentloaded'): Promise<void> {
-    return this.call(async () => void (await this.page.goto(url, { waitUntil })));
+    return this.call(async () => void (await this.page.goto(url, { waitUntil, timeout: PAGE_TIMEOUTS.navigationMs })));
   }
 
   reload(waitUntil: LoadState = 'domcontentloaded'): Promise<void> {
-    return this.call(async () => void (await this.page.reload({ waitUntil })));
+    return this.call(async () => void (await this.page.reload({ waitUntil, timeout: PAGE_TIMEOUTS.navigationMs })));
   }
 
   goBack(waitUntil: LoadState = 'commit'): Promise<void> {
-    return this.call(async () => void (await this.page.goBack({ waitUntil })));
+    return this.call(async () => void (await this.page.goBack({ waitUntil, timeout: PAGE_TIMEOUTS.navigationMs })));
   }
 
   url(): string {
@@ -138,7 +186,7 @@ export class PageView implements ReadOnlyPage {
   }
 
   scrollIntoView(selector: string): Promise<void> {
-    return this.call(() => this.page.locator(selector).first().scrollIntoViewIfNeeded());
+    return this.call(() => this.page.locator(selector).first().scrollIntoViewIfNeeded({ timeout: PAGE_TIMEOUTS.actionMs }));
   }
 
   moveMouse(x: number, y: number): Promise<void> {

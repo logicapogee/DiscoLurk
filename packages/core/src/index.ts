@@ -7,3 +7,4 @@ export * from './picking';
 export * from './target';
 export * from './browse';
 export * from './plan';
+export * from './coordinator';

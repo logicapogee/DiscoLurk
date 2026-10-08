@@ -1,11 +1,11 @@
-import { emptyStats, RunError, type RunEvent, type RunStats } from './events';
+import { emptyStats, RunError, type RunEvent, type RunFailure, type RunStats } from './events';
 import { sampleTopics, selectCandidates } from './picking';
 import type { ActionPolicy, ForumPort } from './ports';
 import { isAbortError, randomBetween, shuffle, throwIfAborted, type RuntimeDeps } from './runtime';
 import { targetReached } from './target';
 import type { RunPlanSnapshot } from './terms';
 
-export type BrowseEnd = 'target-reached' | 'cancelled' | 'no-progress';
+export type BrowseEnd = 'target-reached' | 'cancelled' | 'no-progress' | 'error';
 
 export interface BrowseInput {
   plan: RunPlanSnapshot;
@@ -18,6 +18,13 @@ export interface BrowseInput {
 export interface BrowseOutcome {
   end: BrowseEnd;
   stats: RunStats;
+  /** Set when `end` is `error`. */
+  failure?: RunFailure;
+}
+
+export function toFailure(err: unknown): RunFailure {
+  if (err instanceof RunError) return { code: err.code, message: err.message };
+  return { code: 'internal', message: err instanceof Error ? err.message : String(err) };
 }
 
 const BETWEEN_TOPICS = { minSec: 0.5, maxSec: 1.5 };
@@ -50,16 +57,14 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
   const policy: ActionPolicy = structuredClone(preset.interaction);
   const { extraWait } = preset;
 
-  if (preset.categories.length === 0) {
-    throw new RunError('no-candidates', 'No category is enabled for this run');
-  }
-
   try {
+    if (preset.categories.length === 0) throw new RunError('no-candidates', 'No category is enabled for this run');
     for (;;) {
       let enteredThisRound = 0;
       for (const category of shuffle(preset.categories, deps.random)) {
         throwIfAborted(signal);
         const batch = await forum.collectTopics(category, { browseMode: preset.browseMode }, signal);
+        if (batch.empty) emit({ type: 'warning', at: at(), code: 'empty-category', message: `${category.path} rendered no topic rows` });
         const picks = sampleTopics(selectCandidates(batch.topics, deps.random), deps.random, preset.samplePerCategory);
 
         for (const topic of picks) {
@@ -131,7 +136,7 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
     }
   } catch (err) {
     if (isAbortError(err)) return { end: 'cancelled', stats: snapshot(stats, tick) };
-    throw err;
+    return { end: 'error', stats: snapshot(stats, tick), failure: toFailure(err) };
   }
 }
 

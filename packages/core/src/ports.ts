@@ -30,6 +30,8 @@ export interface TopicStrategy {
 export interface TopicBatch {
   category: Category;
   topics: TopicCandidate[];
+  /** The list never rendered a topic row (§7.1 step 2); the category is skipped as `empty-category`. */
+  empty: boolean;
 }
 
 export type TopicVisit =
@@ -57,6 +59,8 @@ export interface ReadResult {
   endFloor: number | null;
   scrolls: number;
   stoppedByTarget: boolean;
+  /** Which floor counter layout (§4.3) the last reading came from; null when none rendered. */
+  layout: 'wide' | 'narrow' | null;
 }
 
 export interface ActionPolicy extends InteractionPolicy {}

@@ -19,3 +19,12 @@ export function resolvePreset(preset: RunPreset, categories: readonly Category[]
     samplePerCategory: preset.samplePerCategory,
   });
 }
+
+/**
+ * §7.2: a discovered site's category list after a fresh read. The list follows what the site
+ * shows now; a category already known keeps the user's enable choice, and a new one starts off.
+ */
+export function mergeDiscoveredCategories(known: readonly Category[], found: readonly Category[]): Category[] {
+  const enabled = new Map(known.map((c) => [c.id, c.enabledByDefault]));
+  return found.map((c) => ({ ...c, enabledByDefault: enabled.get(c.id) ?? false }));
+}

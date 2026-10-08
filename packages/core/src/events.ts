@@ -1,4 +1,4 @@
-import type { MetricKey } from './metrics';
+import type { LevelSnapshot, MetricKey } from './metrics';
 
 /** §6.2 */
 export type RunState =
@@ -69,13 +69,36 @@ export type RunEvent =
   | { type: 'warning'; at: string; code: string; message: string }
   | { type: 'error'; at: string; error: RunFailure };
 
+/** The terminal state a run reached (§6.2). */
 export type RunOutcome = 'completed' | 'failed' | 'cancelled';
+
+/**
+ * Why browsing ended. A user stop that still verified ends in `completed` (§6.2 stopping →
+ * verifying → completed), so callers read the cause, not the outcome, to tell it from a met target.
+ */
+export type StopCause = 'target' | 'user' | 'app-exit' | 'no-progress' | 'error';
 
 export interface RunResult {
   outcome: RunOutcome;
+  stopCause: StopCause;
   stats: RunStats;
   failure?: RunFailure;
+  /** S09: `missing` when the initial progress read failed; `not-applicable` for `progressSource: 'none'`. */
   baseline: 'present' | 'missing' | 'not-applicable';
+  /** The progress page as read before and after browsing (S07/S08); null where it was not read. */
+  levels: { initial: LevelSnapshot | null; final: LevelSnapshot | null };
+}
+
+/** Abort reasons a run's signal carries, so the coordinator can tell a user stop from the app exiting. */
+export type StopRequest = 'user' | 'app-exit';
+
+export function stopRequest(reason: StopRequest): DOMException {
+  return new DOMException(reason, 'AbortError');
+}
+
+export function stopRequestOf(signal: AbortSignal): StopRequest {
+  const reason: unknown = signal.reason;
+  return reason instanceof DOMException && reason.message === 'app-exit' ? 'app-exit' : 'user';
 }
 
 export function emptyCounters(): StatCounters {

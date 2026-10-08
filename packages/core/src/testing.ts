@@ -2,6 +2,7 @@ import type { LevelSnapshot } from './metrics';
 import type {
   ActionPolicy,
   ActionResult,
+  AuthMode,
   AuthResult,
   ForumPort,
   ReadResult,
@@ -123,9 +124,20 @@ export interface FixtureForumOptions {
   floorsConfirmed?: boolean;
   /** Simulated page latencies in milliseconds. */
   latency?: { collect?: number; enter?: number; dwell?: number; back?: number };
+  /** Answers `ensureAuthenticated`; defaults to authenticated at once. */
+  auth?: (mode: AuthMode, signal: AbortSignal) => Promise<AuthResult>;
+  /** Answers `readProgress`; defaults to null, as for `progressSource: 'none'`. */
+  progress?: (kind: 'initial' | 'final', signal: AbortSignal) => Promise<LevelSnapshot | null>;
+  /** What `discoverCategories` finds; defaults to none. */
+  discovered?: Category[];
+  /** Answers `returnAndVerify` (T11); defaults to the row coming back without a new-topic badge. */
+  verify?: (topic: TopicCandidate) => ReadVerification;
 }
 
 export type FixtureCall =
+  | { op: 'ensureAuthenticated'; mode: AuthMode }
+  | { op: 'discoverCategories' }
+  | { op: 'readProgress'; kind: 'initial' | 'final' }
   | { op: 'collectTopics'; category: string }
   | { op: 'enterFromList'; topicId: string }
   | { op: 'readTopic'; topicId: string }
@@ -146,16 +158,19 @@ export class FixtureForum implements ForumPort {
     return this.opts.sleeper.sleep(ms ?? 0, signal);
   }
 
-  async ensureAuthenticated(): Promise<AuthResult> {
-    return { status: 'authenticated' };
+  async ensureAuthenticated(mode: AuthMode, signal: AbortSignal): Promise<AuthResult> {
+    this.calls.push({ op: 'ensureAuthenticated', mode });
+    return this.opts.auth ? this.opts.auth(mode, signal) : { status: 'authenticated' };
   }
 
   async discoverCategories(): Promise<Category[]> {
-    return [];
+    this.calls.push({ op: 'discoverCategories' });
+    return structuredClone(this.opts.discovered ?? []);
   }
 
-  async readProgress(): Promise<LevelSnapshot | null> {
-    return null;
+  async readProgress(kind: 'initial' | 'final', signal: AbortSignal): Promise<LevelSnapshot | null> {
+    this.calls.push({ op: 'readProgress', kind });
+    return this.opts.progress ? this.opts.progress(kind, signal) : null;
   }
 
   async collectTopics(category: Category, _strategy: TopicStrategy, signal: AbortSignal): Promise<TopicBatch> {
@@ -163,7 +178,8 @@ export class FixtureForum implements ForumPort {
     const n = this.collectCount.get(category.path) ?? 0;
     this.collectCount.set(category.path, n + 1);
     await this.wait(this.opts.latency?.collect ?? 1000, signal);
-    return { category, topics: this.opts.topics(category.path, n) };
+    const topics = this.opts.topics(category.path, n);
+    return { category, topics, empty: topics.length === 0 };
   }
 
   async enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit> {
@@ -185,10 +201,10 @@ export class FixtureForum implements ForumPort {
       if (last !== null && floor !== last) {
         const verdict = strategy.onFloor({ from: last, to: floor, confirmed: this.opts.floorsConfirmed ?? true });
         last = floor;
-        if (verdict === 'stop') return { startFloor: readings[0] ?? null, endFloor: last, scrolls, stoppedByTarget: true };
+        if (verdict === 'stop') return { startFloor: readings[0] ?? null, endFloor: last, scrolls, stoppedByTarget: true, layout: 'wide' };
       }
     }
-    return { startFloor: readings[0] ?? null, endFloor: last, scrolls, stoppedByTarget: false };
+    return { startFloor: readings[0] ?? null, endFloor: last, scrolls, stoppedByTarget: false, layout: 'wide' };
   }
 
   async performActions(_policy: ActionPolicy, _signal: AbortSignal): Promise<ActionResult> {
@@ -200,6 +216,6 @@ export class FixtureForum implements ForumPort {
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {
     this.calls.push({ op: 'returnAndVerify', topicId: visit.topic.id });
     await this.wait(this.opts.latency?.back ?? 2500, signal);
-    return visit.topic.unread ? 'confirmed' : 'indeterminate';
+    return this.opts.verify?.(visit.topic) ?? 'confirmed';
   }
 }

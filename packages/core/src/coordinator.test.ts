@@ -417,3 +417,102 @@ describe('STATE-001 browser closed from outside (§6.2)', () => {
     await expect(t.time.drive(session.continueWaiting(new AbortController().signal))).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
+
+describe('S07 connect lag: one interruptible re-read of the final progress', () => {
+  const connect = site({ progressSource: 'connect-linuxdo', progressUrl: 'https://connect.invalid' });
+  const viewed = (topics: number): LevelSnapshot => ({
+    source: 'connect-linuxdo',
+    metrics: [{ label: '浏览话题', key: 'topicsViewed', current: topics, required: 500 }],
+  });
+
+  /** Initial read shows 100 topics; the n-th final read shows `finals[n]` (the last value repeats). */
+  function lagging(finals: number[], onFinal?: (t: ReturnType<typeof setup>, n: number) => void) {
+    const finalReadsAt: number[] = [];
+    const t: ReturnType<typeof setup> = setup({
+      site: connect,
+      forum: {
+        progress: async (kind) => {
+          if (kind === 'initial') return viewed(100);
+          const n = finalReadsAt.push(t.time.clock.monotonic()) - 1;
+          onFinal?.(t, n);
+          return viewed(finals[Math.min(n, finals.length - 1)]!);
+        },
+      },
+    });
+    const lagWarnings = () => t.events.filter((e) => e.type === 'warning' && e.code === 'site-lag');
+    return { t, finalReadsAt, lagWarnings };
+  }
+
+  it('waits 4 minutes with the browser open and keeps the re-read once it catches up', async () => {
+    const { t, finalReadsAt, lagWarnings } = lagging([100, 103]);
+    const out = await t.run(plan({ kind: 'topics', count: 3 }));
+    expect(finalReadsAt).toHaveLength(2);
+    expect(finalReadsAt[1]! - finalReadsAt[0]!).toBe(240_000);
+    expect(out).toMatchObject({ outcome: 'completed', stopCause: 'target' });
+    expect(out.stats.reported?.topicsViewed).toEqual({ initial: 100, final: 103 });
+    expect(out.stats.confirmed.topics).toBe(3);
+    expect(out.levels.final?.metrics[0]?.current).toBe(103);
+    expect(lagWarnings()).toHaveLength(1);
+    expect(t.closed()).toBe(1);
+  });
+
+  it('reads only once when the site already shows every confirmed topic', async () => {
+    const { t, finalReadsAt, lagWarnings } = lagging([103]);
+    await t.run(plan({ kind: 'topics', count: 3 }));
+    expect(finalReadsAt).toHaveLength(1);
+    expect(lagWarnings()).toHaveLength(0);
+  });
+
+  it('re-reads only once and reports the shortfall as it is, confirmed left untouched', async () => {
+    const { t, finalReadsAt, lagWarnings } = lagging([100, 101]);
+    const out = await t.run(plan({ kind: 'topics', count: 3 }));
+    expect(finalReadsAt).toHaveLength(2);
+    expect(out.outcome).toBe('completed');
+    expect(out.stats.reported?.topicsViewed).toEqual({ initial: 100, final: 101 });
+    expect(out.stats.confirmed.topics).toBe(3);
+    expect(lagWarnings()).toHaveLength(2);
+  });
+
+  it('a user stop during the wait keeps the first final read and still completes', async () => {
+    const { t, finalReadsAt } = lagging([100, 103], (t, n) => {
+      if (n === 0) t.time.at(t.time.clock.monotonic() + 60_000, () => t.controller.abort(stopRequest('user')));
+    });
+    const out = await t.run(plan({ kind: 'topics', count: 3 }));
+    expect(finalReadsAt).toHaveLength(1);
+    expect(out).toMatchObject({ outcome: 'completed', stopCause: 'target' });
+    expect(out.stats.reported?.topicsViewed).toEqual({ initial: 100, final: 100 });
+    expect(t.events.some((e) => e.type === 'warning' && /Stopped while waiting/.test(e.message))).toBe(true);
+  });
+
+  it('a browser closed during the wait cancels the run like any final read', async () => {
+    const { t, finalReadsAt } = lagging([100, 103], (t, n) => {
+      if (n === 0) t.time.at(t.time.clock.monotonic() + 60_000, () => t.browser.abort(stopRequest('browser-closed')));
+    });
+    const out = await t.run(plan({ kind: 'topics', count: 3 }));
+    expect(finalReadsAt).toHaveLength(1);
+    expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'browser-closed' });
+    expect(t.closed()).toBe(1);
+  });
+
+  it('a run the user already stopped still waits, and the second stop request cuts the wait', async () => {
+    const exit = new AbortController();
+    const finalReadsAt: number[] = [];
+    const t: ReturnType<typeof setup> = setup({
+      site: connect,
+      exit,
+      forum: {
+        progress: async (kind) => {
+          if (kind === 'initial') return viewed(100);
+          finalReadsAt.push(t.time.clock.monotonic());
+          t.time.at(t.time.clock.monotonic() + 120_000, () => exit.abort());
+          return viewed(100);
+        },
+      },
+    });
+    t.time.at(40_000, () => t.controller.abort(stopRequest('user')));
+    const out = await t.run(plan({ kind: 'endless' }));
+    expect(out.stats.confirmed.topics).toBeGreaterThan(0);
+    expect(finalReadsAt).toHaveLength(1);
+    expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'app-exit' });
+  });
+});

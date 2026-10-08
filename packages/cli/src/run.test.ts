@@ -6,6 +6,7 @@ import {
   credentialsFromEnv,
   EXIT,
   exitCodeFor,
+  formatSummary,
   parseLoginArgs,
   parseProfileId,
   parseRunArgs,
@@ -172,5 +173,18 @@ describe('CLI-002 run output (§11.1)', () => {
     expect(lines.slice(0, 2)).toEqual(['intro', '[01:05] state browsing']);
     expect(lines[2]).toMatch(/^\nresult: completed \(target\)/);
     expect(lines).toHaveLength(3);
+  });
+
+  it('S08: adds the lag note only when the site shows fewer topics than were confirmed', () => {
+    const withViewed = (confirmed: number, initial: number, final: number): RunResult => {
+      const stats = emptyStats();
+      stats.confirmed.topics = confirmed;
+      stats.reported = { topicsViewed: { initial, final } };
+      return { ...result, baseline: 'present', stats };
+    };
+    expect(formatSummary(withViewed(3, 100, 101))).toContain('site statistics may lag: the site shows 2 fewer topics than confirmed');
+    expect(formatSummary(withViewed(3, 100, 101))).toContain('confirmed: topics 3');
+    expect(formatSummary(withViewed(3, 100, 103))).not.toContain('may lag');
+    expect(formatSummary(result)).not.toContain('may lag');
   });
 });

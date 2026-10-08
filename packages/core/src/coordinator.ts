@@ -57,6 +57,8 @@ export interface CoordinatorEnv {
 
 /** S07 allows 10 s for the page itself; the rest covers navigation and the forced reload. */
 export const VERIFY_TIMEOUT_MS = 60_000;
+/** S07: connect's statistics trail a run by about 3 minutes (Phase 1); the final read is retried once after this. */
+export const SITE_LAG_WAIT_MS = 240_000;
 const INSPECT_TIMEOUT_MS = 60_000;
 
 /** What ended a step early: a stop request on its signal, or a failure. */
@@ -91,6 +93,17 @@ export function reportedMetrics(initial: LevelSnapshot | null, final: LevelSnaps
     reported[m.key as Exclude<MetricKey, 'other'>] = before ? { initial: before.current, final: m.current } : { final: m.current };
   }
   return reported;
+}
+
+/**
+ * S08: how many confirmed topics the progress page's `topicsViewed` change does not show yet; null
+ * when there is no change to compare (no baseline, or no such metric) or nothing is missing.
+ */
+export function reportedTopicsShortfall(stats: Pick<RunStats, 'confirmed' | 'reported'>): number | null {
+  const viewed = stats.reported?.topicsViewed;
+  if (viewed?.initial === undefined) return null;
+  const missing = stats.confirmed.topics - (viewed.final - viewed.initial);
+  return missing > 0 ? missing : null;
 }
 
 /** §6.1 / §6.2: the one kernel every entry point (CLI, server, scheduler) runs. */
@@ -137,10 +150,16 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     const verify = async (stopCause: StopCause, failure?: RunFailure): Promise<RunResult> => {
       state('verifying');
       if (runSite.progressSource !== 'none') {
-        const verifySignal = AbortSignal.any([AbortSignal.timeout(VERIFY_TIMEOUT_MS), session.closed, ...(this.env.exitSignal ? [this.env.exitSignal] : [])]);
-        try {
-          levels.final = await forum.readProgress('final', verifySignal);
+        const cancelSignals = [session.closed, ...(this.env.exitSignal ? [this.env.exitSignal] : [])];
+        const readFinal = async () => {
+          levels.final = await forum.readProgress('final', AbortSignal.any([AbortSignal.timeout(VERIFY_TIMEOUT_MS), ...cancelSignals]));
           if (levels.final) stats.reported = reportedMetrics(levels.initial, levels.final);
+        };
+        try {
+          await readFinal();
+          if (runSite.progressSource === 'connect-linuxdo' && reportedTopicsShortfall(stats) !== null) {
+            await this.awaitSiteLag(stats, deps, AbortSignal.any(cancelSignals), signal, readFinal, warn);
+          }
         } catch (err) {
           if (this.env.exitSignal?.aborted) return end('cancelled', 'app-exit', failure);
           if (session.closed.aborted) return end('cancelled', 'browser-closed', failure);
@@ -251,6 +270,41 @@ export class DiscoLurkCoordinator implements RunCoordinator {
       continueWaiting: (signal) => session.forum.ensureAuthenticated('headed-wait', AbortSignal.any([signal, session.closed])),
       close: () => session.close(),
     };
+  }
+
+  /**
+   * S07: the browser stays open while connect catches up, then the final read runs once more and
+   * its numbers replace the first ones. A user stop during the wait keeps the first read; a closed
+   * browser or the app exiting throws, so the caller cancels the run as for any final read.
+   */
+  private async awaitSiteLag(
+    stats: RunStats,
+    deps: RuntimeDeps,
+    cancel: AbortSignal,
+    userSignal: AbortSignal,
+    readFinal: () => Promise<void>,
+    warn: (code: string, message: string) => void,
+  ): Promise<void> {
+    const missing = () => `${reportedTopicsShortfall(stats) ?? 0} of ${stats.confirmed.topics} confirmed topics`;
+    warn('site-lag', `Site statistics are missing ${missing()}; reading again in ${SITE_LAG_WAIT_MS / 60_000} minutes`);
+    // A run already stopped by the user still waits; only a second request (the exit signal) cuts it short.
+    const waitSignal = userSignal.aborted ? cancel : AbortSignal.any([cancel, userSignal]);
+    try {
+      await deps.sleeper.sleep(SITE_LAG_WAIT_MS, waitSignal);
+    } catch (err) {
+      if (cancel.aborted || !isAbortError(err)) throw err;
+      warn('site-lag', 'Stopped while waiting; keeping the first final read');
+      return;
+    }
+    try {
+      await readFinal();
+    } catch (err) {
+      if (cancel.aborted) throw err;
+      const f = toFailure(err);
+      warn('final-progress-failed', `Re-read failed (${f.code}: ${f.message}); keeping the first final read`);
+      return;
+    }
+    if (reportedTopicsShortfall(stats) !== null) warn('site-lag', `Site statistics are still missing ${missing()} after the re-read`);
   }
 
   /** §7.2: a discovered site re-reads its categories after every sign-in; a failed read keeps the stored list. */

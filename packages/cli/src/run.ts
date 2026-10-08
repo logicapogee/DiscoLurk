@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import { FileCategoryStore } from '@disco-lurk/config';
 import {
+  reportedTopicsShortfall,
   resolveRunMode,
   seededRandom,
   systemDeps,
@@ -322,5 +323,7 @@ export function formatSummary(result: RunResult): string {
     `estimated floors: ${result.stats.estimatedFloors} · elapsed ${Math.round(result.stats.elapsedMs / 1000)} s`,
     ...levelLines(result.levels, result.baseline),
   ];
+  const missing = reportedTopicsShortfall(result.stats);
+  if (missing !== null) lines.push(`site statistics may lag: the site shows ${missing} fewer topics than confirmed`);
   return lines.join('\n');
 }

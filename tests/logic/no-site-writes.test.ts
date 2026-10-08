@@ -33,7 +33,7 @@ describe('guard: no write paths to a site', () => {
       /link\.click\(\)/,
     ];
     const offenders = lines('packages')
-      .filter(({ at }) => !at.startsWith('packages/cli/src/capture.ts') && !at.startsWith('packages/cli/src/selftest.ts'))
+      .filter(({ at }) => !at.startsWith('packages/cli/src/selftest.ts'))
       .filter(({ text }) => /\.(click|fill|type|press|tap|dispatchEvent|setInputFiles|setChecked|selectOption)\(|keyboard\./.test(text))
       .filter(({ text }) => !allowed.some((a) => a.test(text)));
     expect(offenders).toEqual([]);
@@ -41,7 +41,7 @@ describe('guard: no write paths to a site', () => {
 
   it('never uses the like or reply controls outside read-only parsing', () => {
     const offenders = lines('packages')
-      .filter(({ at }) => !/packages\/site-discourse\/src\/(selectors|parse)\.ts/.test(at) && !at.startsWith('packages/cli/src/capture.ts'))
+      .filter(({ at }) => !/packages\/site-discourse\/src\/(selectors|parse)\.ts/.test(at))
       .filter(({ text }) => /SELECTORS\.(likeButton|replyOpen|replySubmit|replyTextarea|replyEditor)|LIKE_FALLBACK_SELECTORS/.test(text));
     expect(offenders).toEqual([]);
   });

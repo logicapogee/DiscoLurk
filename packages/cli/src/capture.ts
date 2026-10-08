@@ -5,7 +5,6 @@ import { RunError, systemClock, systemSleeper, type BrowserChannel, type LevelSn
 import {
   categoryLinks,
   CONNECT_READY,
-  editorKind,
   findLeaks,
   HEADED_WIDTH,
   hostLabels,
@@ -61,7 +60,6 @@ export interface CaptureReport {
 /** Narrow enough for Discourse to swap the timeline for `#topic-progress` (§4.3), still under 1000. */
 const NARROW_WIDTHS = [880, 760];
 const BIG_TOPIC_REPLIES = 100;
-const SHORT_TOPIC_REPLIES = 30;
 const MAX_LIST_TRIES = 10;
 /**
  * Reply-count cell of a list row; a capture-only aid for picking topics, not part of Appendix A.
@@ -69,14 +67,13 @@ const MAX_LIST_TRIES = 10;
  */
 const REPLIES_CELL = 'td.posts .number, td.num.posts span.number, .posts-map .number, .gf-stat-posts .gf-stat-number';
 
-export const CAPTURE_STEPS = ['categories', 'list', 'list-sorted', 'topic', 'reply-editor', 'progress', 'liked', 'login-form'] as const;
+export const CAPTURE_STEPS = ['categories', 'list', 'list-sorted', 'topic', 'progress', 'liked', 'login-form'] as const;
 
 // `list` reads its candidates from the categories page on discovered sites, so it always runs after it.
 const STEP_DEPENDS: Record<string, string[]> = {
   list: ['categories'],
   'list-sorted': ['categories', 'list'],
   topic: ['categories', 'list', 'list-sorted'],
-  'reply-editor': ['categories', 'list'],
 };
 
 /** The requested steps plus whatever state they need from earlier steps. */
@@ -310,52 +307,6 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
       };
     });
 
-    await step('reply-editor', async () => {
-      if (!listPath) return { ok: false, note: 'no list page', files: [] };
-      await pause(0.5, 1.5);
-      await page.goto(new URL(listPath, base).href, { waitUntil: 'domcontentloaded' });
-      await page.locator(SELECTORS.topicRow).first().waitFor({ timeout: 20_000 });
-      await pause(1, 2);
-      const skip = (big as Row | null)?.id;
-      const listed = rowsOf(await page.content()).filter((r) => !r.pinned && r.hasTitleLink && r.id !== skip);
-      const shorts = listed.every((r) => r.replies === null)
-        ? listed
-        : listed.filter((r) => r.replies !== null && r.replies <= SHORT_TOPIC_REPLIES);
-      log(`  ${shorts.length} candidate topics with ≤${SHORT_TOPIC_REPLIES} replies`);
-      for (const topic of shorts.slice(0, 3)) {
-        if (!(await enter(topic.id))) {
-          log(`  topic ${topic.id}: entry not confirmed (URL ${scrubWith(mapping, page.url())}), trying another`);
-          if (topicUrlPattern(topic.id).test(page.url())) await back(topic.id);
-          continue;
-        }
-        await pause(1, 3);
-        await readOnce();
-        const open = page.locator(SELECTORS.replyOpen).first();
-        if (!(await open.waitFor({ state: 'attached', timeout: 10_000 }).then(() => true, () => false))) {
-          log(`  topic ${topic.id}: no ${SELECTORS.replyOpen} (closed topic?), trying another`);
-          await back(topic.id);
-          continue;
-        }
-        await open.click();
-        await page
-          .locator('#reply-control textarea, #reply-control .d-editor-input, #reply-control .ProseMirror')
-          .first()
-          .waitFor({ state: 'visible', timeout: 15_000 });
-        await pause(0.5, 1);
-        const html = await page.content();
-        const kind = editorKind(parseDocument(html));
-        const file = await save('reply-editor', html);
-        const closedBy = await closeComposer(page, sleep);
-        if (!closedBy) {
-          await opts.ask('The reply editor did not close. Close it in the Chrome window WITHOUT submitting, then press Enter here.');
-        }
-        await pause(1, 2);
-        await back(topic.id);
-        return { ok: kind !== null, note: `editor ${kind ?? 'not recognised'}; closed by ${closedBy ?? 'the user'}`, files: [file], topicId: topic.id };
-      }
-      return { ok: false, note: `no open topic with ≤${SHORT_TOPIC_REPLIES} replies offered ${SELECTORS.replyOpen}`, files: [] };
-    });
-
     await step('progress', async () => {
       if (site.progressSource === 'none' || !site.progressUrl) return { ok: true, note: 'site has no progress page', files: [] };
       await pause(2, 5);
@@ -430,21 +381,6 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
   }
   await writeFile(metaPath, JSON.stringify(report, null, 2) + '\n');
   return report;
-}
-
-/** Closes an empty composer; returns which control did it, or null when it stayed open. */
-async function closeComposer(page: Page, sleep: (ms: number) => Promise<void>): Promise<string | null> {
-  const isOpen = () => page.locator('#reply-control.open').count().then((n) => n > 0);
-  for (const sel of ['#reply-control .save-or-cancel .cancel', '#reply-control .discard-button', '#reply-control button.cancel']) {
-    const control = page.locator(sel).first();
-    if ((await control.count()) === 0 || !(await control.isVisible())) continue;
-    await control.click();
-    await sleep(1_000);
-    if (!(await isOpen())) return sel;
-  }
-  await page.keyboard.press('Escape');
-  await sleep(1_000);
-  return (await isOpen()) ? null : 'Escape';
 }
 
 interface ProgressDeps {

@@ -1,0 +1,10 @@
+{
+  "name": "@disco-lurk/config",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@disco-lurk/core": "workspace:*",
+    "zod": "4.6.5"
+  }
+}

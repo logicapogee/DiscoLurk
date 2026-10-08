@@ -1,0 +1,132 @@
+/* §10.5 design tokens; light theme follows the system. */
+:root {
+  --bg: #1a1a2e;
+  --panel: #16213e;
+  --accent: #00d9ff;
+  --success: #00ff88;
+  --warning: #ffaa00;
+  --danger: #e94560;
+  --primary: #0f3460;
+  --text: #e8e8f0;
+  --muted: #9aa0b8;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f6fb;
+    --panel: #ffffff;
+    --accent: #0077a8;
+    --success: #0a8f4f;
+    --warning: #b36b00;
+    --danger: #c22d47;
+    --primary: #0f3460;
+    --text: #1a1a2e;
+    --muted: #5b6178;
+    color-scheme: light;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans CJK SC', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dot.ok {
+  background: var(--success);
+}
+
+.dot.fail {
+  background: var(--danger);
+}
+
+.dot.pending {
+  background: var(--warning);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+td {
+  padding: 6px 8px;
+  vertical-align: top;
+  border-top: 1px solid color-mix(in srgb, var(--muted) 25%, transparent);
+  overflow-wrap: anywhere;
+}
+
+td.mark {
+  width: 28px;
+  font-weight: 700;
+}
+
+.s-ok {
+  color: var(--success);
+}
+
+.s-warn {
+  color: var(--warning);
+}
+
+.s-fail {
+  color: var(--danger);
+}
+
+.s-skipped {
+  color: var(--muted);
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0 0;
+}

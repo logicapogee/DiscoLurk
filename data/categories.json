@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "siteId": "linuxdo",
+  "categories": [
+    { "name": "开发调优", "path": "/c/develop/4", "id": 4, "enabledByDefault": true },
+    { "name": "国产替代", "path": "/c/domestic/98", "id": 98, "enabledByDefault": true },
+    { "name": "资源荟萃", "path": "/c/resource/14", "id": 14, "enabledByDefault": true },
+    { "name": "网盘资源", "path": "/c/resource/cloud-asset/94", "id": 94, "enabledByDefault": true },
+    { "name": "文档共建", "path": "/c/wiki/42", "id": 42, "enabledByDefault": true },
+    { "name": "积分乐园", "path": "/c/credit/106", "id": 106, "enabledByDefault": false },
+    { "name": "非我莫属", "path": "/c/job/27", "id": 27, "enabledByDefault": true },
+    { "name": "读书成诗", "path": "/c/reading/32", "id": 32, "enabledByDefault": true },
+    { "name": "扬帆起航", "path": "/c/startup/46", "id": 46, "enabledByDefault": false },
+    { "name": "前沿快讯", "path": "/c/news/34", "id": 34, "enabledByDefault": true },
+    { "name": "网络记忆", "path": "/c/feeds/92", "id": 92, "enabledByDefault": true },
+    { "name": "福利羊毛", "path": "/c/welfare/36", "id": 36, "enabledByDefault": true },
+    { "name": "搞七捻三", "path": "/c/gossip/11", "id": 11, "enabledByDefault": true },
+    { "name": "社区孵化", "path": "/c/incubator/102", "id": 102, "enabledByDefault": false },
+    { "name": "虫洞广场", "path": "/c/square/110", "id": 110, "enabledByDefault": true },
+    { "name": "运营反馈", "path": "/c/feedback/2", "id": 2, "enabledByDefault": false }
+  ]
+}

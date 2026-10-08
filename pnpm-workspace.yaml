@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+  - apps/*
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - playwright-core@1.64.0
+  - '@tauri-apps/plugin-shell@2.4.1'
+  - preact@11.0.1

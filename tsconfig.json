@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "packages/core/src",
+    "packages/site-discourse/src",
+    "packages/scheduler/src",
+    "packages/config/src",
+    "packages/server/src",
+    "packages/cli/src",
+    "tests",
+    "scripts",
+    "vitest.config.ts"
+  ],
+  "compilerOptions": {
+    "lib": [
+      "ES2023",
+      "DOM"
+    ]
+  }
+}

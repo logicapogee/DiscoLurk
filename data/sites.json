@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "sites": [
+    {
+      "id": "linuxdo",
+      "displayName": "LINUX DO",
+      "baseUrl": "https://linux.do",
+      "kind": "discourse",
+      "login": "headed",
+      "categorySource": "builtin",
+      "builtinCategories": "categories.json",
+      "progressSource": "connect-linuxdo",
+      "progressUrl": "https://connect.linux.do",
+      "behaviorVerified": { "clickEntryRequired": true }
+    },
+    {
+      "id": "docofcard",
+      "displayName": "卡粉论坛",
+      "baseUrl": "https://forum.docofcard.com",
+      "kind": "discourse",
+      "login": "headed",
+      "categorySource": "discovered",
+      "progressSource": "trust-level-docofcard",
+      "progressUrl": "https://forum.docofcard.com/my/trust-level",
+      "behaviorVerified": { "clickEntryRequired": "unverified" }
+    }
+  ]
+}

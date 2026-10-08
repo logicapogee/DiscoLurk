@@ -1,0 +1,9 @@
+{
+  "name": "@disco-lurk/site-discourse",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@disco-lurk/core": "workspace:*"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@disco-lurk/cli",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@disco-lurk/core": "workspace:*",
+    "@disco-lurk/server": "workspace:*",
+    "playwright-core": "1.64.0"
+  }
+}

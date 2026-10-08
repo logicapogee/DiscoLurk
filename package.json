@@ -1,0 +1,32 @@
+{
+  "name": "disco-lurk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.5.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p packages/ui/tsconfig.json --noEmit",
+    "build:ui": "pnpm --filter @disco-lurk/ui build",
+    "build:sidecar": "node scripts/build-sidecar.ts",
+    "gate:sidecar": "node scripts/gate-sidecar.ts",
+    "tauri": "node scripts/tauri.ts",
+    "build:desktop-deps": "pnpm run build:ui && pnpm run build:sidecar"
+  },
+  "devDependencies": {
+    "@disco-lurk/config": "workspace:*",
+    "@disco-lurk/core": "workspace:*",
+    "@disco-lurk/scheduler": "workspace:*",
+    "@disco-lurk/server": "workspace:*",
+    "@disco-lurk/site-discourse": "workspace:*",
+    "@types/node": "~24.19.1",
+    "@types/ws": "^8.18.1",
+    "@yao-pkg/pkg": "6.23.0",
+    "esbuild": "0.28.2",
+    "typescript": "~5.9.3",
+    "vitest": "5.0.3"
+  }
+}

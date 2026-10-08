@@ -51,7 +51,7 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
       for (const category of shuffle(preset.categories, deps.random)) {
         throwIfAborted(signal);
         const batch = await forum.collectTopics(category, { browseMode: preset.browseMode }, signal);
-        if (batch.empty) emit({ type: 'warning', at: at(), code: 'empty-category', message: `${category.path} rendered no topic rows` });
+        if (batch.topics.length === 0) emit({ type: 'warning', at: at(), code: 'empty-category', message: `${category.path} rendered no topic rows` });
         const picks = sampleTopics(selectCandidates(batch.topics, deps.random), deps.random, preset.samplePerCategory);
 
         for (const topic of picks) {

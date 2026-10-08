@@ -27,11 +27,10 @@ export interface TopicStrategy {
   browseMode: BrowseMode;
 }
 
+/** No topics means the list had nothing to click (§7.1 step 2); the category is skipped as `empty-category`. */
 export interface TopicBatch {
   category: Category;
   topics: TopicCandidate[];
-  /** The list never rendered a topic row (§7.1 step 2); the category is skipped as `empty-category`. */
-  empty: boolean;
 }
 
 export type TopicVisit =
@@ -80,7 +79,11 @@ export interface ForumPort {
   readonly site: Site;
   ensureAuthenticated(mode: AuthMode, signal: AbortSignal): Promise<AuthResult>;
   discoverCategories(signal: AbortSignal): Promise<Category[]>;
-  /** Resolves to null when the site's `progressSource` is `'none'`. */
+  /**
+   * Resolves to null when the site's `progressSource` is `'none'`. `kind` tells the S07 end-of-run
+   * read from the baseline, so an adapter can treat them differently (connect lags behind and may
+   * need a later re-read); today both read the same way.
+   */
   readProgress(kind: 'initial' | 'final', signal: AbortSignal): Promise<LevelSnapshot | null>;
   collectTopics(category: Category, strategy: TopicStrategy, signal: AbortSignal): Promise<TopicBatch>;
   enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit>;

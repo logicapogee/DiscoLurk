@@ -193,8 +193,7 @@ export class FixtureForum implements ForumPort {
     const n = this.collectCount.get(category.path) ?? 0;
     this.collectCount.set(category.path, n + 1);
     await this.wait(this.opts.latency?.collect ?? 1000, signal);
-    const topics = this.opts.topics(category.path, n);
-    return { category, topics, empty: topics.length === 0 };
+    return { category, topics: this.opts.topics(category.path, n) };
   }
 
   async enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit> {

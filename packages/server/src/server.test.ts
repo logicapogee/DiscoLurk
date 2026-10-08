@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { startServer, WS_AUTH_TIMEOUT_MS, WS_CLOSE, type LurkServer } from './server';
+import { LOOPBACK_FAILURE_DELAY_MS, startServer, WS_AUTH_TIMEOUT_MS, WS_CLOSE, type LurkServer } from './server';
 
 const token = () => randomBytes(32).toString('base64url');
 
@@ -11,7 +11,7 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function boot(opts: { wsAuthTimeoutMs?: number } = {}) {
+async function boot(opts: { wsAuthTimeoutMs?: number; loopbackFailureDelayMs?: number } = {}) {
   const clock = { ms: Date.UTC(2026, 9, 8) };
   const t = token();
   let shutdowns = 0;
@@ -139,24 +139,19 @@ describe('SERVER-001 sidecar access contract (§10.3)', () => {
     expect((await fetch(`${base}/doctor`, { headers: auth(fresh) })).status).toBe(200);
   });
 
-  it('locks an IP for 15 minutes after 5 failures within 10 minutes', async () => {
-    const { base, token: t, clock } = await boot();
-    const attempt = (h: Record<string, string>) => fetch(`${base}/doctor`, { headers: h }).then((r) => r.status);
-
-    for (let i = 0; i < 4; i++) expect(await attempt(auth('bad'))).toBe(401);
-    clock.ms += 11 * 60_000; // older failures fall out of the window
-    for (let i = 0; i < 4; i++) expect(await attempt(auth('bad'))).toBe(401);
-    expect(await attempt(auth('bad'))).toBe(429);
-    expect(await attempt(auth(t))).toBe(429);
+  it('never locks out loopback: after 20 wrong tokens the right one still works, each failure delayed', async () => {
+    expect(LOOPBACK_FAILURE_DELAY_MS).toBeGreaterThan(0);
+    const { base, token: t } = await boot({ loopbackFailureDelayMs: 40 });
+    for (let i = 0; i < 20; i++) {
+      const started = performance.now();
+      expect((await fetch(`${base}/doctor`, { headers: auth('bad') })).status).toBe(401);
+      expect(performance.now() - started).toBeGreaterThanOrEqual(35);
+    }
+    expect((await fetch(`${base}/doctor`, { headers: auth(t) })).status).toBe(200);
     const ws = openWs(base);
     await ws.opened;
     ws.ws.send(JSON.stringify({ type: 'auth', token: t }));
-    expect((await ws.closed).code).toBe(WS_CLOSE.authFailed);
-    expect((await fetch(`${base}/health`)).status).toBe(200);
-
-    clock.ms += 15 * 60_000 - 1;
-    expect(await attempt(auth(t))).toBe(429);
-    clock.ms += 1;
-    expect(await attempt(auth(t))).toBe(200);
+    expect(await ws.next()).toEqual({ type: 'auth-ok' });
+    ws.ws.close();
   });
 });

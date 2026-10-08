@@ -2,11 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import type { Clock, RunEvent } from '@disco-lurk/core';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { bearer, MIN_TOKEN_BYTES, TokenGuard, tokenStrongEnough } from './auth';
+import { bearer, isLoopback, MIN_TOKEN_BYTES, TokenGuard, tokenStrongEnough } from './auth';
 
 /** §10.3: the shell's webview origin (Windows serves it over http://tauri.localhost). */
 export const TAURI_ORIGINS = ['tauri://localhost', 'http://tauri.localhost'] as const;
 export const WS_AUTH_TIMEOUT_MS = 5000;
+/** §10.3: loopback failures are not counted toward lockout, so each one costs a fixed pause instead. */
+export const LOOPBACK_FAILURE_DELAY_MS = 250;
 
 export const WS_CLOSE = { authFailed: 4401, authTimeout: 4408, tokenRotated: 4001 } as const;
 
@@ -24,6 +26,7 @@ export interface ServerOptions {
   handlers: ServerHandlers;
   allowedOrigins?: readonly string[];
   wsAuthTimeoutMs?: number;
+  loopbackFailureDelayMs?: number;
   log?: (message: string) => void;
 }
 
@@ -49,6 +52,11 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
   const allowed = new Set(opts.allowedOrigins ?? TAURI_ORIGINS);
   const guard = new TokenGuard(opts.token, opts.clock, (ip) => log(`auth: ${ip} locked out after repeated failures`));
   const authed = new Set<WebSocket>();
+  const failureDelayMs = opts.loopbackFailureDelayMs ?? LOOPBACK_FAILURE_DELAY_MS;
+  const afterFailure = (ip: string, respond: () => void) => {
+    if (isLoopback(ip)) setTimeout(respond, failureDelayMs);
+    else respond();
+  };
 
   const routes: Record<string, Route> = {
     '/health': {
@@ -88,9 +96,10 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
     if (!route) return send(res, 404, { error: 'not-found' });
     if (req.method !== route.method) return send(res, 405, { error: 'method-not-allowed' });
     if (route.auth) {
-      const verdict = guard.check(req.socket.remoteAddress ?? 'unknown', bearer(req.headers.authorization));
+      const ip = req.socket.remoteAddress ?? 'unknown';
+      const verdict = guard.check(ip, bearer(req.headers.authorization));
       if (verdict === 'locked') return send(res, 429, { error: 'locked' });
-      if (verdict === 'denied') return send(res, 401, { error: 'unauthorized' });
+      if (verdict === 'denied') return afterFailure(ip, () => send(res, 401, { error: 'unauthorized' }));
     }
     route.handle(res).catch((err: unknown) => {
       log(`route ${url.pathname} failed: ${String(err)}`);
@@ -115,7 +124,7 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
           ? (frame as { token?: unknown }).token
           : undefined;
       if (guard.check(ip, typeof token === 'string' ? token : undefined) !== 'ok') {
-        ws.close(WS_CLOSE.authFailed, 'auth-failed');
+        afterFailure(ip, () => ws.close(WS_CLOSE.authFailed, 'auth-failed'));
         return;
       }
       authed.add(ws);

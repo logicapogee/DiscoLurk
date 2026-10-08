@@ -1,9 +1,11 @@
 import './inspector-shim';
+import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { systemClock } from '@disco-lurk/core';
 import { startServer } from '@disco-lurk/server';
 import { formatDoctor, runDoctor } from './doctor';
 import { profilesDir } from './paths';
+import { SidecarLifecycle } from './lifecycle';
 import { browserSelftest } from './selftest';
 
 declare const __LURK_VERSION__: string | undefined;
@@ -16,7 +18,7 @@ const USAGE = `lurk ${VERSION}
 
 Usage:
   lurk doctor [--json] [--port <n>] [--network]
-  lurk sidecar --port <n> --token <token>
+  lurk sidecar   (started by the desktop shell: prints a ready line, exits when stdin closes)
   lurk --version`;
 
 async function doctor(argv: string[]): Promise<number> {
@@ -35,32 +37,36 @@ async function doctor(argv: string[]): Promise<number> {
 }
 
 async function sidecar(argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { port: { type: 'string' }, token: { type: 'string' } } });
-  const port = Number(values.port);
-  if (!Number.isInteger(port) || port <= 0 || port > 65535 || !values.token) {
-    console.error('sidecar requires --port <1-65535> and --token <token>');
+  if (argv.length > 0) {
+    console.error('sidecar takes no arguments');
     return EXIT.environment;
   }
-  let release: () => void = () => {};
-  const stopped = new Promise<void>((resolve) => (release = resolve));
+  // §10.3: the token never appears in argv, the environment or a file, where other local processes
+  // could read it; only the shell, holding the other end of stdout, learns it from the ready line.
+  const token = randomBytes(32).toString('base64url');
+  // Once the shell is gone its ends of stdout/stderr are closed; dropping those write errors keeps
+  // them from crashing the sidecar before cleanup finishes.
+  process.stdout.on('error', () => {});
+  process.stderr.on('error', () => {});
+  const lifecycle = new SidecarLifecycle((m) => console.error(m));
   // The shell spawns the sidecar on loopback only; remote access is the separate `serve` command (§10.3).
   const server = await startServer({
     host: '127.0.0.1',
-    port,
-    token: values.token,
+    port: 0,
+    token,
     version: VERSION,
     clock: systemClock,
     log: (m) => console.error(m),
     handlers: {
-      doctor: () => runDoctor({ version: VERSION, profilesDir: profilesDir(), listeningPort: port }),
-      shutdown: async () => release(),
+      doctor: () => runDoctor({ version: VERSION, profilesDir: profilesDir(), listeningPort: server.port }),
+      shutdown: () => lifecycle.shutdown('/shutdown request'),
     },
   });
-  console.log(JSON.stringify({ type: 'ready', port: server.port, version: VERSION }));
-  const onSignal = () => release();
-  process.once('SIGTERM', onSignal);
-  process.once('SIGINT', onSignal);
-  await stopped;
+  console.log(JSON.stringify({ event: 'ready', port: server.port, token }));
+  lifecycle.watchParent(process.stdin);
+  process.once('SIGTERM', () => void lifecycle.shutdown('SIGTERM'));
+  process.once('SIGINT', () => void lifecycle.shutdown('SIGINT'));
+  await lifecycle.done;
   await server.close();
   return EXIT.ok;
 }

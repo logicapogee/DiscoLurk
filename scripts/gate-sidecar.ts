@@ -1,10 +1,10 @@
 // §12.1 packaging gate for the final `lurk` binary:
 //   1. launch system Chrome  2. persistent context  3. one locator click on a local static page
 //   4. screenshot, Profile written, clean close with no leftover browser process
-//   5. run again from a path outside the repository (Profile reused, sidecar /health + /shutdown)
+//   5. run again from a path outside the repository (Profile reused; sidecar ready line, token kept out of
+//      argv and environment, loopback-only listener, /health, /shutdown, stdin EOF)
 // Only a loopback static server is contacted; no real site is visited.
 import { execFileSync, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -95,27 +95,82 @@ async function selftestRun(label: string, bin: string, cwd: string, url: string,
   return result;
 }
 
-async function sidecarRun(bin: string, cwd: string) {
-  const port = 20000 + Math.floor(Math.random() * 20000);
-  const token = randomBytes(32).toString('base64url');
-  const child = spawn(bin, ['sidecar', '--port', String(port), '--token', token], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+/** Starts `lurk sidecar` the way the shell does and reads its §10.3 ready line. */
+async function startSidecar(bin: string, cwd: string) {
+  // stdin stays an open pipe, as under the shell; closing it is the parent-gone signal.
+  const child = spawn(bin, ['sidecar'], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
   const exited = new Promise<number | null>((resolve) => child.on('close', resolve));
-  const base = `http://127.0.0.1:${port}`;
-  let health: unknown = null;
-  for (let i = 0; i < 100 && health === null; i++) {
+  const ready = await new Promise<{ port: number; token: string } | null>((resolve) => {
+    let buffered = '';
+    const timer = setTimeout(() => resolve(null), 10_000);
+    child.stdout.on('data', (d: Buffer) => {
+      buffered += d;
+      for (const line of buffered.split('\n').slice(0, -1)) {
+        try {
+          const msg = JSON.parse(line) as { event?: string; port?: number; token?: string };
+          if (msg.event === 'ready' && msg.port && msg.token) {
+            clearTimeout(timer);
+            return resolve({ port: msg.port, token: msg.token });
+          }
+        } catch {
+          // not the ready line
+        }
+      }
+    });
+    child.on('close', () => resolve(null));
+  });
+  return { child, exited, ready, token: ready?.token ?? '', base: `http://127.0.0.1:${ready?.port ?? 0}` };
+}
+
+async function waitHealth(base: string): Promise<unknown> {
+  for (let i = 0; i < 100; i++) {
     try {
-      health = await (await fetch(`${base}/health`)).json();
+      return await (await fetch(`${base}/health`)).json();
     } catch {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
+  return null;
+}
+
+const within = <T,>(p: Promise<T>, ms: number) =>
+  Promise.race([p, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), ms))]);
+
+async function sidecarRun(bin: string, cwd: string) {
+  const a = await startSidecar(bin, cwd);
+  record('run 2 sidecar ready line', a.ready !== null, a.ready ? `port ${a.ready.port}, ${Buffer.byteLength(a.token)}-byte token` : 'none within 10 s');
+  const health = a.ready ? await waitHealth(a.base) : null;
   record('run 2 sidecar /health', health !== null, JSON.stringify(health));
-  const unauth = await fetch(`${base}/shutdown`, { method: 'POST' }).then((r) => r.status, () => -1);
+  const argv = execFileSync('ps', ['-o', 'command=', '-p', String(a.child.pid)], { encoding: 'utf8' }).trim();
+  record('run 2 token absent from argv', a.token !== '' && !argv.includes(a.token), argv);
+  const env = execFileSync('ps', ['eww', '-o', 'command=', '-p', String(a.child.pid)], { encoding: 'utf8' });
+  record('run 2 token absent from environment', a.token !== '' && !env.includes(a.token), 'checked ps eww');
+  const listening = execFileSync('lsof', ['-nP', '-a', '-p', String(a.child.pid), '-iTCP', '-sTCP:LISTEN'], { encoding: 'utf8' })
+    .split('\n')
+    .slice(1)
+    .filter(Boolean)
+    .map((l) => l.split(/\s+/).at(-2) ?? '');
+  record(
+    'run 2 sidecar listens on 127.0.0.1 only',
+    listening.length > 0 && listening.every((addr) => addr.startsWith('127.0.0.1:')),
+    listening.join(', '),
+  );
+  const unauth = await fetch(`${a.base}/shutdown`, { method: 'POST' }).then((r) => r.status, () => -1);
   record('run 2 sidecar rejects unauthenticated /shutdown', unauth === 401, `HTTP ${unauth}`);
-  const shut = await fetch(`${base}/shutdown`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).then((r) => r.status, () => -1);
-  const code = await Promise.race([exited, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 15_000))]);
-  if (code === 'timeout') child.kill('SIGKILL');
+  const shut = await fetch(`${a.base}/shutdown`, { method: 'POST', headers: { Authorization: `Bearer ${a.token}` } }).then(
+    (r) => r.status,
+    () => -1,
+  );
+  const code = await within(a.exited, 15_000);
+  if (code === 'timeout') a.child.kill('SIGKILL');
   record('run 2 sidecar /shutdown exits cleanly', shut === 202 && code === 0, `HTTP ${shut}, exit ${String(code)}`);
+
+  const b = await startSidecar(bin, cwd);
+  const up = b.ready ? await waitHealth(b.base) : null;
+  b.child.stdin.end();
+  const eof = await within(b.exited, 15_000);
+  if (eof === 'timeout') b.child.kill('SIGKILL');
+  record('run 2 sidecar exits when stdin closes', up !== null && eof === 0, `health ${up ? 'ok' : 'none'}, exit ${String(eof)}`);
 }
 
 const work = mkdtempSync(join(tmpdir(), 'disco-lurk-gate-'));

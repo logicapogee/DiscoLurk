@@ -1,20 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: show itself and spawn only the lurk sidecar with the §10.4 argument shape.",
-  "windows": ["main"],
+  "description": "Main window: core defaults only. The shell spawns the sidecar from Rust, so the page holds no shell permission (§10.4).",
+  "windows": [
+    "main"
+  ],
   "permissions": [
-    "core:default",
-    "core:window:allow-show",
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [
-        {
-          "name": "binaries/lurk",
-          "sidecar": true,
-          "args": ["sidecar", "--port", { "validator": "\\d{4,5}" }, "--token", { "validator": "[A-Za-z0-9_-]{43}" }]
-        }
-      ]
-    }
+    "core:default"
   ]
 }

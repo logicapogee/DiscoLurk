@@ -789,6 +789,8 @@ dependencies = [
 name = "disco-lurk"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -796,6 +798,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
+ "tokio",
 ]
 
 [[package]]

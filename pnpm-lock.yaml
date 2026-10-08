@@ -214,6 +214,9 @@ importers:
       '@disco-lurk/server':
         specifier: workspace:*
         version: link:../server
+      '@disco-lurk/site-discourse':
+        specifier: workspace:*
+        version: link:../site-discourse
       playwright-core:
         specifier: 1.64.0
         version: 1.64.0
@@ -255,9 +258,6 @@ importers:
       '@tauri-apps/api':
         specifier: 2.12.1
         version: 2.12.1
-      '@tauri-apps/plugin-shell':
-        specifier: 2.4.1
-        version: 2.4.1
       preact:
         specifier: 11.0.1
         version: 11.0.1
@@ -762,9 +762,6 @@ packages:
     resolution: {integrity: sha512-kEDEiGzG+yAc5FeLxtXpES/VN+F2C8H0r4gDVtfRLKxT9np9101d9REG/Kgo2lr0hKi0IpDsODiHnU3+naOmLg==}
     engines: {node: '>= 10'}
     hasBin: true
-
-  '@tauri-apps/plugin-shell@2.4.1':
-    resolution: {integrity: sha512-gFRjdGPz7r7u+4Oaky6E0jl/7fFY+Oq2XsHH9pCBxW/u8b4Q/mjWWKpuDaEqVYrlzlocA4tFtq0p26dgvvBheg==}
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -1981,10 +1978,6 @@ snapshots:
       '@tauri-apps/cli-win32-arm64-msvc': 2.12.1
       '@tauri-apps/cli-win32-ia32-msvc': 2.12.1
       '@tauri-apps/cli-win32-x64-msvc': 2.12.1
-
-  '@tauri-apps/plugin-shell@2.4.1':
-    dependencies:
-      '@tauri-apps/api': 2.12.1
 
   '@types/chai@5.2.3':
     dependencies:

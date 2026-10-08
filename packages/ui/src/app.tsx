@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { platform } from './platform';
-import { fetchDoctor, launchSidecar, showWindow, SidecarStartError, type DoctorReport, type SidecarConnection } from './sidecar';
+import { connectSidecar, fetchDoctor, SidecarStartError, type DoctorReport, type SidecarConnection } from './sidecar';
 
 type State =
   | { phase: 'starting' }
@@ -16,7 +16,7 @@ export function App() {
     if (!platform.desktop) return;
     (async () => {
       try {
-        const conn = await launchSidecar();
+        const conn = await connectSidecar();
         setState({ phase: 'ready', conn, doctor: null });
         try {
           setState({ phase: 'ready', conn, doctor: await fetchDoctor(conn) });
@@ -26,8 +26,6 @@ export function App() {
       } catch (err) {
         const output = err instanceof SidecarStartError ? err.output : '';
         setState({ phase: 'failed', message: String(err instanceof Error ? err.message : err), output });
-        // A spawn failure never reaches the shell's health wait, which is what normally shows the window.
-        await showWindow();
       }
     })();
   }, []);

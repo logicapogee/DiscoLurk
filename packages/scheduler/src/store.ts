@@ -33,14 +33,15 @@ export interface ScheduleStore {
   save(state: SchedulerState): Promise<void>;
 }
 
+/** Instances sharing one `cell` see the same persisted state, as two processes opening one file would. */
 export class MemoryScheduleStore implements ScheduleStore {
-  private data: string | null = null;
+  constructor(private readonly cell: { data: string | null } = { data: null }) {}
 
   async load(): Promise<SchedulerState | null> {
-    return this.data ? (JSON.parse(this.data) as SchedulerState) : null;
+    return this.cell.data ? (JSON.parse(this.cell.data) as SchedulerState) : null;
   }
 
   async save(state: SchedulerState): Promise<void> {
-    this.data = JSON.stringify(state);
+    this.cell.data = JSON.stringify(state);
   }
 }

@@ -8,11 +8,21 @@ const LOCKOUT_MS = 15 * 60_000;
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
+/** 127.0.0.0/8 and ::1, including IPv4-mapped IPv6 forms as Node reports them. */
+export function isLoopback(ip: string): boolean {
+  const v4 = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+  return v4.startsWith('127.') || ip === '::1';
+}
+
 export function tokenStrongEnough(token: string): boolean {
   return Buffer.byteLength(token, 'utf8') >= MIN_TOKEN_BYTES;
 }
 
-/** §10.3: bearer token check plus per-IP lockout after 5 failures in 10 minutes, for 15 minutes. */
+/**
+ * §10.3: bearer token check plus per-IP lockout after 5 failures in 10 minutes, for 15 minutes.
+ * Loopback sources are never counted: every local process shares 127.0.0.1, so locking it would let
+ * any of them lock the desktop UI out; local failures are slowed down by the server instead.
+ */
 export class TokenGuard {
   private expected: Buffer;
   private failures = new Map<string, number[]>();
@@ -46,6 +56,7 @@ export class TokenGuard {
   check(ip: string, presented: string | undefined): 'ok' | 'denied' | 'locked' {
     if (this.isLocked(ip)) return 'locked';
     if (this.matches(presented)) return 'ok';
+    if (isLoopback(ip)) return 'denied';
     const now = this.clock.now();
     const recent = (this.failures.get(ip) ?? []).filter((t) => now - t < FAILURE_WINDOW_MS);
     recent.push(now);

@@ -51,3 +51,16 @@ export const rowSelector = (topicId: string) => `tr.topic-list-item[data-topic-i
 
 /** T08: the topic URL shape that confirms entry. */
 export const topicUrlPattern = (topicId: string) => new RegExp(`/t/[^/?#]+/${topicId}(?:[/?#]|$)`);
+
+/**
+ * Not Appendix A: signs that the site serves a challenge page instead of Discourse (B10, §1.3).
+ * They are only reported, never interacted with.
+ */
+export const CHALLENGE_SELECTOR = '#challenge-form, #challenge-stage, #cf-challenge-running, iframe[src*="challenges.cloudflare.com"]';
+export const CHALLENGE_TITLE = /just a moment|attention required|请稍候/i;
+
+/** Not Appendix A: the header's sign-in button, which Discourse renders only for anonymous visitors. */
+export const ANONYMOUS_HEADER = '.d-header .login-button';
+
+/** §5.1: connect's progress page is ready once any of its four metric groups renders. */
+export const CONNECT_READY = '.tl3-ring, .tl3-bar-item, .tl3-quota-card, .tl3-veto-item';

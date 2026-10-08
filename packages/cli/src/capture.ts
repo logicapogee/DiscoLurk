@@ -4,6 +4,7 @@ import { chromium, type Page } from 'playwright-core';
 import { RunError, systemClock, systemSleeper, type BrowserChannel, type LevelSnapshot, type Site } from '@disco-lurk/core';
 import {
   categoryLinks,
+  CONNECT_READY,
   editorKind,
   findLeaks,
   HEADED_WIDTH,
@@ -453,8 +454,6 @@ interface ProgressDeps {
 
 /** S07: the trust level page is ready once its table has rows; its loader never leaves the DOM. */
 const TRUST_LEVEL_READY_MS = 10_000;
-
-const CONNECT_READY = '.tl3-ring, .tl3-bar-item, .tl3-quota-card, .tl3-veto-item';
 
 const values = (s: LevelSnapshot | null) => Object.fromEntries((s?.metrics ?? []).map((m) => [m.label, m.current]));
 

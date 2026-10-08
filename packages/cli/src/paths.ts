@@ -14,3 +14,4 @@ export function appDataDir(platform = process.platform, env = process.env, home 
 }
 
 export const profilesDir = (base = appDataDir()) => join(base, 'profiles');
+export const sitesDir = (base = appDataDir()) => join(base, 'sites');

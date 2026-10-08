@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
-import { access, constants, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, constants, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { BrowserChannel } from '@disco-lurk/core';
+import type { BrowserChannel, Category, Site } from '@disco-lurk/core';
+import { LOCK_FILE, processAlive, type LockInfo } from '@disco-lurk/site-discourse';
 
 const run = promisify(execFile);
 
@@ -31,6 +32,8 @@ export interface DoctorOptions {
   /** Checked for availability; ignored when `listeningPort` says the server already owns it. */
   port?: number;
   listeningPort?: number;
+  /** Sites whose Profiles and category configuration are checked, with the categories each would run. */
+  sites?: Array<{ site: Site; categories: () => Promise<Category[]> }>;
   /** The connectivity probe reaches the real site, so it only runs when explicitly requested. */
   network?: boolean;
   signal?: AbortSignal;
@@ -148,6 +151,52 @@ async function connectivityCheck(opts: DoctorOptions): Promise<DoctorCheck> {
   }
 }
 
+async function profileList(dir: string, siteId: string): Promise<string[]> {
+  const root = join(dir, siteId);
+  const names = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const out: string[] = [];
+  for (const entry of names.filter((e) => e.isDirectory())) {
+    const lock = await readFile(join(root, entry.name, LOCK_FILE), 'utf8').then((t) => JSON.parse(t) as LockInfo, () => null);
+    out.push(lock && processAlive(lock.pid) ? `${entry.name}（被 PID ${lock.pid} 占用）` : entry.name);
+  }
+  return out;
+}
+
+/** B06 / §8.3: which Profiles exist per site, and whether one is held by a running browser. */
+async function profileInventoryCheck(dir: string, sites: Site[]): Promise<DoctorCheck> {
+  const parts: string[] = [];
+  const missing: string[] = [];
+  for (const site of sites) {
+    const list = await profileList(dir, site.id);
+    if (list.length === 0) missing.push(site.id);
+    parts.push(`${site.id}: ${list.length ? list.join(', ') : '无'}`);
+  }
+  return {
+    id: 'profiles',
+    title: 'Profile',
+    status: missing.length === sites.length ? 'warn' : 'ok',
+    detail: parts.join('；'),
+    ...(missing.length ? { fix: missing.map((id) => `lurk login --site ${id}`).join('；') } : {}),
+  };
+}
+
+/** §2.2 / §7.1: the categories a run would use without `--categories`. */
+async function siteCheck(site: Site, categories: () => Promise<Category[]>): Promise<DoctorCheck> {
+  const title = `站点 ${site.id}（${site.displayName}）`;
+  let list: Category[];
+  try {
+    list = await categories();
+  } catch (err) {
+    return { id: `site-${site.id}`, title, status: 'fail', detail: (err as Error).message, fix: `删除该文件后运行 lurk login --site ${site.id} 重新发现板块` };
+  }
+  const enabled = list.filter((c) => c.enabledByDefault).length;
+  const source = site.categorySource === 'builtin' ? '内置板块' : '已发现板块';
+  const detail = `${source} ${list.length} 个，启用 ${enabled} 个；进度来源 ${site.progressSource}；直接 URL 进帖计数验证 ${String(site.behaviorVerified.clickEntryRequired)}`;
+  if (list.length === 0) return { id: `site-${site.id}`, title, status: 'warn', detail, fix: `运行 lurk login --site ${site.id} 发现板块` };
+  if (enabled === 0) return { id: `site-${site.id}`, title, status: 'warn', detail, fix: '运行时用 --categories 指定板块' };
+  return { id: `site-${site.id}`, title, status: 'ok', detail };
+}
+
 /** §11.3 */
 export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   const platform = opts.platform ?? process.platform;
@@ -159,6 +208,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     portCheck(opts),
     webviewCheck(platform),
     connectivityCheck(opts),
+    ...(opts.sites ? [profileInventoryCheck(opts.profilesDir, opts.sites.map((s) => s.site)), ...opts.sites.map((s) => siteCheck(s.site, s.categories))] : []),
   ]);
   if (!checks.some((c) => c.id.startsWith('browser-') && c.status === 'ok')) {
     checks[0] = { ...checks[0]!, status: 'fail', fix: '需要系统 Chrome 或 Edge（不捆绑浏览器）。安装后重新运行 lurk doctor' };

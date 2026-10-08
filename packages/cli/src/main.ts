@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
-import { isAbortError, RunError, systemClock } from '@disco-lurk/core';
+import { DiscoLurkCoordinator, isAbortError, RunError, stopRequest, systemClock, type RunEvent } from '@disco-lurk/core';
 import { startServer } from '@disco-lurk/server';
 import { formatDoctor, runDoctor } from './doctor';
 import { profilesDir } from './paths';
@@ -11,16 +11,32 @@ import { SidecarLifecycle } from './lifecycle';
 import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
 import { BUILTIN_SITES, findSite } from './sites';
+import {
+  buildPlan,
+  cliEnv,
+  credentialsFromEnv,
+  EXIT,
+  exitCodeFor,
+  formatEvent,
+  formatSummary,
+  newSeed,
+  parseLoginArgs,
+  parseRunArgs,
+  profileIdOf,
+  resolveCategories,
+  siteCategories,
+  UsageError,
+} from './run';
 
 declare const __LURK_VERSION__: string | undefined;
 const VERSION = typeof __LURK_VERSION__ === 'string' ? __LURK_VERSION__ : '0.0.0-dev';
 
-/** §11.1 exit codes. */
-const EXIT = { ok: 0, cancelled: 2, needsAuth: 3, environment: 4, contract: 5, noProgress: 6 } as const;
-
 const USAGE = `lurk ${VERSION}
 
 Usage:
+  lurk login --site <id> [--profile <name>] [--channel chrome|msedge]
+  lurk run --site <id> [--profile <name>] [--browse-mode deep|quick] [--run-mode endless|topics:<n>[-<max>]|time:<min>]
+           [--categories <slug|path,...>] [--headed|--headless] [--channel chrome|msedge] [--json]
   lurk doctor [--json] [--port <n>] [--network]
   lurk sidecar   (started by the desktop shell: prints a ready line, exits when stdin closes)
   lurk capture --site <id> [--profile <id>] [--channel chrome|msedge] [--out <dir>] [--steps <a,b>]   (development: Phase 0 fixtures; steps: ${CAPTURE_STEPS.join(',')})
@@ -34,6 +50,7 @@ async function doctor(argv: string[]): Promise<number> {
   const report = await runDoctor({
     version: VERSION,
     profilesDir: profilesDir(),
+    sites: BUILTIN_SITES.map((site) => ({ site, categories: () => siteCategories(site) })),
     ...(values.port ? { port: Number(values.port) } : {}),
     network: values.network ?? false,
   });
@@ -175,9 +192,85 @@ async function capture(argv: string[]): Promise<number> {
   }
 }
 
+async function login(argv: string[]): Promise<number> {
+  const args = parseLoginArgs(argv);
+  const controller = new AbortController();
+  process.once('SIGINT', () => controller.abort(stopRequest('user')));
+  const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: args.channel }));
+  const profileId = profileIdOf(args.site.id, args.profile);
+  const auth = await coordinator.beginAuth(profileId);
+  let result;
+  try {
+    console.log(`Sign in to ${args.site.displayName} in the Chrome window (Profile ${profileId}).`);
+    console.log('Checking for #current-user every 5 s for up to 300 s; the page is never reloaded.');
+    result = await auth.continueWaiting(controller.signal);
+  } catch (err) {
+    if (isAbortError(err)) return EXIT.cancelled;
+    throw err;
+  } finally {
+    await auth.close();
+  }
+  if (result.status !== 'authenticated') {
+    console.error(result.status === 'failed' ? `${result.failure.code}: ${result.failure.message}` : `Not signed in: ${result.status}`);
+    return result.status === 'failed' ? EXIT.environment : EXIT.needsAuth;
+  }
+  // §8.2 steps 5–7: a headless health check with the same Profile, which also discovers categories.
+  console.log('Signed in. Running the headless health check…');
+  const health = await coordinator.inspect(profileId);
+  console.log(`Profile ${profileId}: ${health.status}`);
+  if (args.site.categorySource === 'discovered') {
+    const categories = await siteCategories(args.site);
+    console.log(`${categories.length} categories discovered (new ones start disabled):`);
+    for (const c of categories) console.log(`  ${c.enabledByDefault ? '[x]' : '[ ]'} ${c.name}  ${c.path}`);
+  }
+  return health.status === 'ready' ? EXIT.ok : health.status === 'needs-auth' ? EXIT.needsAuth : EXIT.environment;
+}
+
+async function run(argv: string[]): Promise<number> {
+  const args = parseRunArgs(argv);
+  const categories = resolveCategories(args.site, await siteCategories(args.site), args.categories);
+  const plan = buildPlan(args, categories, newSeed(), new Date());
+  const controller = new AbortController();
+  const exit = new AbortController();
+  let interrupts = 0;
+  process.on('SIGINT', () => {
+    interrupts++;
+    if (interrupts === 1) {
+      console.error('Stopping… (Ctrl+C again skips the final progress read)');
+      controller.abort(stopRequest('user'));
+    } else exit.abort();
+  });
+  process.once('SIGTERM', () => {
+    controller.abort(stopRequest('app-exit'));
+    exit.abort();
+  });
+  const credentials = credentialsFromEnv(args.site);
+  const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: args.channel, exitSignal: exit.signal, ...(credentials ? { credentials } : {}) }));
+  const start = Date.now();
+  // B06: Profile, browser form and channel are stated before anything starts.
+  const intro = `${args.site.displayName} · Profile ${plan.profileId} · ${plan.browserMode} ${args.channel} · ${plan.preset.browseMode} · ${JSON.stringify(plan.preset.runMode)} · ${categories.map((c) => c.path).join(', ') || 'no categories'}`;
+  if (args.json) console.log(JSON.stringify({ type: 'plan', plan }));
+  else console.log(intro);
+  const emit = (e: RunEvent) => {
+    if (args.json) console.log(JSON.stringify(e));
+    else {
+      const line = formatEvent(e, start);
+      if (line) console.log(line);
+    }
+  };
+  const result = await coordinator.run(plan, controller.signal, emit);
+  if (args.json) console.log(JSON.stringify({ type: 'result', result }));
+  else console.log(`\n${formatSummary(result)}`);
+  return exitCodeFor(result);
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
+    case 'login':
+      return login(rest);
+    case 'run':
+      return run(rest);
     case 'doctor':
       return doctor(rest);
     case 'sidecar':
@@ -199,7 +292,9 @@ async function main(argv: string[]): Promise<number> {
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err: unknown) => {
-    console.error(err);
+    if (err instanceof UsageError) console.error(`${err.message}\n\n${USAGE}`);
+    else if (err instanceof RunError) console.error(`${err.code}: ${err.message}`);
+    else console.error(err);
     process.exit(EXIT.environment);
   },
 );

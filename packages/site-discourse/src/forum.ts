@@ -35,6 +35,7 @@ import { readFloors, type FloorSurface } from './reading';
 import {
   ANONYMOUS_HEADER,
   CATEGORY_LINK,
+  CATEGORY_PATH,
   CHALLENGE_SELECTOR,
   CHALLENGE_TITLE,
   CONNECT_AUTHORIZE_FORM,
@@ -102,17 +103,22 @@ export function sortKept(listUrl: string, currentUrl: string): boolean {
 
 /**
  * T11: the row found again by topic ID decides. A missing row proves nothing, so it is
- * `indeterminate`, never success.
+ * `indeterminate`, never success. Only a topic that carried the `new-topic` badge before it was
+ * entered can lose it; for any other topic the relocated row is all there is to report.
  */
-export function classifyReturn(row: { newTopicBadge: boolean } | null): ReadVerification {
+export function classifyReturn(hadBadge: boolean, row: { newTopicBadge: boolean } | null): ReadVerification {
   if (!row) return 'indeterminate';
+  if (!hadBadge) return 'not-applicable';
   return row.newTopicBadge ? 'still-unread' : 'confirmed';
 }
 
-/** §7.1 step 2 / Appendix A: top-level categories only; a subcategory's path carries its parent's slug. */
+/**
+ * §7.1 step 2 / Appendix A: every category the page lists as an entry of its own counts, a
+ * subcategory with its own row (`/c/resource/cloud-asset/94`) included; badges never reach here.
+ */
 export function discoveredCategories(links: readonly CategoryLink[]): Category[] {
   return links
-    .filter((l) => /^\/c\/[^/]+\/\d+$/.test(l.path))
+    .filter((l) => CATEGORY_PATH.test(l.path))
     .map((l) => ({ name: l.name, path: l.path, id: l.id, enabledByDefault: false }));
 }
 
@@ -314,7 +320,6 @@ export class DiscourseForum implements ForumPort {
     if ((await this.opts.page.count(link)) === 0) return { topic, entered: false, reason: 'row-not-on-list' };
     try {
       await untilAbort(this.opts.page.scrollIntoView(link), signal);
-      await this.pause(0.5, 1.5, signal);
       await untilAbort(this.opts.titleLinks.click(topic.id), signal);
     } catch (err) {
       // A row that never becomes clickable costs this topic only; the next candidate is on the same list.
@@ -392,8 +397,8 @@ export class DiscourseForum implements ForumPort {
       await this.goto(this.listUrl, signal);
       found = await this.appears(row, LIST_WAIT_MS, signal, 'visible');
     }
-    if (!found) return 'indeterminate';
-    return classifyReturn({ newTopicBadge: (await this.opts.page.count(`${row} ${SELECTORS.newTopicBadge}`)) > 0 });
+    if (!found) return classifyReturn(visit.topic.unread, null);
+    return classifyReturn(visit.topic.unread, { newTopicBadge: (await this.opts.page.count(`${row} ${SELECTORS.newTopicBadge}`)) > 0 });
   }
 
   async readProgress(kind: 'initial' | 'final', signal: AbortSignal): Promise<LevelSnapshot | null> {

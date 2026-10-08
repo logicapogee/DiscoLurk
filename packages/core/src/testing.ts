@@ -145,7 +145,7 @@ export interface FixtureForumOptions {
   progress?: (kind: 'initial' | 'final', signal: AbortSignal) => Promise<LevelSnapshot | null>;
   /** What `discoverCategories` finds; defaults to none. */
   discovered?: Category[];
-  /** Answers `returnAndVerify` (T11); defaults to the row coming back without a new-topic badge. */
+  /** Answers `returnAndVerify` (T11); defaults to the badge gone for unread topics and not-applicable for the rest. */
   verify?: (topic: TopicCandidate) => ReadVerification;
 }
 
@@ -230,6 +230,6 @@ export class FixtureForum implements ForumPort {
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {
     this.calls.push({ op: 'returnAndVerify', topicId: visit.topic.id });
     await this.wait(this.opts.latency?.back ?? 2500, signal);
-    return this.opts.verify?.(visit.topic) ?? 'confirmed';
+    return this.opts.verify?.(visit.topic) ?? (visit.topic.unread ? 'confirmed' : 'not-applicable');
   }
 }

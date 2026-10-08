@@ -10,7 +10,11 @@ export interface FloorSurface {
 }
 
 /** Appendix B; every value is a field-tested default (I12), not a tuning knob. */
-export const ENTRY_WAIT = { counterMs: 5_000, pollMs: 500, extraSec: [1, 3] } as const;
+/**
+ * F01 runs in two stages: wait for the floor counter for at most `counterCeilingMs`, polling every
+ * `pollMs`; then, whether it appeared or not, pause `extraSec` before reading.
+ */
+export const ENTRY_WAIT = { counterCeilingMs: 5_000, pollMs: 500, extraSec: [1, 3] } as const;
 export const DEEP = {
   dwellSec: [2, 4],
   stepPx: [600, 1200],
@@ -77,7 +81,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
   let first: FloorReading | null = null;
   for (let waited = 0; ; waited += ENTRY_WAIT.pollMs) {
     first = await surface.readCounter();
-    if (first || waited >= ENTRY_WAIT.counterMs) break;
+    if (first || waited >= ENTRY_WAIT.counterCeilingMs) break;
     await sleep(ENTRY_WAIT.pollMs);
   }
   await pause(ENTRY_WAIT.extraSec);

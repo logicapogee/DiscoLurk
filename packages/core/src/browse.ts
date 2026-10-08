@@ -17,6 +17,9 @@ export interface BrowseInput {
 
 export type BrowseOutcome = { stats: RunStats } & ({ end: 'error'; failure: RunFailure } | { end: Exclude<BrowseEnd, 'error'> });
 
+/** Appendix B: always taken, whatever the extra-wait switch says. */
+const AFTER_READING = { minSec: 1, maxSec: 2 };
+/** Appendix B: taken only with the extra-wait switch on. */
 const BETWEEN_TOPICS = { minSec: 0.5, maxSec: 1.5 };
 
 /**
@@ -89,6 +92,7 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
               signal,
             );
             emit({ type: 'topic', at: at(), topicId: topic.id, phase: 'read' });
+            await pause(AFTER_READING);
           }
 
           if (!done && (policy.like.enabled || policy.reply.enabled)) {

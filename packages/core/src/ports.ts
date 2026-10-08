@@ -71,8 +71,11 @@ export interface ActionResult {
   likeLimitHit: boolean;
 }
 
-/** T11 */
-export type ReadVerification = 'confirmed' | 'still-unread' | 'indeterminate';
+/**
+ * T11. `not-applicable` is a topic that had no `new-topic` badge before it was entered: its row was
+ * found again, but there is no badge whose disappearance could confirm anything.
+ */
+export type ReadVerification = 'confirmed' | 'still-unread' | 'indeterminate' | 'not-applicable';
 
 /** §6.1: the site seam. Selectors, waits and error classification live behind it. */
 export interface ForumPort {

@@ -31,22 +31,29 @@ describe('NAV-003 sorted list survives the return (T10)', () => {
 });
 
 describe('NAV-004 badge verification by topic id (T11)', () => {
-  it('has exactly three outcomes and never calls a missing row a success', () => {
-    expect(classifyReturn({ newTopicBadge: false })).toBe('confirmed');
-    expect(classifyReturn({ newTopicBadge: true })).toBe('still-unread');
-    expect(classifyReturn(null)).toBe('indeterminate');
+  it('a topic that had the badge has three outcomes and a missing row is never a success', () => {
+    expect(classifyReturn(true, { newTopicBadge: false })).toBe('confirmed');
+    expect(classifyReturn(true, { newTopicBadge: true })).toBe('still-unread');
+    expect(classifyReturn(true, null)).toBe('indeterminate');
+  });
+
+  it('a topic entered without the badge is not-applicable once its row is found again', () => {
+    expect(classifyReturn(false, { newTopicBadge: false })).toBe('not-applicable');
+    expect(classifyReturn(false, null)).toBe('indeterminate');
   });
 });
 
-describe('CAT-001 top-level categories only (Appendix A)', () => {
-  it('drops subcategories and starts every discovered category disabled', () => {
+describe('CAT-001 every category listed as its own entry (Appendix A)', () => {
+  it('keeps subcategories with their own row and starts every discovered category disabled', () => {
     const out = discoveredCategories([
       { name: '资源荟萃', path: '/c/resource/14', id: 14 },
-      { name: '资源荟萃, Lv1', path: '/c/resource/resource-lv1/83', id: 83 },
+      { name: '网盘资源', path: '/c/resource/cloud-asset/94', id: 94 },
       { name: '卡片交流', path: '/c/bank/6', id: 6 },
+      { name: 'new', path: '/c/bank/6/l/new', id: 6 },
     ]);
     expect(out).toEqual([
       { name: '资源荟萃', path: '/c/resource/14', id: 14, enabledByDefault: false },
+      { name: '网盘资源', path: '/c/resource/cloud-asset/94', id: 94, enabledByDefault: false },
       { name: '卡片交流', path: '/c/bank/6', id: 6, enabledByDefault: false },
     ]);
   });
@@ -282,6 +289,30 @@ describe('entering from the list and getting back to it (T08, T10)', () => {
     const t = await onList();
     t.page.scrollError = timeoutError('locator.scrollIntoViewIfNeeded: Timeout 10000ms exceeded.');
     await expect(t.enter()).resolves.toMatchObject({ entered: false, reason: 'click-failed' });
+  });
+
+  it('clicks without a pause in front of the click', async () => {
+    const t = await onList({
+      titleLinks: {
+        click: async () => {
+          clickedAt = t.time.clock.monotonic();
+          t.page.address = 'https://linux.do/t/seven/7';
+          t.page.html = '<div class="topic-post"></div>';
+        },
+      },
+    });
+    let clickedAt = -1;
+    const start = t.time.clock.monotonic();
+    await expect(t.enter()).resolves.toEqual({ topic, entered: true });
+    expect(clickedAt).toBe(start);
+  });
+
+  it('returns not-applicable for a topic entered without the new-topic badge', async () => {
+    const t = await onList();
+    const visit = { topic: { ...topic, unread: false }, entered: true as const };
+    await expect(t.time.drive(t.forum.returnAndVerify(visit, new AbortController().signal))).resolves.toBe('not-applicable');
+    const withBadge = { topic, entered: true as const };
+    await expect(t.time.drive(t.forum.returnAndVerify(withBadge, new AbortController().signal))).resolves.toBe('still-unread');
   });
 
   it('a click that left the sorted list in place (address rewritten with a trailing slash) navigates nowhere', async () => {

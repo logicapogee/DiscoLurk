@@ -188,3 +188,30 @@ describe('STOP-003 stop takes effect within 2 s at every level (S05)', () => {
     expect(forum.calls).toHaveLength(0);
   });
 });
+
+describe('Appendix B: 1–2 s after reading, whatever the extra-wait switch says', () => {
+  it.each([true, false])('pauses 1–2 s between reading and returning (extra wait %s)', async (extraWait) => {
+    const time = new VirtualTime();
+    const marks: Array<{ op: string; at: number }> = [];
+    class Timed extends FixtureForum {
+      override async readTopic(...args: Parameters<FixtureForum['readTopic']>) {
+        const r = await super.readTopic(...args);
+        marks.push({ op: 'read-done', at: time.clock.monotonic() });
+        return r;
+      }
+      override async returnAndVerify(...args: Parameters<FixtureForum['returnAndVerify']>) {
+        marks.push({ op: 'return', at: time.clock.monotonic() });
+        return super.returnAndVerify(...args);
+      }
+    }
+    const forum = new Timed({ site, sleeper: time.sleeper, topics: rows(1) });
+    const p = plan({ kind: 'topics', count: 3 }, 'quick', extraWait);
+    await time.drive(browse({ plan: p, forum, deps: time.deps(p.seed), signal: new AbortController().signal, emit: () => {} }));
+    const gaps = marks.flatMap((m, i) => (m.op === 'read-done' && marks[i + 1]?.op === 'return' ? [marks[i + 1]!.at - m.at] : []));
+    expect(gaps.length).toBeGreaterThan(0);
+    for (const gap of gaps) {
+      expect(gap).toBeGreaterThanOrEqual(1_000);
+      expect(gap).toBeLessThanOrEqual(2_000);
+    }
+  });
+});

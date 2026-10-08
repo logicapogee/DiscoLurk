@@ -1,5 +1,5 @@
 import type { Category } from '@disco-lurk/core';
-import { CATEGORY_PATH, categoryLinks } from '@disco-lurk/site-discourse';
+import { CATEGORY_PATH, categoryLinks, discoveredCategories } from '@disco-lurk/site-discourse';
 import { describe, expect, it } from 'vitest';
 import { readData } from '../logic/data';
 import { BASE_URL, SITE_IDS, fixture, textOf } from './fixtures';
@@ -35,6 +35,12 @@ describe.each(SITE_IDS)('CAT-001 category discovery from /categories (§7.1 step
 
   it('skips the unread/new counter links under each category', () => {
     for (const c of found) expect(c.path).not.toMatch(/\/l\/(new|unread)$/);
+  });
+
+  it('discovers every category listed as its own entry: linuxdo 20, docofcard 10', () => {
+    const discovered = discoveredCategories(found);
+    expect(discovered).toHaveLength(site === 'linuxdo' ? 20 : 10);
+    if (site === 'linuxdo') expect(discovered.map((c) => c.path)).toContain('/c/resource/cloud-asset/94');
   });
 
   if (site === 'linuxdo') {

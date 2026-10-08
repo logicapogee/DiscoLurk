@@ -1,7 +1,7 @@
 // Bundles the CLI with esbuild and packs it with @yao-pkg/pkg into the single-file `lurk`,
 // named with the Rust target triple Tauri's externalBin expects.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, cpSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,13 +39,17 @@ mkdirSync(stage, { recursive: true });
 const cliRequire = createRequire(join(root, 'packages/cli/package.json'));
 const playwrightDir = dirname(realpathSync(cliRequire.resolve('playwright-core/package.json')));
 cpSync(playwrightDir, join(stage, 'node_modules/playwright-core'), { recursive: true, dereference: true });
+// The built UI rides along for `lurk serve`, which hands it to remote browsers from `<bundle dir>/ui`.
+const uiDist = join(root, 'packages/ui/dist');
+if (!existsSync(join(uiDist, 'index.html'))) throw new Error('packages/ui/dist is missing; run `pnpm build:ui` first');
+cpSync(uiDist, join(stage, 'ui'), { recursive: true });
 writeFileSync(
   join(stage, 'package.json'),
   JSON.stringify({
     name: 'lurk',
     version,
     bin: 'lurk.cjs',
-    pkg: { assets: ['node_modules/playwright-core/**/*'] },
+    pkg: { assets: ['node_modules/playwright-core/**/*', 'ui/**/*'] },
   }),
 );
 

@@ -13,10 +13,10 @@
     "lurk": "node scripts/run-bundled.ts packages/cli/src/main.ts",
     "verify:selectors": "node scripts/run-bundled.ts scripts/verify-selectors.ts",
     "build:ui": "pnpm --filter @disco-lurk/ui build",
-    "build:sidecar": "node scripts/build-sidecar.ts",
+    "build:sidecar": "pnpm run build:ui && node scripts/build-sidecar.ts",
     "gate:sidecar": "node scripts/gate-sidecar.ts",
     "tauri": "node scripts/tauri.ts",
-    "build:desktop-deps": "pnpm run build:ui && pnpm run build:sidecar"
+    "build:desktop-deps": "pnpm run build:sidecar"
   },
   "devDependencies": {
     "@disco-lurk/config": "workspace:*",

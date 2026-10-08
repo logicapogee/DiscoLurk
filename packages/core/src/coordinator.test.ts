@@ -719,3 +719,18 @@ describe('refreshCategories experiment (§7.2, builtin sites only)', () => {
     expect(t.events.some((e) => e.type === 'warning' && e.code === 'category-path-updated')).toBe(true);
   });
 });
+
+describe('PARITY-001 headed and headless share one kernel', () => {
+  it('the same fixture and snapshot give the same picks, stats and outcome in both forms', async () => {
+    const results = [];
+    for (const form of ['headed', 'headless'] as const) {
+      const t = setup({ forum: { progress: async (k) => level(k === 'initial' ? 21 : 26, 175) } });
+      const out = await t.run(plan({ kind: 'topics', count: 5 }, form));
+      results.push({
+        out: { outcome: out.outcome, stopCause: out.stopCause, stats: out.stats, baseline: out.baseline },
+        picks: t.forum.calls.filter((c) => c.op === 'enterFromList'),
+      });
+    }
+    expect(results[0]).toEqual(results[1]);
+  });
+});

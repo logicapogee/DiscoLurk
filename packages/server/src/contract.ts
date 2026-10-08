@@ -45,9 +45,12 @@ export interface ProfileCreate {
   proxy?: string | undefined;
 }
 
+/**
+ * The browser executable is deliberately not settable here: whoever holds the token (a remote
+ * `serve` client included) could otherwise make the host launch any program.
+ */
 export interface ProfilePatch {
   proxy?: string | null | undefined;
-  executablePath?: string | null | undefined;
 }
 
 /** A saved run configuration plus where and how it runs. */

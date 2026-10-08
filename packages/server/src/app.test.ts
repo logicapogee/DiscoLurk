@@ -380,6 +380,8 @@ describe('server API', () => {
     expect((await call('POST', '/profiles', { siteId: 'fx', name: 'main', channel: 'chrome' })).status).toBe(409);
     expect((await call('POST', '/profiles', { siteId: 'fx', name: '../x', channel: 'chrome' })).status).toBe(422);
     expect((await call('PATCH', '/profiles/fx/main', { proxy: 'http://127.0.0.1:7890' })).status).toBe(200);
+    expect((await call('PATCH', '/profiles/fx/main', { executablePath: '/bin/sh' })).status).toBe(422);
+    expect((await call('PATCH', '/profiles/fx/main', { proxy: '--disable-web-security' })).status).toBe(422);
     expect(await h.app.services.profiles.resolve('fx/main')).toMatchObject({ channel: 'chrome', proxy: 'http://127.0.0.1:7890' });
     mkdirSync(join(h.dataDir, 'profiles', 'fx', 'cli-made'), { recursive: true });
     expect((await call<Array<{ id: string }>>('GET', '/profiles')).body.map((p) => p.id)).toEqual(['fx/cli-made', 'fx/main']);

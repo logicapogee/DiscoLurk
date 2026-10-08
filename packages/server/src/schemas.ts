@@ -4,6 +4,8 @@ import type { ScheduleSpec } from '@disco-lurk/core';
 import { HttpError } from './server';
 
 const percent = z.number().int().min(0).max(100);
+/** A proxy goes straight into the browser's launch options, so only a plain proxy URL is accepted. */
+const proxyUrl = z.string().regex(/^(https?|socks[45]?):\/\/[^\s]+$/, 'http://, https://, socks4:// or socks5:// URL');
 const name = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'letters, digits, - and _ only');
 
 const runModeSchema = z.discriminatedUnion('kind', [
@@ -52,11 +54,11 @@ export const settingsPatchSchema = z
   .strict();
 
 export const profileCreateSchema = z
-  .object({ siteId: z.string().min(1), name, channel: z.enum(['chrome', 'msedge']), proxy: z.string().min(1).optional() })
+  .object({ siteId: z.string().min(1), name, channel: z.enum(['chrome', 'msedge']), proxy: proxyUrl.optional() })
   .strict();
 
 export const profilePatchSchema = z
-  .object({ proxy: z.string().min(1).nullable(), executablePath: z.string().min(1).nullable() })
+  .object({ proxy: proxyUrl.nullable() })
   .partial()
   .strict();
 

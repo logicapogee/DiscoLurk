@@ -102,6 +102,7 @@ export class PresetStore {
 interface ProfileMeta {
   channel: BrowserChannel;
   proxy?: string;
+  /** Only ever set by editing profiles.json by hand on the host; the API cannot write it. */
   executablePath?: string;
   health?: ProfileHealth;
 }
@@ -201,10 +202,6 @@ export class ProfileRegistry {
     if (patch.proxy !== undefined) {
       if (patch.proxy === null) delete m.proxy;
       else m.proxy = patch.proxy;
-    }
-    if (patch.executablePath !== undefined) {
-      if (patch.executablePath === null) delete m.executablePath;
-      else m.executablePath = patch.executablePath;
     }
     this.meta[profileId] = m;
     await this.persist();

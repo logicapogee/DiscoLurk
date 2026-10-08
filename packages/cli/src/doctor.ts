@@ -191,7 +191,7 @@ async function siteCheck(site: Site, categories: () => Promise<Category[]>): Pro
   }
   const enabled = list.filter((c) => c.enabledByDefault).length;
   const source = site.categorySource === 'builtin' ? '内置板块' : '已发现板块';
-  const detail = `${source} ${list.length} 个，启用 ${enabled} 个；进度来源 ${site.progressSource}；直接 URL 进帖计数验证 ${String(site.behaviorVerified.clickEntryRequired)}`;
+  const detail = `${source} ${list.length} 个，启用 ${enabled} 个；进度来源 ${site.progressSource}；clickEntryRequired=${String(site.behaviorVerified.clickEntryRequired)}`;
   if (list.length === 0) return { id: `site-${site.id}`, title, status: 'warn', detail, fix: `运行 lurk login --site ${site.id} 发现板块` };
   if (enabled === 0) return { id: `site-${site.id}`, title, status: 'warn', detail, fix: '运行时用 --categories 指定板块' };
   return { id: `site-${site.id}`, title, status: 'ok', detail };

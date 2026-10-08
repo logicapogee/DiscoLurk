@@ -331,7 +331,9 @@ export class DiscourseForum implements ForumPort {
     const topics: TopicCandidate[] = parseTopicList(parseDocument(await this.page.content()))
       .filter((r) => r.id && r.hasTitleLink)
       .map((r) => ({ id: r.id, title: r.title.slice(0, TITLE_LOG_CHARS), unread: r.unread, pinned: r.pinned }));
-    return { category, topics, empty: false };
+    // docofcard's Feed category renders news cards as topic rows without a title link (Phase 1 smoke):
+    // nothing on such a page can be clicked, so it is as empty as a page without rows.
+    return { category, topics, empty: topics.length === 0 };
   }
 
   async enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit> {

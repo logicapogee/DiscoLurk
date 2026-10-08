@@ -22,7 +22,7 @@
       "categorySource": "discovered",
       "progressSource": "trust-level-docofcard",
       "progressUrl": "https://forum.docofcard.com/my/trust-level",
-      "behaviorVerified": { "clickEntryRequired": "unverified" }
+      "behaviorVerified": { "clickEntryRequired": false }
     }
   ]
 }

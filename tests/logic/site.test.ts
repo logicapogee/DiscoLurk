@@ -39,7 +39,8 @@ describe('SITE-001 site configuration (§2.2)', () => {
       categorySource: 'discovered',
       progressSource: 'trust-level-docofcard',
       progressUrl: 'https://forum.docofcard.com/my/trust-level',
-      behaviorVerified: { clickEntryRequired: 'unverified' },
+      // Phase 1 T1: opening topics by address also raised 进入过的主题 on docofcard.
+      behaviorVerified: { clickEntryRequired: false },
     });
     expect(docofcard?.builtinCategories).toBeUndefined();
   });
@@ -76,8 +77,7 @@ describe('SITE-001 site configuration (§2.2)', () => {
   });
 
   it('still enters every topic by list click when clickEntryRequired is "unverified" (T08)', async () => {
-    const docofcard = sites()[1] as Site;
-    expect(docofcard.behaviorVerified.clickEntryRequired).toBe('unverified');
+    const docofcard: Site = { ...(sites()[1] as Site), behaviorVerified: { clickEntryRequired: 'unverified' } };
     const time = new VirtualTime();
     const topics = (path: string, call: number): TopicCandidate[] => [
       { id: `${path}:${call}`, title: 't', unread: true, pinned: false },

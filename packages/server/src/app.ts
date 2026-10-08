@@ -45,6 +45,8 @@ export interface AppDeps {
   releasePage?: string;
   newSeed?(): number;
   log?(message: string): void;
+  /** Whether the process that marked a run open still lives; tests stand in a dead one. */
+  processAlive?(pid: number): boolean;
 }
 
 export interface LurkApp {
@@ -469,6 +471,8 @@ export function createApp(deps: AppDeps): LurkApp {
     services: { runs, logins, schedules, presets, settings, profiles },
     async start() {
       await Promise.all([settings.load(), presets.load(), history.load(), profiles.load()]);
+      const lost = await history.recoverOpen(new Date(deps.clock.now()).toISOString(), deps.processAlive);
+      if (lost > 0) log(`history: ${lost} run(s) were in progress when the previous sidecar stopped; recorded as failed`);
       await catalog.refreshAll().catch((err: unknown) => log(`category load failed: ${String(err)}`));
       deps.shell?.settings(settings.get());
       schedules.start();

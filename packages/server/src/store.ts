@@ -1,7 +1,7 @@
 import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeJsonAtomic } from '@disco-lurk/config';
-import type { BrowserChannel, Profile, ProfileHealth, ProfileId } from '@disco-lurk/core';
+import { emptyStats, type BrowserChannel, type Profile, type ProfileHealth, type ProfileId, type RunEvent, type RunStats } from '@disco-lurk/core';
 import type { ProfileCreate, ProfilePatch, ProfileView, RunRecord, Settings, StoredPreset } from './contract';
 import { HttpError } from './server';
 
@@ -238,6 +238,30 @@ export function splitProfileId(profileId: ProfileId): { siteId: string; name: st
 
 export const HISTORY_LIMIT = 200;
 
+/** EPERM means the process exists but belongs to someone else. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+const safeName = (runId: string) => runId.replace(/[^A-Za-z0-9_-]/g, '_');
+
+function lastStats(lines: string[]): RunStats | undefined {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const e = JSON.parse(lines[i]!) as RunEvent;
+      if (e.type === 'stats') return e.stats;
+    } catch {
+      // a line cut short by the crash
+    }
+  }
+  return undefined;
+}
+
 /**
  * The last runs as JSONL, one RunRecord per line, plus each run's event stream in its own JSONL
  * file. Records past the limit are dropped together with their event files.
@@ -256,7 +280,7 @@ export class RunHistory {
   }
 
   eventsPath(runId: string): string {
-    return join(this.dir, `${runId.replace(/[^A-Za-z0-9_-]/g, '_')}.events.jsonl`);
+    return join(this.dir, `${safeName(runId)}.events.jsonl`);
   }
 
   async load(): Promise<void> {
@@ -287,6 +311,62 @@ export class RunHistory {
     return this.records.find((r) => r.runId === runId);
   }
 
+  private get openPath() {
+    return join(this.dir, 'open');
+  }
+
+  /**
+   * Marks a run as in progress. A sidecar that dies mid-run leaves the mark behind, and the next
+   * one records that run as failed instead of losing it.
+   */
+  markOpen(record: Omit<RunRecord, 'endedAt' | 'result'>): Promise<void> {
+    return this.serial.run(async () => {
+      await mkdir(this.openPath, { recursive: true });
+      await writeFile(join(this.openPath, `${safeName(record.runId)}.json`), JSON.stringify({ ...record, pid: process.pid }));
+    });
+  }
+
+  private clearOpen(runId: string): Promise<void> {
+    return rm(join(this.openPath, `${safeName(runId)}.json`), { force: true });
+  }
+
+  /**
+   * Runs a dead process left open, as failed records; returns how many were recovered. A mark whose
+   * process still lives belongs to another sidecar on the same data directory and is left alone.
+   */
+  async recoverOpen(endedAt: string, isAlive: (pid: number) => boolean = pidAlive): Promise<number> {
+    const names = await readdir(this.openPath).catch(() => [] as string[]);
+    let recovered = 0;
+    for (const name of names.filter((n) => n.endsWith('.json'))) {
+      const raw = await readFile(join(this.openPath, name), 'utf8').catch(() => null);
+      let mark: (Omit<RunRecord, 'endedAt' | 'result'> & { pid: number }) | null = null;
+      try {
+        mark = raw ? (JSON.parse(raw) as Omit<RunRecord, 'endedAt' | 'result'> & { pid: number }) : null;
+      } catch {
+        mark = null;
+      }
+      if (mark && isAlive(mark.pid)) continue;
+      if (mark && !this.get(mark.runId)) {
+        const { pid: _pid, ...open } = mark;
+        await this.add({
+          ...open,
+          endedAt,
+          result: {
+            outcome: 'failed',
+            stopCause: 'error',
+            stats: lastStats(await this.readEvents(mark.runId)) ?? emptyStats(),
+            failure: { code: 'internal', message: 'The sidecar stopped while this run was in progress' },
+            baseline: 'missing',
+            levels: { initial: null, final: null },
+          },
+        });
+        recovered++;
+      }
+      await rm(join(this.openPath, name), { force: true });
+    }
+    return recovered;
+  }
+
   appendEvent(runId: string, line: string): Promise<void> {
     return this.serial.run(() => appendFile(this.eventsPath(runId), line + '\n'));
   }
@@ -298,6 +378,7 @@ export class RunHistory {
   }
 
   add(record: RunRecord): Promise<void> {
+    void this.serial.run(() => this.clearOpen(record.runId));
     this.records.push(record);
     const dropped = this.records.length > this.limit ? this.records.splice(0, this.records.length - this.limit) : [];
     const kept = this.records.slice();

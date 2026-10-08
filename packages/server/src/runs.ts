@@ -184,6 +184,7 @@ export class RunManager {
       // The coordinator turns every run failure into a result; reaching here is a bug worth a record.
       finish({ outcome: 'failed', stopCause: 'error', stats: emptyStats(), failure: toFailure(err), baseline: 'missing', levels: { initial: null, final: null } }),
     );
+    void this.deps.history.markOpen({ runId: plan.id, presetId: view.presetId, presetName, plan: view.plan, startedAt: view.startedAt });
     this.live.set(plan.id, { view, controller, done });
     this.deps.hub.publish({ type: 'run', run: structuredClone(view) });
     this.deps.onActiveChange?.(this.live.size);

@@ -20,6 +20,7 @@ import WebSocket from 'ws';
 import { createApp, defaultPreset, isNewer, type LurkApp, type ShellChannel } from './app';
 import type { ActiveRun, LoginView, RunRecord, ScheduleList, ServerFrame, Settings, StoredPreset } from './contract';
 import { startServer, type LurkServer } from './server';
+import { RunHistory } from './store';
 
 /** Every kernel wait shrinks to a few milliseconds, so a fixture run takes real but short time. */
 const fastSleeper: InterruptibleSleeper = { sleep: (ms, signal) => systemSleeper.sleep(Math.min(ms, 3), signal) };
@@ -248,6 +249,26 @@ describe('server API', () => {
     ws.ws.close();
   });
 
+  it('records a run that was in progress when the previous sidecar died as failed', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset() });
+    const ws = await events(h);
+    const started = await call<ActiveRun>('POST', '/runs', { presetId: 'p1' });
+    await ws.until((f) => f.type === 'event' && f.event.type === 'stats');
+    ws.ws.close();
+    // A second app over the same directory stands in for the restarted sidecar.
+    const alive = createApp(appDepsOf(h));
+    await alive.start();
+    expect((await new RunHistoryProbe(h).list()).some((r) => r.runId === started.body.runId)).toBe(false);
+    const again = createApp({ ...appDepsOf(h), processAlive: () => false });
+    await again.start();
+    const rec = (await new RunHistoryProbe(h).list()).find((r) => r.runId === started.body.runId);
+    expect(rec?.result).toMatchObject({ outcome: 'failed', failure: { code: 'internal' } });
+    expect(rec?.result.stats.confirmed.topics).toBeGreaterThanOrEqual(0);
+  });
+
   it('answers 409 when another process holds the Profile lock', async () => {
     const h = await boot();
     const call = api(h);
@@ -395,6 +416,16 @@ describe('server API', () => {
     expect(h.shutdowns()).toBe(1);
   });
 });
+
+/** Reads the history file as a fresh process would. */
+class RunHistoryProbe {
+  constructor(private readonly h: Harness) {}
+  async list() {
+    const history = new RunHistory(join(this.h.dataDir, 'runs'));
+    await history.load();
+    return history.list();
+  }
+}
 
 /** The dependencies of a running harness, for a second app over the same data directory. */
 function appDepsOf(h: Harness): Parameters<typeof createApp>[0] {

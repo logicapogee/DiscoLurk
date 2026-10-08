@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
 import { join } from 'node:path';
-import { parseArgs } from 'node:util';
+import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import { FileCategoryStore } from '@disco-lurk/config';
 import {
   resolveRunMode,
@@ -70,51 +70,19 @@ function parseProfileName(raw: string): string {
   return raw;
 }
 
-export interface RunArgs {
-  site: Site;
-  profile: string;
-  browseMode: BrowseMode;
-  runMode: RunModeSpec;
-  categories: string[] | null;
-  browserMode: BrowserMode;
-  channel: BrowserChannel;
-  json: boolean;
-}
+/** Options every browser command takes. */
+const COMMON = {
+  site: { type: 'string' },
+  profile: { type: 'string', default: 'default' },
+  channel: { type: 'string', default: 'chrome' },
+} as const satisfies ParseArgsOptionsConfig;
 
-export function parseRunArgs(argv: string[]): RunArgs {
-  let parsed;
+function parse<O extends ParseArgsOptionsConfig>(argv: string[], options: O) {
   try {
-    parsed = parseArgs({
-      args: argv,
-      strict: true,
-      options: {
-        site: { type: 'string' },
-        profile: { type: 'string', default: 'default' },
-        'browse-mode': { type: 'string', default: 'deep' },
-        'run-mode': { type: 'string', default: 'endless' },
-        categories: { type: 'string' },
-        headed: { type: 'boolean' },
-        headless: { type: 'boolean' },
-        channel: { type: 'string', default: 'chrome' },
-        json: { type: 'boolean', default: false },
-      },
-    });
+    return parseArgs({ args: argv, strict: true, options }).values;
   } catch (err) {
     throw new UsageError((err as Error).message);
   }
-  const v = parsed.values;
-  if (v.headed && v.headless) throw new UsageError('--headed and --headless exclude each other');
-  if (v['browse-mode'] !== 'deep' && v['browse-mode'] !== 'quick') throw new UsageError('--browse-mode must be deep or quick');
-  return {
-    site: parseSite(v.site),
-    profile: parseProfileName(v.profile),
-    browseMode: v['browse-mode'],
-    runMode: parseRunMode(v['run-mode']),
-    categories: v.categories ? v.categories.split(',').map((s) => s.trim()).filter(Boolean) : null,
-    browserMode: v.headless ? 'headless' : 'headed',
-    channel: parseChannel(v.channel),
-    json: v.json,
-  };
 }
 
 export interface LoginArgs {
@@ -123,22 +91,42 @@ export interface LoginArgs {
   channel: BrowserChannel;
 }
 
+function common(v: { site?: string | undefined; profile: string; channel: string }): LoginArgs {
+  return { site: parseSite(v.site), profile: parseProfileName(v.profile), channel: parseChannel(v.channel) };
+}
+
+export interface RunArgs extends LoginArgs {
+  browseMode: BrowseMode;
+  runMode: RunModeSpec;
+  categories: string[] | null;
+  browserMode: BrowserMode;
+  json: boolean;
+}
+
+export function parseRunArgs(argv: string[]): RunArgs {
+  const v = parse(argv, {
+    ...COMMON,
+    'browse-mode': { type: 'string', default: 'deep' },
+    'run-mode': { type: 'string', default: 'endless' },
+    categories: { type: 'string' },
+    headed: { type: 'boolean' },
+    headless: { type: 'boolean' },
+    json: { type: 'boolean', default: false },
+  });
+  if (v.headed && v.headless) throw new UsageError('--headed and --headless exclude each other');
+  if (v['browse-mode'] !== 'deep' && v['browse-mode'] !== 'quick') throw new UsageError('--browse-mode must be deep or quick');
+  return {
+    ...common(v),
+    browseMode: v['browse-mode'],
+    runMode: parseRunMode(v['run-mode']),
+    categories: v.categories ? v.categories.split(',').map((s) => s.trim()).filter(Boolean) : null,
+    browserMode: v.headless ? 'headless' : 'headed',
+    json: v.json,
+  };
+}
+
 export function parseLoginArgs(argv: string[]): LoginArgs {
-  let parsed;
-  try {
-    parsed = parseArgs({
-      args: argv,
-      strict: true,
-      options: {
-        site: { type: 'string' },
-        profile: { type: 'string', default: 'default' },
-        channel: { type: 'string', default: 'chrome' },
-      },
-    });
-  } catch (err) {
-    throw new UsageError((err as Error).message);
-  }
-  return { site: parseSite(parsed.values.site), profile: parseProfileName(parsed.values.profile), channel: parseChannel(parsed.values.channel) };
+  return common(parse(argv, COMMON));
 }
 
 /**
@@ -296,6 +284,32 @@ function levelLines(levels: RunResult['levels'], baseline: RunResult['baseline']
     else lines.push(`  ${label}: ${a.current} → ${b.current} (${b.current - a.current >= 0 ? '+' : ''}${b.current - a.current})${target}`);
   }
   return lines;
+}
+
+export interface Reporter {
+  /** `intro` is the human line naming site, Profile, browser and mode (B06). */
+  plan(plan: RunPlanSnapshot, intro: string): void;
+  event(e: RunEvent): void;
+  result(result: RunResult): void;
+}
+
+/** §11.1: `--json` prints one JSON object per line; otherwise readable lines timed from `start`. */
+export function createReporter(json: boolean, start: number, write: (line: string) => void = console.log): Reporter {
+  if (json) {
+    return {
+      plan: (plan) => write(JSON.stringify({ type: 'plan', plan })),
+      event: (e) => write(JSON.stringify(e)),
+      result: (result) => write(JSON.stringify({ type: 'result', result })),
+    };
+  }
+  return {
+    plan: (_plan, intro) => write(intro),
+    event: (e) => {
+      const line = formatEvent(e, start);
+      if (line) write(line);
+    },
+    result: (result) => write(`\n${formatSummary(result)}`),
+  };
 }
 
 /** S08: attempted, confirmed and the site's reported values side by side. */

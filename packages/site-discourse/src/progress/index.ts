@@ -5,6 +5,11 @@ import type { ProgressModule } from './types';
 
 export type { ProgressModule } from './types';
 
+/** How long a progress page may take to render its metrics before the read gives up. */
+export const PROGRESS_READY_MS = 20_000;
+/** S07: the docofcard trust level table; its loader never leaves the DOM, so only rows count. */
+export const TRUST_LEVEL_READY_MS = 10_000;
+
 export const PROGRESS_MODULES: Readonly<Record<Exclude<ProgressSource, 'none'>, ProgressModule>> = {
   'connect-linuxdo': connectLinuxdo,
   'trust-level-docofcard': trustLevelDocofcard,

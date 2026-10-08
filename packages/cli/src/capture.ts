@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { chromium, type Page } from 'playwright-core';
 import { RunError, systemClock, systemSleeper, type BrowserChannel, type LevelSnapshot, type Site } from '@disco-lurk/core';
 import {
+  CATEGORY_LINK,
   categoryLinks,
   CONNECT_READY,
   findLeaks,
@@ -18,6 +19,7 @@ import {
   parseTopicList,
   PageView,
   parseTrustLevel,
+  PROGRESS_READY_MS,
   readUsername,
   rowSelector,
   sanitizeHtml,
@@ -26,6 +28,7 @@ import {
   SORTED_BY_POSTS_QUERY,
   setWindowSize,
   topicUrlPattern,
+  TRUST_LEVEL_READY_MS,
   TRUST_LEVEL_SELECTORS,
   waitForCurrentUser,
   type CategoryLink,
@@ -169,7 +172,7 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
     let categories: CategoryLink[] = [];
     await step('categories', async () => {
       await page.goto(new URL('/categories', base).href, { waitUntil: 'domcontentloaded' });
-      await page.locator('a[href*="/c/"]').first().waitFor({ timeout: 20_000 });
+      await page.locator(CATEGORY_LINK).first().waitFor({ timeout: 20_000 });
       await pause(1, 2);
       const html = await page.content();
       categories = categoryLinks(parseDocument(html), base);
@@ -390,9 +393,6 @@ interface ProgressDeps {
   sleep(ms: number): Promise<void>;
 }
 
-/** S07: the trust level page is ready once its table has rows; its loader never leaves the DOM. */
-const TRUST_LEVEL_READY_MS = 10_000;
-
 const values = (s: LevelSnapshot | null) => Object.fromEntries((s?.metrics ?? []).map((m) => [m.label, m.current]));
 
 /** S07 for connect: enter, wait 2 s, reload, wait for the page, then read. */
@@ -402,7 +402,7 @@ async function captureConnect(
   deps: ProgressDeps & { ask(q: string): Promise<string>; log(m: string): void },
 ): Promise<StepRecord> {
   const files: string[] = [];
-  const ready = () => page.locator(CONNECT_READY).first().waitFor({ timeout: 20_000 }).then(() => true, () => false);
+  const ready = () => page.locator(CONNECT_READY).first().waitFor({ timeout: PROGRESS_READY_MS }).then(() => true, () => false);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   let authorizePage = false;
   if (!(await ready())) {

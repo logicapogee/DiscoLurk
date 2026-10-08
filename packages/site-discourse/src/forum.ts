@@ -1,7 +1,7 @@
 import {
   abortError,
   isAbortError,
-  randomBetween,
+  pauseBetween,
   RunError,
   throwIfAborted,
   type ActionPolicy,
@@ -24,15 +24,16 @@ import {
   type TopicStrategy,
   type TopicVisit,
 } from '@disco-lurk/core';
-import { waitForCurrentUser } from './auth';
+import { pollUntil, usernameFromUrl, waitForCurrentUser } from './auth';
 import { expectedMiss, type LoadState, type ReadOnlyPage } from './page';
 import { categoryLinks, floorCounterFromText, parseDocument, parseTopicList, type CategoryLink, type FloorReading } from './parse';
 import { parseConnect } from './progress/connect-linuxdo';
-import { progressModuleFor } from './progress/index';
+import { PROGRESS_READY_MS, progressModuleFor, TRUST_LEVEL_READY_MS } from './progress/index';
 import { parseTrustLevel, TRUST_LEVEL_SELECTORS } from './progress/trust-level-docofcard';
 import { readFloors, type FloorSurface } from './reading';
 import {
   ANONYMOUS_HEADER,
+  CATEGORY_LINK,
   CHALLENGE_SELECTOR,
   CHALLENGE_TITLE,
   CONNECT_READY,
@@ -48,9 +49,7 @@ const ENTER_URL_MS = 15_000;
 const ENTER_CONTENT_MS = 10_000;
 const RETURN_ROW_MS = 15_000;
 const SIGN_IN_CHECK_MS = 20_000;
-const PROGRESS_READY_MS = 20_000;
-/** S07 */
-const TRUST_LEVEL_READY_MS = 10_000;
+const SIGN_IN_POLL_MS = 1_000;
 const CONNECT_SETTLE_MS = 2_000;
 const TITLE_LOG_CHARS = 50;
 
@@ -195,7 +194,7 @@ export class DiscourseForum implements ForumPort {
   }
 
   private pause(minSec: number, maxSec: number, signal: AbortSignal): Promise<void> {
-    return this.deps.sleeper.sleep(randomBetween(this.deps.random, minSec, maxSec) * 1000, signal);
+    return pauseBetween(this.deps, minSec, maxSec, signal);
   }
 
   private async goto(url: string, signal: AbortSignal, waitUntil: LoadState = 'domcontentloaded'): Promise<void> {
@@ -250,14 +249,16 @@ export class DiscourseForum implements ForumPort {
       return (await this.challenged()) ? { status: 'challenge-detected' } : { status: 'needs-auth' };
     }
     await this.goto(this.site.baseUrl, signal);
-    const start = this.deps.clock.monotonic();
-    for (;;) {
-      const [user, anonymous] = await Promise.all([this.count(SELECTORS.currentUser), this.count(`${ANONYMOUS_HEADER}, ${SELECTORS.loginUsername}`)]);
-      if (user > 0) return { status: 'authenticated' };
-      if (anonymous > 0) return { status: 'needs-auth' };
-      if (this.deps.clock.monotonic() - start >= SIGN_IN_CHECK_MS) break;
-      await this.deps.sleeper.sleep(1_000, signal);
-    }
+    const settled = await pollUntil<AuthResult>(
+      { intervalMs: SIGN_IN_POLL_MS, timeoutMs: SIGN_IN_CHECK_MS, clock: this.deps.clock, sleeper: this.deps.sleeper },
+      async () => {
+        const [user, anonymous] = await Promise.all([this.count(SELECTORS.currentUser), this.count(`${ANONYMOUS_HEADER}, ${SELECTORS.loginUsername}`)]);
+        if (user > 0) return { status: 'authenticated' };
+        return anonymous > 0 ? { status: 'needs-auth' } : null;
+      },
+      signal,
+    );
+    if (settled) return settled;
     return (await this.challenged()) ? { status: 'challenge-detected' } : { status: 'needs-auth' };
   }
 
@@ -290,7 +291,7 @@ export class DiscourseForum implements ForumPort {
 
   async discoverCategories(signal: AbortSignal): Promise<Category[]> {
     await this.goto(this.url('/categories'), signal);
-    if (!(await this.appears('a[href*="/c/"]', LIST_WAIT_MS, signal))) {
+    if (!(await this.appears(CATEGORY_LINK, LIST_WAIT_MS, signal))) {
       await this.explainMissingPage();
       return [];
     }
@@ -410,7 +411,7 @@ export class DiscourseForum implements ForumPort {
     const parsed = parseTrustLevel(await this.content());
     if (parsed.state !== 'ready') throw new RunError('page-timeout', 'Trust level table disappeared after reload');
     // B04: the username comes from where /my/trust-level redirected.
-    const user = /\/u\/([^/?#]+)/.exec(new URL(this.page.url()).pathname)?.[1];
-    return user && !parsed.snapshot.username ? { ...parsed.snapshot, username: decodeURIComponent(user) } : parsed.snapshot;
+    const user = usernameFromUrl(this.page.url());
+    return user && !parsed.snapshot.username ? { ...parsed.snapshot, username: user } : parsed.snapshot;
   }
 }

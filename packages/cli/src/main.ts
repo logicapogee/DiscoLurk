@@ -3,22 +3,22 @@ import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
-import { DiscoLurkCoordinator, isAbortError, RunError, stopRequest, systemClock, type RunEvent } from '@disco-lurk/core';
+import { DiscoLurkCoordinator, isAbortError, RunError, systemClock } from '@disco-lurk/core';
 import { startServer } from '@disco-lurk/server';
 import { formatDoctor, runDoctor } from './doctor';
 import { profilesDir } from './paths';
 import { SidecarLifecycle } from './lifecycle';
 import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
+import { installStopHandlers } from './signals';
 import { BUILTIN_SITES, findSite } from './sites';
 import {
   buildPlan,
   cliEnv,
+  createReporter,
   credentialsFromEnv,
   EXIT,
   exitCodeFor,
-  formatEvent,
-  formatSummary,
   newSeed,
   parseLoginArgs,
   parseRunArgs,
@@ -161,8 +161,7 @@ async function capture(argv: string[]): Promise<number> {
     console.error((err as Error).message);
     return EXIT.environment;
   }
-  const controller = new AbortController();
-  process.once('SIGINT', () => controller.abort());
+  const { signal } = installStopHandlers();
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const outDir = resolve(values.out ?? join('tests', 'fixtures', site.id));
   try {
@@ -171,7 +170,7 @@ async function capture(argv: string[]): Promise<number> {
       profileDir: join(profilesDir(), site.id, values.profile),
       outDir,
       channel: values.channel,
-      signal: controller.signal,
+      signal,
       ...(steps ? { steps } : {}),
       log: (m) => console.log(m),
       ask: (q) => rl.question(`\n>>> ${q}\n`),
@@ -194,16 +193,15 @@ async function capture(argv: string[]): Promise<number> {
 
 async function login(argv: string[]): Promise<number> {
   const args = parseLoginArgs(argv);
-  const controller = new AbortController();
-  process.once('SIGINT', () => controller.abort(stopRequest('user')));
-  const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: args.channel }));
+  const { signal, exitSignal } = installStopHandlers();
+  const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: args.channel, exitSignal }));
   const profileId = profileIdOf(args.site.id, args.profile);
   const auth = await coordinator.beginAuth(profileId);
   let result;
   try {
     console.log(`Sign in to ${args.site.displayName} in the Chrome window (Profile ${profileId}).`);
     console.log('Checking for #current-user every 5 s for up to 300 s; the page is never reloaded.');
-    result = await auth.continueWaiting(controller.signal);
+    result = await auth.continueWaiting(signal);
   } catch (err) {
     if (isAbortError(err)) return EXIT.cancelled;
     throw err;
@@ -230,37 +228,17 @@ async function run(argv: string[]): Promise<number> {
   const args = parseRunArgs(argv);
   const categories = resolveCategories(args.site, await siteCategories(args.site), args.categories);
   const plan = buildPlan(args, categories, newSeed(), new Date());
-  const controller = new AbortController();
-  const exit = new AbortController();
-  let interrupts = 0;
-  process.on('SIGINT', () => {
-    interrupts++;
-    if (interrupts === 1) {
-      console.error('Stopping… (Ctrl+C again skips the final progress read)');
-      controller.abort(stopRequest('user'));
-    } else exit.abort();
-  });
-  process.once('SIGTERM', () => {
-    controller.abort(stopRequest('app-exit'));
-    exit.abort();
-  });
+  const { signal, exitSignal } = installStopHandlers(() => console.error('Stopping… (Ctrl+C again skips the final progress read)'));
   const credentials = credentialsFromEnv(args.site);
-  const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: args.channel, exitSignal: exit.signal, ...(credentials ? { credentials } : {}) }));
-  const start = Date.now();
+  const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: args.channel, exitSignal, ...(credentials ? { credentials } : {}) }));
+  const reporter = createReporter(args.json, Date.now());
   // B06: Profile, browser form and channel are stated before anything starts.
-  const intro = `${args.site.displayName} · Profile ${plan.profileId} · ${plan.browserMode} ${args.channel} · ${plan.preset.browseMode} · ${JSON.stringify(plan.preset.runMode)} · ${categories.map((c) => c.path).join(', ') || 'no categories'}`;
-  if (args.json) console.log(JSON.stringify({ type: 'plan', plan }));
-  else console.log(intro);
-  const emit = (e: RunEvent) => {
-    if (args.json) console.log(JSON.stringify(e));
-    else {
-      const line = formatEvent(e, start);
-      if (line) console.log(line);
-    }
-  };
-  const result = await coordinator.run(plan, controller.signal, emit);
-  if (args.json) console.log(JSON.stringify({ type: 'result', result }));
-  else console.log(`\n${formatSummary(result)}`);
+  reporter.plan(
+    plan,
+    `${args.site.displayName} · Profile ${plan.profileId} · ${plan.browserMode} ${args.channel} · ${plan.preset.browseMode} · ${JSON.stringify(plan.preset.runMode)} · ${categories.map((c) => c.path).join(', ') || 'no categories'}`,
+  );
+  const result = await coordinator.run(plan, signal, reporter.event);
+  reporter.result(result);
   return exitCodeFor(result);
 }
 

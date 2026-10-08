@@ -1,9 +1,7 @@
 import { emptyStats, estimateMetrics, ESTIMATE, type LevelSnapshot, type MetricKey } from '@disco-lurk/core';
-import { readFileSync } from 'node:fs';
-import { LABEL_MAP, mapLabel, parseConnect, parseDocument, PROGRESS_MODULES } from '@disco-lurk/site-discourse';
+import { LABEL_MAP, mapLabel, parseConnect, PROGRESS_MODULES } from '@disco-lurk/site-discourse';
 import { describe, expect, it } from 'vitest';
-
-const fixture = (path: string) => parseDocument(readFileSync(new URL(`../fixtures/${path}`, import.meta.url), 'utf8'));
+import { fixture } from '../dom/fixtures';
 
 describe('CONNECT-002 metric keys and estimates (§5.2)', () => {
   it('keeps one label map per progress source', () => {
@@ -19,7 +17,7 @@ describe('CONNECT-002 metric keys and estimates (§5.2)', () => {
   });
 
   it('maps every connect label in the linuxdo fixture, and only those, through the connect map', () => {
-    const labels = parseConnect(fixture('linuxdo/connect.html')).metrics.map((m) => m.label);
+    const labels = parseConnect(fixture('linuxdo', 'connect.html')).metrics.map((m) => m.label);
     expect(labels.sort()).toEqual(Object.keys(LABEL_MAP['connect-linuxdo']).sort());
     const m = PROGRESS_MODULES['connect-linuxdo'];
     expect(Object.fromEntries(labels.map((l) => [l, mapLabel(m, l)]))).toEqual({

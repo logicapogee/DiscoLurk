@@ -1,4 +1,4 @@
-import { randomBetween, randomInt, type ReadResult, type ReadStrategy, type RuntimeDeps } from '@disco-lurk/core';
+import { pauseBetween, randomBetween, randomInt, type ReadResult, type ReadStrategy, type RuntimeDeps } from '@disco-lurk/core';
 import type { FloorReading } from './parse';
 
 /** The two things reading needs from a topic page; tests drive the strategies through a scripted one. */
@@ -68,7 +68,7 @@ function tracker(start: FloorReading | null, strategy: ReadStrategy): Tracker {
  */
 export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, deps: RuntimeDeps, signal: AbortSignal): Promise<ReadResult> {
   const sleep = (ms: number) => deps.sleeper.sleep(ms, signal);
-  const pause = (range: readonly [number, number]) => sleep(randomBetween(deps.random, range[0], range[1]) * 1000);
+  const pause = (range: readonly [number, number]) => pauseBetween(deps, range[0], range[1], signal);
   const px = (range: readonly [number, number]) => Math.round(randomBetween(deps.random, range[0], range[1]));
 
   // F01: a counter that has not rendered yet reads as null, which would wrongly fall back to blind scrolling.

@@ -1,5 +1,5 @@
 import type { Page } from 'playwright-core';
-import { randomBetween, RunError, stopRequest, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site } from '@disco-lurk/core';
+import { pauseBetween, RunError, stopRequest, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site } from '@disco-lurk/core';
 import { launchProfile, type BrowserSession } from './browser';
 import { DiscourseForum, titleLinkSelector, type Credentials, type LoginForm, type TitleLinks } from './forum';
 import { closedAsStop, PageView, targetClosed } from './page';
@@ -35,7 +35,7 @@ function titleLinks(page: Page, call: ReturnType<typeof closedAsStop>): TitleLin
 }
 
 function loginForm(page: Page, deps: RuntimeDeps, call: ReturnType<typeof closedAsStop>): LoginForm {
-  const pause = (signal: AbortSignal) => deps.sleeper.sleep(randomBetween(deps.random, 0.5, 1) * 1000, signal);
+  const pause = (signal: AbortSignal) => pauseBetween(deps, 0.5, 1, signal);
   return {
     submit: (credentials, signal) =>
       call(async () => {

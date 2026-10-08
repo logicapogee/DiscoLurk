@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { Category } from '@disco-lurk/core';
+import { emptyStats, type Category, type RunResult } from '@disco-lurk/core';
 import {
   buildPlan,
+  createReporter,
   credentialsFromEnv,
   EXIT,
   exitCodeFor,
@@ -139,5 +140,37 @@ describe('B10 credentials only from the environment, only for password sites', (
     expect(credentialsFromEnv(linuxdo, env)).toBeUndefined();
     expect(credentialsFromEnv({ ...linuxdo, login: 'password' }, env)).toEqual({ username: 'u', password: 'p' });
     expect(credentialsFromEnv({ ...linuxdo, login: 'password' }, {})).toBeUndefined();
+  });
+});
+
+describe('CLI-002 run output (§11.1)', () => {
+  const result: RunResult = {
+    outcome: 'completed',
+    stopCause: 'target',
+    stats: emptyStats(),
+    baseline: 'not-applicable',
+    levels: { initial: null, final: null },
+  };
+  const plan = buildPlan(parseRunArgs(['--site', 'linuxdo']), [], 1, new Date('2026-10-08T00:00:00Z'));
+
+  it('--json prints one JSON object per line: plan, events, result', () => {
+    const lines: string[] = [];
+    const r = createReporter(true, 0, (l) => lines.push(l));
+    r.plan(plan, 'intro');
+    r.event({ type: 'state', at: '2026-10-08T00:00:01.000Z', state: 'queued' });
+    r.result(result);
+    expect(lines.map((l) => (JSON.parse(l) as { type: string }).type)).toEqual(['plan', 'state', 'result']);
+  });
+
+  it('human output prints the intro, timed event lines and the summary, and skips stats events', () => {
+    const lines: string[] = [];
+    const r = createReporter(false, Date.parse('2026-10-08T00:00:00Z'), (l) => lines.push(l));
+    r.plan(plan, 'intro');
+    r.event({ type: 'state', at: '2026-10-08T00:01:05.000Z', state: 'browsing' });
+    r.event({ type: 'stats', at: '2026-10-08T00:01:05.000Z', stats: emptyStats() });
+    r.result(result);
+    expect(lines.slice(0, 2)).toEqual(['intro', '[01:05] state browsing']);
+    expect(lines[2]).toMatch(/^\nresult: completed \(target\)/);
+    expect(lines).toHaveLength(3);
   });
 });

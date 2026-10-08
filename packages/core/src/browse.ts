@@ -1,7 +1,7 @@
 import { emptyStats, toFailure, type RunEvent, type RunFailure, type RunStats } from './events';
 import { sampleTopics, selectCandidates } from './picking';
 import type { ActionPolicy, ForumPort } from './ports';
-import { isAbortError, randomBetween, shuffle, throwIfAborted, type RuntimeDeps } from './runtime';
+import { isAbortError, pauseBetween, shuffle, throwIfAborted, type RuntimeDeps } from './runtime';
 import { targetReached } from './target';
 import type { RunPlanSnapshot } from './terms';
 
@@ -41,9 +41,7 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
     tick();
     return targetReached(preset.runMode, preset.browseMode, stats);
   };
-  const pause = async (range: { minSec: number; maxSec: number }) => {
-    await deps.sleeper.sleep(randomBetween(deps.random, range.minSec, range.maxSec) * 1000, signal);
-  };
+  const pause = (range: { minSec: number; maxSec: number }) => pauseBetween(deps, range.minSec, range.maxSec, signal);
   const policy: ActionPolicy = structuredClone(preset.interaction);
   const { extraWait } = preset;
 

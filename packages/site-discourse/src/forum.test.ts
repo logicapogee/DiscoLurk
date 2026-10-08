@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { classifyReturn, discoveredCategories, listUrlFor, navigationFailure, sortKept } from './forum';
 import { expectedMiss } from './page';
+import { usernameFromUrl } from './auth';
 
 const site = { baseUrl: 'https://forum.docofcard.com' };
 
@@ -64,5 +65,13 @@ describe('page reads that may come up empty', () => {
     expect(expectedMiss(new Error('locator.count: Execution context was destroyed, most likely because of a navigation'))).toBe(true);
     expect(expectedMiss(named('TargetClosedError', 'locator.count: Target page, context or browser has been closed'))).toBe(false);
     expect(expectedMiss(new Error('page.goBack: net::ERR_ABORTED'))).toBe(false);
+  });
+});
+
+describe('username from the /my redirect (B04)', () => {
+  it('reads and decodes the /u/<name> segment, and nothing else', () => {
+    expect(usernameFromUrl('https://forum.docofcard.com/u/alice/summary')).toBe('alice');
+    expect(usernameFromUrl('https://linux.do/u/%E5%BC%A0%E4%B8%89/activity')).toBe('张三');
+    expect(usernameFromUrl('https://linux.do/my/activity')).toBeNull();
   });
 });

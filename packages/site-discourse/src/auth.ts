@@ -2,13 +2,31 @@ import { systemClock, systemSleeper, type Clock, type InterruptibleSleeper } fro
 import { expectedMiss, type ReadOnlyPage } from './page';
 import { SELECTORS } from './selectors';
 
-export interface LoginWaitOptions {
-  signal: AbortSignal;
-  intervalMs?: number;
-  timeoutMs?: number;
+export interface PollOptions {
+  intervalMs: number;
+  timeoutMs: number;
   clock?: Clock;
   sleeper?: InterruptibleSleeper;
   onPoll?: (elapsedMs: number) => void;
+}
+
+/** Probes until it answers with a value; resolves null once the ceiling has passed without one. */
+export async function pollUntil<T>(opts: PollOptions, probe: () => Promise<T | null>, signal: AbortSignal): Promise<T | null> {
+  const clock = opts.clock ?? systemClock;
+  const sleeper = opts.sleeper ?? systemSleeper;
+  const start = clock.monotonic();
+  for (;;) {
+    const found = await probe();
+    if (found !== null) return found;
+    const elapsed = clock.monotonic() - start;
+    if (elapsed >= opts.timeoutMs) return null;
+    opts.onPoll?.(elapsed);
+    await sleeper.sleep(Math.min(opts.intervalMs, opts.timeoutMs - elapsed), signal);
+  }
+}
+
+export interface LoginWaitOptions extends Partial<PollOptions> {
+  signal: AbortSignal;
 }
 
 /** B04: interval and ceiling of the headed login poll. */
@@ -20,33 +38,30 @@ export const LOGIN_TIMEOUT_MS = 300_000;
  * redirect in progress is left alone. Resolves false at the ceiling.
  */
 export async function waitForCurrentUser(page: ReadOnlyPage, opts: LoginWaitOptions): Promise<boolean> {
-  const clock = opts.clock ?? systemClock;
-  const sleeper = opts.sleeper ?? systemSleeper;
-  const interval = opts.intervalMs ?? LOGIN_POLL_MS;
-  const ceiling = opts.timeoutMs ?? LOGIN_TIMEOUT_MS;
-  const start = clock.monotonic();
-  for (;;) {
-    // A navigation in progress destroys the execution context; that poll simply counts as "not yet".
-    const present = await page.count(SELECTORS.currentUser).then(
-      (n) => n > 0,
+  const { signal, ...poll } = opts;
+  // A navigation in progress destroys the execution context; that poll simply counts as "not yet".
+  const present = () =>
+    page.count(SELECTORS.currentUser).then(
+      (n) => (n > 0 ? true : null),
       (err: unknown) => {
-        if (expectedMiss(err)) return false;
+        if (expectedMiss(err)) return null;
         throw err;
       },
     );
-    if (present) return true;
-    const elapsed = clock.monotonic() - start;
-    if (elapsed >= ceiling) return false;
-    opts.onPoll?.(elapsed);
-    await sleeper.sleep(Math.min(interval, ceiling - elapsed), opts.signal);
-  }
+  return (await pollUntil({ intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_TIMEOUT_MS, ...poll }, present, signal)) ?? false;
+}
+
+const USER_PATH = /\/u\/([^/?#]+)/;
+
+/** B04: the username in a `/u/<name>` address, which is where `/my/...` pages redirect to. */
+export function usernameFromUrl(url: string): string | null {
+  const m = USER_PATH.exec(new URL(url).pathname);
+  return m ? decodeURIComponent(m[1]!) : null;
 }
 
 /** B04: the username comes from where `/my/...` redirects, never from the avatar's title. */
 export async function readUsername(page: ReadOnlyPage, baseUrl: string): Promise<string | null> {
   await page.goto(new URL('/my/activity', baseUrl).href);
-  const userPath = /\/u\/([^/?#]+)/;
-  await page.waitForURL(userPath, { timeout: 15_000 }).catch(() => {});
-  const m = userPath.exec(new URL(page.url()).pathname);
-  return m ? decodeURIComponent(m[1]!) : null;
+  await page.waitForURL(USER_PATH, { timeout: 15_000 }).catch(() => {});
+  return usernameFromUrl(page.url());
 }

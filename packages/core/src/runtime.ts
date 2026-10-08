@@ -87,6 +87,11 @@ export function randomBetween(random: RandomSource, min: number, max: number): n
   return min + random.next() * (max - min);
 }
 
+/** A human-paced wait of a random length between `minSec` and `maxSec` seconds. */
+export function pauseBetween(deps: Pick<RuntimeDeps, 'random' | 'sleeper'>, minSec: number, maxSec: number, signal: AbortSignal): Promise<void> {
+  return deps.sleeper.sleep(randomBetween(deps.random, minSec, maxSec) * 1000, signal);
+}
+
 export function shuffle<T>(items: readonly T[], random: RandomSource): T[] {
   const out = items.slice();
   for (let i = out.length - 1; i > 0; i--) {

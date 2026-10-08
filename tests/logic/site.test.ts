@@ -1,5 +1,5 @@
 import { browse, type Site, type TopicCandidate } from '@disco-lurk/core';
-import { FixtureForum, VirtualTime } from '@disco-lurk/core/testing';
+import { FixtureForum, fixtureSite, VirtualTime } from '@disco-lurk/core/testing';
 import { loadBuiltinSites, validateSite } from '@disco-lurk/config';
 import { progressModuleFor } from '@disco-lurk/site-discourse';
 import { describe, expect, it } from 'vitest';
@@ -7,16 +7,7 @@ import { readData } from './data';
 
 const sites = () => loadBuiltinSites(readData('sites.json') as never, readData);
 
-const minimal = (): Record<string, unknown> => ({
-  id: 'example',
-  displayName: 'Example',
-  baseUrl: 'https://forum.example.org',
-  kind: 'discourse',
-  login: 'headed',
-  categorySource: 'discovered',
-  progressSource: 'none',
-  behaviorVerified: { clickEntryRequired: 'unverified' },
-});
+const minimal = (): Record<string, unknown> => ({ ...fixtureSite({ id: 'example', displayName: 'Example', baseUrl: 'https://forum.example.org' }) });
 
 describe('SITE-001 site configuration (§2.2)', () => {
   it('loads both built-in sites with the §2.2 settings', () => {

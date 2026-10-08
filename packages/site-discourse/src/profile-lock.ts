@@ -33,7 +33,8 @@ export function processAlive(pid: number): boolean {
   }
 }
 
-async function readLock(path: string): Promise<LockInfo | null> {
+/** The lock file's contents; null when it is missing or unreadable. */
+export async function readLock(path: string): Promise<LockInfo | null> {
   try {
     return JSON.parse(await readFile(path, 'utf8')) as LockInfo;
   } catch {

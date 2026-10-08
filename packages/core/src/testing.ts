@@ -15,6 +15,21 @@ import type {
 import { abortError, seededRandom, type Clock, type InterruptibleSleeper, type RuntimeDeps } from './runtime';
 import type { Category, Site, TopicCandidate } from './terms';
 
+/** A minimal valid Site: discovered categories, no progress page. */
+export function fixtureSite(over: Partial<Site> = {}): Site {
+  return {
+    id: 'fixture',
+    displayName: 'Fixture',
+    baseUrl: 'https://forum.invalid',
+    kind: 'discourse',
+    login: 'headed',
+    categorySource: 'discovered',
+    progressSource: 'none',
+    behaviorVerified: { clickEntryRequired: 'unverified' },
+    ...over,
+  };
+}
+
 interface Timer {
   at: number;
   seq: number;

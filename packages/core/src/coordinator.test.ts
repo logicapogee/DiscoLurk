@@ -3,22 +3,17 @@ import { DiscoLurkCoordinator, reportedMetrics, type CategoryStore, type Coordin
 import { RunError, stopRequest, type RunEvent, type RunState } from './events';
 import type { LevelSnapshot } from './metrics';
 import type { AuthMode, AuthResult } from './ports';
-import { FixtureForum, VirtualTime, type FixtureForumOptions } from './testing';
+import { FixtureForum, fixtureSite, VirtualTime, type FixtureForumOptions } from './testing';
 import type { BrowserMode, Category, RunMode, RunPlanSnapshot, Site, TopicCandidate } from './terms';
 
-const site = (over: Partial<Site> = {}): Site => ({
-  id: 'fixture',
-  displayName: 'Fixture',
-  baseUrl: 'https://forum.invalid',
-  kind: 'discourse',
-  login: 'headed',
-  categorySource: 'builtin',
-  builtinCategories: [],
-  progressSource: 'trust-level-docofcard',
-  progressUrl: 'https://forum.invalid/my/trust-level',
-  behaviorVerified: { clickEntryRequired: 'unverified' },
-  ...over,
-});
+const site = (over: Partial<Site> = {}): Site =>
+  fixtureSite({
+    categorySource: 'builtin',
+    builtinCategories: [],
+    progressSource: 'trust-level-docofcard',
+    progressUrl: 'https://forum.invalid/my/trust-level',
+    ...over,
+  });
 
 const categories: Category[] = ['a', 'b'].map((slug, i) => ({ name: slug, path: `/c/${slug}/${i + 1}`, id: i + 1, enabledByDefault: true }));
 

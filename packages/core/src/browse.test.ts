@@ -2,19 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { browse } from './browse';
 import { emptyStats, type RunEvent } from './events';
 import { targetReached } from './target';
-import { FixtureForum, VirtualTime } from './testing';
-import type { BrowseMode, Category, RunMode, RunPlanSnapshot, Site, TopicCandidate } from './terms';
+import { FixtureForum, fixtureSite, VirtualTime } from './testing';
+import type { BrowseMode, Category, RunMode, RunPlanSnapshot, TopicCandidate } from './terms';
 
-const site: Site = {
-  id: 'fixture',
-  displayName: 'Fixture',
-  baseUrl: 'https://forum.invalid',
-  kind: 'discourse',
-  login: 'headed',
-  categorySource: 'discovered',
-  progressSource: 'none',
-  behaviorVerified: { clickEntryRequired: 'unverified' },
-};
+const site = fixtureSite();
 
 const categories: Category[] = ['a', 'b', 'c', 'd', 'e'].map((slug, i) => ({
   name: slug,

@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process';
-import { access, constants, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, constants, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { BrowserChannel, Category, Site } from '@disco-lurk/core';
-import { LOCK_FILE, processAlive, type LockInfo } from '@disco-lurk/site-discourse';
+import { LOCK_FILE, processAlive, readLock } from '@disco-lurk/site-discourse';
 
 const run = promisify(execFile);
 
@@ -156,7 +156,7 @@ async function profileList(dir: string, siteId: string): Promise<string[]> {
   const names = await readdir(root, { withFileTypes: true }).catch(() => []);
   const out: string[] = [];
   for (const entry of names.filter((e) => e.isDirectory())) {
-    const lock = await readFile(join(root, entry.name, LOCK_FILE), 'utf8').then((t) => JSON.parse(t) as LockInfo, () => null);
+    const lock = await readLock(join(root, entry.name, LOCK_FILE));
     out.push(lock && processAlive(lock.pid) ? `${entry.name}（被 PID ${lock.pid} 占用）` : entry.name);
   }
   return out;

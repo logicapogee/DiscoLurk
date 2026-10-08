@@ -44,6 +44,9 @@ export const SORTED_BY_POSTS_QUERY = 'order=posts';
  */
 export const CATEGORY_NAME_SELECTORS = ['.category-name', '.category-box-heading h3'] as const;
 
+/** Any link into a category; the `/categories` page has rendered once one exists. */
+export const CATEGORY_LINK = 'a[href*="/c/"]';
+
 /** Appendix A list URLs: `/c/<slug>/<id>` with optional parent slugs, plus the new/unread lists. */
 export const CATEGORY_PATH = /^\/c\/((?:[^/?#]+\/)*[^/?#]+)\/(\d+)\/?$/;
 

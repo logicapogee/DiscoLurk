@@ -13,6 +13,7 @@ import {
   type BrowserChannel,
   type BrowserMode,
   type Category,
+  type CategoryStore,
   type CoordinatorEnv,
   type LevelSnapshot,
   type RunEvent,
@@ -25,14 +26,14 @@ import { CATEGORY_PATH, openDiscourseForum, type Credentials } from '@disco-lurk
 import { profilesDir, sitesDir } from './paths';
 import { BUILTIN_SITES, findSite } from './sites';
 
-/** §11.1 exit codes. */
+/** CLI exit codes. */
 export const EXIT = { ok: 0, cancelled: 2, needsAuth: 3, environment: 4, contract: 5, noProgress: 6 } as const;
 
 export class UsageError extends Error {}
 
 const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-/** A Profile is addressed as `<siteId>/<name>`, matching its directory `profiles/<siteId>/<name>` (§8.3). */
+/** A Profile is addressed as `<siteId>/<name>`, matching its directory `profiles/<siteId>/<name>`. */
 export const profileIdOf = (siteId: string, name: string) => `${siteId}/${name}`;
 
 export function parseProfileId(profileId: string): { siteId: string; name: string } {
@@ -41,7 +42,7 @@ export function parseProfileId(profileId: string): { siteId: string; name: strin
   return { siteId, name };
 }
 
-/** §9.3 / §11.1 run mode syntax: `endless`, `topics:<n>`, `topics:<min>-<max>`, `time:<minutes>`. */
+/** Run mode syntax: `endless`, `topics:<n>`, `topics:<min>-<max>`, `time:<minutes>`. */
 export function parseRunMode(raw: string): RunModeSpec {
   if (raw === 'endless') return { kind: 'endless' };
   const topics = /^topics:(\d+)(?:-(\d+))?$/.exec(raw);
@@ -80,7 +81,7 @@ const COMMON = {
   channel: { type: 'string', default: 'chrome' },
 } as const satisfies ParseArgsOptionsConfig;
 
-function parse<O extends ParseArgsOptionsConfig>(argv: string[], options: O) {
+function parseOrUsageError<O extends ParseArgsOptionsConfig>(argv: string[], options: O) {
   try {
     return parseArgs({ args: argv, strict: true, options }).values;
   } catch (err) {
@@ -94,7 +95,7 @@ export interface LoginArgs {
   channel: BrowserChannel;
 }
 
-function common(v: { site?: string | undefined; profile: string; channel: string }): LoginArgs {
+function loginArgsFrom(v: { site?: string | undefined; profile: string; channel: string }): LoginArgs {
   return { site: parseSite(v.site), profile: parseProfileName(v.profile), channel: parseChannel(v.channel) };
 }
 
@@ -107,7 +108,7 @@ export interface RunArgs extends LoginArgs {
 }
 
 export function parseRunArgs(argv: string[]): RunArgs {
-  const v = parse(argv, {
+  const v = parseOrUsageError(argv, {
     ...COMMON,
     'browse-mode': { type: 'string', default: 'deep' },
     'run-mode': { type: 'string', default: 'endless' },
@@ -119,7 +120,7 @@ export function parseRunArgs(argv: string[]): RunArgs {
   if (v.headed && v.headless) throw new UsageError('--headed and --headless exclude each other');
   if (v['browse-mode'] !== 'deep' && v['browse-mode'] !== 'quick') throw new UsageError('--browse-mode must be deep or quick');
   return {
-    ...common(v),
+    ...loginArgsFrom(v),
     browseMode: v['browse-mode'],
     runMode: parseRunMode(v['run-mode']),
     categories: v.categories ? v.categories.split(',').map((s) => s.trim()).filter(Boolean) : null,
@@ -129,7 +130,7 @@ export function parseRunArgs(argv: string[]): RunArgs {
 }
 
 export function parseLoginArgs(argv: string[]): LoginArgs {
-  return common(parse(argv, COMMON));
+  return loginArgsFrom(parseOrUsageError(argv, COMMON));
 }
 
 /**
@@ -148,7 +149,7 @@ export function resolveCategories(site: Site, known: readonly Category[], tokens
   });
 }
 
-/** §11.1 default RunPreset, with this command line's choices. */
+/** The CLI's default RunPreset, with this command line's choices. */
 export function buildPlan(args: RunArgs, categories: Category[], seed: number, now: Date): RunPlanSnapshot {
   const at = now.toISOString();
   return {
@@ -174,7 +175,7 @@ export function buildPlan(args: RunArgs, categories: Category[], seed: number, n
   };
 }
 
-/** §11.1: the failure decides first; without one, a stop by the user or the app counts as cancelled. */
+/** The failure decides first; without one, a stop by the user or the app counts as cancelled. */
 export function exitCodeFor(result: Pick<RunResult, 'outcome' | 'stopCause' | 'failure'>): number {
   switch (result.failure?.code) {
     case undefined:
@@ -197,7 +198,7 @@ export function exitCodeFor(result: Pick<RunResult, 'outcome' | 'stopCause' | 'f
 }
 
 /**
- * §11.1: `lurk login` succeeds once `#current-user` shows in the headed window. It runs no headless
+ * `lurk login` succeeds once `#current-user` shows in the headed window. It runs no headless
  * check afterwards, since a headless visit to linuxdo may meet a Cloudflare challenge; that check is `doctor`'s.
  */
 export async function signIn(auth: AuthSession, signal: AbortSignal, log: (line: string) => void): Promise<number> {
@@ -251,14 +252,14 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
   };
 }
 
-/** B10: unattended credentials come only from the environment, and only for password sites. */
+/** Unattended credentials come only from the environment, and only for password sites. */
 export function credentialsFromEnv(site: Site, env: NodeJS.ProcessEnv = process.env): Credentials | undefined {
   if (site.login !== 'password' || !env.LURK_USERNAME || !env.LURK_PASSWORD) return undefined;
   return { username: env.LURK_USERNAME, password: env.LURK_PASSWORD };
 }
 
-export async function siteCategories(site: Site): Promise<Category[]> {
-  return site.categorySource === 'builtin' ? (site.builtinCategories ?? []) : new FileCategoryStore(sitesDir()).load(site.id);
+export function siteCategories(site: Site, store: CategoryStore): Promise<Category[]> {
+  return site.categorySource === 'builtin' ? Promise.resolve(site.builtinCategories ?? []) : store.load(site.id);
 }
 
 export const newSeed = () => randomInt(0, 2 ** 31);
@@ -302,7 +303,7 @@ function levelLines(levels: RunResult['levels'], baseline: RunResult['baseline']
     const b = final?.metrics.find((m) => m.label === label);
     const req = (b ?? a)?.required;
     const target = req === null || req === undefined ? '' : ` / ${req}`;
-    // S09: without a baseline only the final value is shown, never a change.
+    // Without a baseline only the final value is shown, never a change.
     if (baseline === 'missing' || !a) lines.push(`  ${label}: ${b?.current ?? '?'}${target}`);
     else if (!b) lines.push(`  ${label}: ${a.current} → (not read)${target}`);
     else lines.push(`  ${label}: ${a.current} → ${b.current} (${b.current - a.current >= 0 ? '+' : ''}${b.current - a.current})${target}`);
@@ -311,13 +312,13 @@ function levelLines(levels: RunResult['levels'], baseline: RunResult['baseline']
 }
 
 export interface Reporter {
-  /** `intro` is the human line naming site, Profile, browser and mode (B06). */
+  /** `intro` is the human line naming site, Profile, browser and mode. */
   plan(plan: RunPlanSnapshot, intro: string): void;
   event(e: RunEvent): void;
   result(result: RunResult): void;
 }
 
-/** §11.1: `--json` prints one JSON object per line; otherwise readable lines timed from `start`. */
+/** `--json` prints one JSON object per line; otherwise readable lines timed from `start`. */
 export function createReporter(json: boolean, start: number, write: (line: string) => void = console.log): Reporter {
   if (json) {
     return {
@@ -336,7 +337,7 @@ export function createReporter(json: boolean, start: number, write: (line: strin
   };
 }
 
-/** S08: attempted, confirmed and the site's reported values side by side. */
+/** Attempted, confirmed and the site's reported values side by side. */
 export function formatSummary(result: RunResult): string {
   const { attempted: a, confirmed: c } = result.stats;
   const lines = [

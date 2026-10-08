@@ -23,9 +23,9 @@ export interface BrowserSelftestResult {
 }
 
 /**
- * The §12.1 packaging gate as seen from inside the binary: system Chrome, a persistent context on
+ * The packaging gate as seen from inside the binary: system Chrome, a persistent context on
  * an app-owned Profile, one locator click on a local page, a screenshot, and a clean close.
- * Launch flags follow B07; no user agent override (B08).
+ * Launch flags match production; no user agent override.
  */
 export async function browserSelftest(opts: BrowserSelftestOptions): Promise<BrowserSelftestResult> {
   await mkdir(opts.profileDir, { recursive: true });

@@ -1,7 +1,7 @@
 import { randomInt, type RandomSource } from './runtime';
 import type { Category, ResolvedPreset, RunMode, RunModeSpec, RunPreset } from './terms';
 
-/** Fixes a run mode's random range, so the snapshot states exactly what will run (§9.1). */
+/** Fixes a run mode's random range, so the snapshot states exactly what will run. */
 export function resolveRunMode(spec: RunModeSpec, random: RandomSource): RunMode {
   return spec.kind === 'topics' ? { kind: 'topics', count: randomInt(random, spec.min, spec.max) } : spec;
 }
@@ -21,7 +21,7 @@ export function resolvePreset(preset: RunPreset, categories: readonly Category[]
 }
 
 /**
- * §7.2: a discovered site's category list after a fresh read. The list follows what the site
+ * A discovered site's category list after a fresh read. The list follows what the site
  * shows now; a category already known keeps the user's enable choice, and a new one starts off.
  */
 export function mergeDiscoveredCategories(known: readonly Category[], found: readonly Category[]): Category[] {

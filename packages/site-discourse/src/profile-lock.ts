@@ -4,7 +4,7 @@ import { RunError } from '@disco-lurk/core';
 
 export const LOCK_FILE = '.lurk-lock';
 
-/** §8.3 lock file contents. */
+/** Lock file contents. */
 export interface LockInfo {
   pid: number;
   startedAt: string;
@@ -43,8 +43,8 @@ export async function readLock(path: string): Promise<LockInfo | null> {
 }
 
 /**
- * B02: one browser per Profile. An existing lock is cleared only after confirming its process is
- * gone; a live owner fails fast with `profile-locked` (B03 does not retry it).
+ * One browser per Profile. An existing lock is cleared only after confirming its process is
+ * gone; a live owner fails fast with `profile-locked` (the launch does not retry it).
  */
 export async function acquireProfileLock(profileDir: string, runId: string, opts: LockOptions = {}): Promise<ProfileLock> {
   const path = join(profileDir, LOCK_FILE);

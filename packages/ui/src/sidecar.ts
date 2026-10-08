@@ -16,7 +16,7 @@ export class SidecarStartError extends Error {
 }
 
 /**
- * §10.4: the shell spawns the sidecar, reads its ready line, waits for /health and shows the
+ * The shell spawns the sidecar, reads its ready line, waits for /health and shows the
  * window; the page only asks for the resulting connection, token included.
  */
 export async function connectSidecar(): Promise<SidecarConnection> {

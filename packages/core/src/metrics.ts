@@ -1,7 +1,7 @@
 import type { RunStats } from './events';
 import type { ProgressSource } from './terms';
 
-/** §5.2 */
+/** The metrics a progress page label can map to; `other` gathers labels without a key. */
 export type MetricKey =
   | 'topicsViewed'
   | 'postsRead'
@@ -21,7 +21,7 @@ export interface LevelMetric {
   required: number | null;
 }
 
-/** A parsed site progress page (§5.1 / §5.1b); `level` is numeric on linuxdo and a title on docofcard. */
+/** A parsed site progress page; `level` is numeric on linuxdo and a title on docofcard. */
 export interface LevelSnapshot {
   source: Exclude<ProgressSource, 'none'>;
   username?: string;
@@ -47,7 +47,7 @@ export interface EstimatedMetric extends LevelMetric {
   estimated: number | null;
 }
 
-/** Without a baseline (S09, or `progressSource: 'none'`) there is nothing to add the local delta to. */
+/** Without a baseline (a failed initial read, or `progressSource: 'none'`) there is nothing to add the local delta to. */
 export function estimateMetrics(initial: LevelSnapshot | null, stats: RunStats): EstimatedMetric[] {
   if (!initial) return [];
   return initial.metrics.map((m) => {

@@ -1,5 +1,5 @@
-// Bundles the CLI with esbuild and packs it with @yao-pkg/pkg into the single-file `lurk` (§12.1),
-// named with the Rust target triple Tauri's externalBin expects (§10.4).
+// Bundles the CLI with esbuild and packs it with @yao-pkg/pkg into the single-file `lurk`,
+// named with the Rust target triple Tauri's externalBin expects.
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, cpSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';

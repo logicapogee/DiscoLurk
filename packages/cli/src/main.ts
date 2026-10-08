@@ -6,7 +6,8 @@ import { parseArgs } from 'node:util';
 import { DiscoLurkCoordinator, isAbortError, RunError, systemClock } from '@disco-lurk/core';
 import { startServer } from '@disco-lurk/server';
 import { formatDoctor, runDoctor } from './doctor';
-import { profilesDir } from './paths';
+import { FileCategoryStore } from '@disco-lurk/config';
+import { profilesDir, sitesDir } from './paths';
 import { SidecarLifecycle } from './lifecycle';
 import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
@@ -51,7 +52,7 @@ async function doctor(argv: string[]): Promise<number> {
   const report = await runDoctor({
     version: VERSION,
     profilesDir: profilesDir(),
-    sites: BUILTIN_SITES.map((site) => ({ site, categories: () => siteCategories(site) })),
+    sites: BUILTIN_SITES.map((site) => ({ site, categories: () => siteCategories(site, new FileCategoryStore(sitesDir())) })),
     ...(values.port ? { port: Number(values.port) } : {}),
     network: values.network ?? false,
   });
@@ -64,7 +65,7 @@ async function sidecar(argv: string[]): Promise<number> {
     console.error('sidecar takes no arguments');
     return EXIT.environment;
   }
-  // §10.3: the token never appears in argv, the environment or a file, where other local processes
+  // The token never appears in argv, the environment or a file, where other local processes
   // could read it; only the shell, holding the other end of stdout, learns it from the ready line.
   const token = randomBytes(32).toString('base64url');
   // Once the shell is gone its ends of stdout/stderr are closed; dropping those write errors keeps
@@ -72,7 +73,7 @@ async function sidecar(argv: string[]): Promise<number> {
   process.stdout.on('error', () => {});
   process.stderr.on('error', () => {});
   const lifecycle = new SidecarLifecycle((m) => console.error(m));
-  // The shell spawns the sidecar on loopback only; remote access is the separate `serve` command (§10.3).
+  // The shell spawns the sidecar on loopback only; remote access is the separate `serve` command.
   const server = await startServer({
     host: '127.0.0.1',
     port: 0,
@@ -94,7 +95,7 @@ async function sidecar(argv: string[]): Promise<number> {
   return EXIT.ok;
 }
 
-/** Packaging-gate entry used by scripts/gate-sidecar.ts (§12.1); not a user-facing command. */
+/** Packaging-gate entry used by scripts/gate-sidecar.ts; not a user-facing command. */
 async function selftest(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
@@ -130,7 +131,7 @@ async function selftest(argv: string[]): Promise<number> {
   }
 }
 
-/** Development command (Phase 0): the user logs in; fixtures land in tests/fixtures/<siteId>/. */
+/** Development command: the user logs in; fixtures land in tests/fixtures/<siteId>/. */
 async function capture(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
@@ -207,13 +208,14 @@ async function login(argv: string[]): Promise<number> {
 
 async function run(argv: string[]): Promise<number> {
   const args = parseRunArgs(argv);
-  const categories = resolveCategories(args.site, await siteCategories(args.site), args.categories);
-  const plan = buildPlan(args, categories, newSeed(), new Date());
   const { signal, exitSignal } = installStopHandlers(() => console.error('Stopping… (Ctrl+C again skips the final progress read)'));
   const credentials = credentialsFromEnv(args.site);
-  const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: args.channel, exitSignal, ...(credentials ? { credentials } : {}) }));
+  const env = cliEnv({ channel: args.channel, exitSignal, ...(credentials ? { credentials } : {}) });
+  const categories = resolveCategories(args.site, await siteCategories(args.site, env.categories), args.categories);
+  const plan = buildPlan(args, categories, newSeed(), new Date());
+  const coordinator = new DiscoLurkCoordinator(env);
   const reporter = createReporter(args.json, Date.now());
-  // B06: Profile, browser form and channel are stated before anything starts.
+  // Profile, browser form and channel are stated before anything starts.
   reporter.plan(
     plan,
     `${args.site.displayName} · Profile ${plan.profileId} · ${plan.browserMode} ${args.channel} · ${plan.preset.browseMode} · ${JSON.stringify(plan.preset.runMode)} · ${categories.map((c) => c.path).join(', ') || 'no categories'}`,

@@ -46,7 +46,7 @@ struct Health {
 struct Sidecar {
     outcome: tauri::async_runtime::Mutex<Option<Result<SidecarConnection, SidecarFailure>>>,
     /// Holding the child keeps the write end of the sidecar's stdin open. However the shell ends,
-    /// even by SIGKILL, that pipe closes and the sidecar runs its shutdown cleanup (§10.4).
+    /// even by SIGKILL, that pipe closes and the sidecar runs its shutdown cleanup.
     child: Mutex<Option<CommandChild>>,
     output: Arc<Mutex<VecDeque<String>>>,
 }
@@ -87,7 +87,7 @@ fn health_once(addr: SocketAddr) -> Option<String> {
     head.starts_with("HTTP/1.1 200").then(|| body.to_string())
 }
 
-/// §10.3: the sidecar binds 127.0.0.1:0 and mints its token itself, announcing both in one stdout
+/// The sidecar binds 127.0.0.1:0 and mints its token itself, announcing both in one stdout
 /// line, so the token never passes through argv, the environment or a file. The ready line is
 /// consumed here and never copied into the kept output.
 async fn start(app: &AppHandle, sidecar: &Sidecar) -> Result<SidecarConnection, String> {
@@ -139,7 +139,7 @@ async fn start(app: &AppHandle, sidecar: &Sidecar) -> Result<SidecarConnection, 
     })
 }
 
-/// §10.4 start-up in one command: spawn the sidecar, read its ready line, poll /health for up to
+/// Start-up in one command: spawn the sidecar, read its ready line, poll /health for up to
 /// 10 s, then show the window whatever the outcome. The connection, token included, stays in Rust
 /// state and later calls return it. This runs here rather than in the page because WKWebView
 /// suspends timers and network loads of a window that has never been shown.
@@ -166,14 +166,14 @@ async fn connect_sidecar(
 
 pub fn run() {
     tauri::Builder::default()
-        // Registered first so a second launch only wakes the existing window (§9.2).
+        // Registered first so a second launch only wakes the existing window.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
-        // Visibility is left to connect_sidecar, which shows the window only once start-up has settled (§10.4).
+        // Visibility is left to connect_sidecar, which shows the window only once start-up has settled.
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)

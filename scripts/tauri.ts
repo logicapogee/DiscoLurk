@@ -1,6 +1,6 @@
 // Runs the Tauri CLI for apps/desktop. `dev` gets --no-dev-server so the window loads the UI from
 // tauri://localhost exactly as a release build does; the CLI's static dev server would give the page
-// an http://127.0.0.1:1430 origin, which the sidecar's §10.3 CORS allow-list rightly rejects.
+// an http://127.0.0.1:1430 origin, which the sidecar's CORS allow-list rightly rejects.
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -1,6 +1,6 @@
 import type { LevelSnapshot, MetricKey } from './metrics';
 
-/** §6.2 */
+/** The states a run moves through, ending in `completed`, `failed` or `cancelled`. */
 export type RunState =
   | 'queued'
   | 'launching'
@@ -16,7 +16,7 @@ export type RunState =
   | 'failed'
   | 'cancelled';
 
-/** §6.4 */
+/** Every failure a run can report; each maps to a CLI exit code. */
 export const ERROR_CODES = [
   'browser-missing',
   'profile-locked',
@@ -55,7 +55,7 @@ export interface RunStats {
   confirmed: StatCounters & { repliedTopics: number };
   estimatedFloors: number;
   reported?: Partial<Record<MetricKey, { initial?: number; final: number }>>;
-  /** Monotonic clock (S04). */
+  /** Measured on the monotonic clock. */
   elapsedMs: number;
 }
 
@@ -69,11 +69,11 @@ export type RunEvent =
   | { type: 'warning'; at: string; code: string; message: string }
   | { type: 'error'; at: string; error: RunFailure };
 
-/** The terminal state a run reached (§6.2). */
+/** The terminal state a run reached. */
 export type RunOutcome = 'completed' | 'failed' | 'cancelled';
 
 /**
- * Why browsing ended. A user stop that still verified ends in `completed` (§6.2 stopping →
+ * Why browsing ended. A user stop that still verified ends in `completed` (stopping →
  * verifying → completed), so callers read the cause, not the outcome, to tell it from a met target.
  */
 export type StopCause = 'target' | StopRequest | 'no-progress' | 'error';
@@ -83,15 +83,15 @@ export interface RunResult {
   stopCause: StopCause;
   stats: RunStats;
   failure?: RunFailure;
-  /** S09: `missing` when the initial progress read failed; `not-applicable` for `progressSource: 'none'`. */
+  /** `missing` when the initial progress read failed; `not-applicable` for `progressSource: 'none'`. */
   baseline: 'present' | 'missing' | 'not-applicable';
-  /** The progress page as read before and after browsing (S07/S08); null where it was not read. */
+  /** The progress page as read before and after browsing; null where it was not read. */
   levels: { initial: LevelSnapshot | null; final: LevelSnapshot | null };
 }
 
 /**
  * Abort reasons a run's signal carries, so the coordinator can tell a user stop from the app
- * exiting or the browser window being closed from outside (§6.2).
+ * exiting or the browser window being closed from outside.
  */
 export type StopRequest = 'user' | 'app-exit' | 'browser-closed';
 

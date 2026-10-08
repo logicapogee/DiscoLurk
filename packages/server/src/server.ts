@@ -4,10 +4,10 @@ import type { Clock, RunEvent } from '@disco-lurk/core';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { bearer, isLoopback, MIN_TOKEN_BYTES, TokenGuard, tokenStrongEnough } from './auth';
 
-/** §10.3: the shell's webview origin (Windows serves it over http://tauri.localhost). */
+/** The shell's webview origin (Windows serves it over http://tauri.localhost). */
 export const TAURI_ORIGINS = ['tauri://localhost', 'http://tauri.localhost'] as const;
 export const WS_AUTH_TIMEOUT_MS = 5000;
-/** §10.3: loopback failures are not counted toward lockout, so each one costs a fixed pause instead. */
+/** Loopback failures are not counted toward lockout, so each one costs a fixed pause instead. */
 export const LOOPBACK_FAILURE_DELAY_MS = 250;
 
 export const WS_CLOSE = { authFailed: 4401, authTimeout: 4408, tokenRotated: 4001 } as const;

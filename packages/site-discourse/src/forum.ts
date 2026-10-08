@@ -1,5 +1,4 @@
 import {
-  abortError,
   isAbortError,
   pauseBetween,
   RunError,
@@ -48,14 +47,16 @@ import {
   topicUrlPattern,
 } from './selectors';
 
-/** Page-load ceilings (I8); reading pace lives in reading.ts and is not shortened by fast pages. */
-const LIST_WAIT_MS = 20_000;
-const ENTER_URL_MS = 15_000;
-const ENTER_CONTENT_MS = 10_000;
-const RETURN_ROW_MS = 15_000;
-const SIGN_IN_CHECK_MS = 20_000;
-const SIGN_IN_POLL_MS = 1_000;
-const CONNECT_SETTLE_MS = 2_000;
+/** Page-load ceilings; reading pace lives in reading.ts and is not shortened by fast pages. */
+const TIMEOUTS = {
+  listMs: 20_000,
+  enterUrlMs: 15_000,
+  enterContentMs: 10_000,
+  returnRowMs: 15_000,
+  signInCheckMs: 20_000,
+  signInPollMs: 1_000,
+  connectSettleMs: 2_000,
+} as const;
 const TITLE_LOG_CHARS = 50;
 
 export interface Credentials {
@@ -63,12 +64,12 @@ export interface Credentials {
   password: string;
 }
 
-/** T08: the one click a run makes on a site, on a topic's title link in the current list. */
+/** The one click a run makes on a site, on a topic's title link in the current list. */
 export interface TitleLinks {
   click(topicId: string): Promise<void>;
 }
 
-/** B10: fills and submits the site's login form, pacing the fields like a person. */
+/** Fills and submits the site's login form, pacing the fields like a person. */
 export interface LoginForm {
   submit(credentials: Credentials, signal: AbortSignal): Promise<void>;
 }
@@ -78,31 +79,31 @@ export interface DiscourseForumOptions {
   page: ReadOnlyPage;
   titleLinks: TitleLinks;
   deps: RuntimeDeps;
-  /** Whether a person can act in the window, e.g. approve connect's authorization page (§5.1). */
+  /** Whether a person can act in the window, e.g. approve connect's authorization page. */
   headless: boolean;
-  /** B10: only CLI/Docker pass credentials, from the environment or stdin. */
+  /** Only CLI/Docker pass credentials, from the environment or stdin. */
   login?: { credentials: Credentials; form: LoginForm };
   warn?: (code: string, message: string) => void;
 }
 
-/** The selector of a topic's title link in its list row (T08). */
+/** The selector of a topic's title link in its list row. */
 export const titleLinkSelector = (topicId: string) => `${rowSelector(topicId)} ${SELECTORS.topicLink}`;
 
-/** T02: deep mode enters the category sorted by reply count through the URL; quick mode uses the plain list. */
+/** Deep mode enters the category sorted by reply count through the URL; quick mode uses the plain list. */
 export function listUrlFor(site: Pick<Site, 'baseUrl'>, category: Pick<Category, 'path'>, browseMode: BrowseMode): string {
   const url = new URL(category.path, site.baseUrl);
   if (browseMode === 'deep') url.search = SORTED_BY_POSTS_QUERY;
   return url.href;
 }
 
-/** T10: a sorted list must come back still sorted. */
+/** A sorted list must come back still sorted. */
 export function sortKept(listUrl: string, currentUrl: string): boolean {
   const wanted = new URL(listUrl).searchParams.get('order');
   return wanted === null || new URL(currentUrl).searchParams.get('order') === wanted;
 }
 
 /**
- * T11: the row found again by topic ID decides. A missing row proves nothing, so it is
+ * The row found again by topic ID decides. A missing row proves nothing, so it is
  * `indeterminate`, never success. Only a topic that carried the `new-topic` badge before it was
  * entered can lose it; for any other topic the relocated row is all there is to report.
  */
@@ -113,7 +114,7 @@ export function classifyReturn(hadBadge: boolean, row: { newTopicBadge: boolean 
 }
 
 /**
- * §7.1 step 2 / Appendix A: every category the page lists as an entry of its own counts, a
+ * Every category the page lists as an entry of its own counts, a
  * subcategory with its own row (`/c/resource/cloud-asset/94`) included; badges never reach here.
  */
 export function discoveredCategories(links: readonly CategoryLink[]): Category[] {
@@ -132,7 +133,8 @@ export function navigationFailure(err: unknown): RunFailure {
   return { code, message };
 }
 
-const missAs =
+/** A page read that comes up empty yields `value`; any other failure is rethrown. */
+const fallbackUnlessUnexpected =
   <T>(value: T) =>
   (err: unknown): T => {
     if (expectedMiss(err)) return value;
@@ -149,16 +151,16 @@ class PageFloorSurface implements FloorSurface {
   ) {}
 
   async readCounter(): Promise<FloorReading | null> {
-    const texts = await Promise.all([this.page.text(SELECTORS.floorWide), this.page.texts(SELECTORS.floorNarrow)]).catch(missAs(null));
+    const texts = await Promise.all([this.page.text(SELECTORS.floorWide), this.page.texts(SELECTORS.floorNarrow)]).catch(fallbackUnlessUnexpected(null));
     return texts && floorCounterFromText(...texts);
   }
 
   countPosts(): Promise<number> {
-    return this.page.count(TOPIC_POST).catch(missAs(0));
+    return this.page.count(TOPIC_POST).catch(fallbackUnlessUnexpected(0));
   }
 
   async scroll(dy: number): Promise<void> {
-    // Real wheel input over the post stream: Discourse's screen tracker pauses when it sees no scroll events (§3).
+    // Real wheel input over the post stream: Discourse's screen tracker pauses when it sees no scroll events.
     if (!this.pointed) {
       await this.page.moveMouse(this.center.x, this.center.y);
       this.pointed = true;
@@ -168,8 +170,8 @@ class PageFloorSurface implements FloorSurface {
 }
 
 /**
- * §6.1 production `ForumPort`: one implementation for every Discourse site, configured only by
- * `Site`. It reads and navigates; the only form it ever submits is the B10 password login.
+ * The production `ForumPort`: one implementation for every Discourse site, configured only by
+ * `Site`. It reads and navigates; the only form it ever submits is the password login.
  */
 export class DiscourseForum implements ForumPort {
   private readonly opts: DiscourseForumOptions & Required<Pick<DiscourseForumOptions, 'warn'>>;
@@ -204,15 +206,15 @@ export class DiscourseForum implements ForumPort {
   }
 
   private appears(selector: string, timeout: number, signal: AbortSignal, state: 'attached' | 'visible' = 'attached'): Promise<boolean> {
-    return untilAbort(this.opts.page.waitFor(selector, { state, timeout }).then(() => true, missAs(false)), signal);
+    return untilAbort(this.opts.page.waitFor(selector, { state, timeout }).then(() => true, fallbackUnlessUnexpected(false)), signal);
   }
 
   private async count(selector: string): Promise<number> {
-    return this.opts.page.count(selector).catch(missAs(0));
+    return this.opts.page.count(selector).catch(fallbackUnlessUnexpected(0));
   }
 
   private async challenged(): Promise<boolean> {
-    const [marks, title] = await Promise.all([this.count(CHALLENGE_SELECTOR), this.opts.page.title().catch(missAs(''))]);
+    const [marks, title] = await Promise.all([this.count(CHALLENGE_SELECTOR), this.opts.page.title().catch(fallbackUnlessUnexpected(''))]);
     return marks > 0 || CHALLENGE_TITLE.test(title);
   }
 
@@ -236,7 +238,7 @@ export class DiscourseForum implements ForumPort {
   }
 
   /**
-   * B04 without a person: one look at the site. The page is only loaded when it is elsewhere, so a
+   * The sign-in check without a person: one look at the site. The page is only loaded when it is elsewhere, so a
    * recheck during a headed login never reloads what the user is doing.
    */
   private async check(signal: AbortSignal): Promise<AuthResult> {
@@ -246,7 +248,7 @@ export class DiscourseForum implements ForumPort {
     }
     await this.goto(this.site.baseUrl, signal);
     const settled = await pollUntil<AuthResult>(
-      { intervalMs: SIGN_IN_POLL_MS, timeoutMs: SIGN_IN_CHECK_MS, clock: this.opts.deps.clock, sleeper: this.opts.deps.sleeper },
+      { intervalMs: TIMEOUTS.signInPollMs, timeoutMs: TIMEOUTS.signInCheckMs, clock: this.opts.deps.clock, sleeper: this.opts.deps.sleeper },
       async () => {
         const [user, anonymous] = await Promise.all([this.count(SELECTORS.currentUser), this.count(`${ANONYMOUS_HEADER}, ${SELECTORS.loginUsername}`)]);
         if (user > 0) return { status: 'authenticated' };
@@ -258,7 +260,7 @@ export class DiscourseForum implements ForumPort {
     return (await this.challenged()) ? { status: 'challenge-detected' } : { status: 'needs-auth' };
   }
 
-  /** B04/B05: the person at the headed window signs in, solving whatever the site asks; nothing reloads. */
+  /** The person at the headed window signs in, solving whatever the site asks; nothing reloads. */
   private async waitForUser(signal: AbortSignal): Promise<AuthResult> {
     if (!this.onSite()) await this.goto(this.site.baseUrl, signal);
     const ok = await waitForCurrentUser(this.opts.page, { signal, clock: this.opts.deps.clock, sleeper: this.opts.deps.sleeper });
@@ -266,16 +268,16 @@ export class DiscourseForum implements ForumPort {
     return (await this.challenged()) ? { status: 'challenge-detected' } : { status: 'needs-auth' };
   }
 
-  /** B10: the three login-form selectors, then back to the home page to confirm with `#current-user`. */
+  /** The three login-form selectors, then back to the home page to confirm with `#current-user`. */
   private async passwordLogin(login: NonNullable<DiscourseForumOptions['login']>, signal: AbortSignal): Promise<AuthResult> {
     await this.goto(this.url('/login'), signal);
-    if (!(await this.appears(SELECTORS.loginUsername, SIGN_IN_CHECK_MS, signal))) {
+    if (!(await this.appears(SELECTORS.loginUsername, TIMEOUTS.signInCheckMs, signal))) {
       return (await this.challenged()) ? { status: 'challenge-detected' } : { status: 'needs-auth' };
     }
     await login.form.submit(login.credentials, signal);
-    await this.appears(SELECTORS.currentUser, SIGN_IN_CHECK_MS, signal);
+    await this.appears(SELECTORS.currentUser, TIMEOUTS.signInCheckMs, signal);
     await this.goto(this.site.baseUrl, signal);
-    if (await this.appears(SELECTORS.currentUser, SIGN_IN_CHECK_MS, signal)) return { status: 'authenticated' };
+    if (await this.appears(SELECTORS.currentUser, TIMEOUTS.signInCheckMs, signal)) return { status: 'authenticated' };
     return (await this.challenged()) ? { status: 'challenge-detected' } : { status: 'needs-auth' };
   }
 
@@ -287,7 +289,7 @@ export class DiscourseForum implements ForumPort {
 
   async discoverCategories(signal: AbortSignal): Promise<Category[]> {
     await this.goto(this.url('/categories'), signal);
-    if (!(await this.appears(CATEGORY_LINK, LIST_WAIT_MS, signal))) {
+    if (!(await this.appears(CATEGORY_LINK, TIMEOUTS.listMs, signal))) {
       await this.explainMissingPage();
       return [];
     }
@@ -299,23 +301,23 @@ export class DiscourseForum implements ForumPort {
     const listUrl = listUrlFor(this.site, category, strategy.browseMode);
     await this.goto(listUrl, signal);
     this.listUrl = listUrl;
-    if (!(await this.appears(SELECTORS.topicRow, LIST_WAIT_MS, signal))) {
+    if (!(await this.appears(SELECTORS.topicRow, TIMEOUTS.listMs, signal))) {
       await this.explainMissingPage();
       return { category, topics: [] };
     }
-    // Appendix B: list appeared + 1–2 s.
+    // A person glances over the list for 1–2 s once it appears.
     await this.pause(1, 2, signal);
     const topics: TopicCandidate[] = parseTopicList(await this.content())
       .filter((r) => r.id && r.hasTitleLink)
       .map((r) => ({ id: r.id, title: r.title.slice(0, TITLE_LOG_CHARS), unread: r.unread, pinned: r.pinned }));
-    // docofcard's Feed category renders news cards as topic rows without a title link (Phase 1 smoke):
+    // docofcard's Feed category renders news cards as topic rows without a title link:
     // nothing on such a page can be clicked, so it is as empty as a page without rows.
     return { category, topics };
   }
 
   async enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit> {
     throwIfAborted(signal);
-    // T08: the title link on the current list page is the only way into a candidate; there is no URL fallback.
+    // The title link on the current list page is the only way into a candidate; there is no URL fallback.
     const link = titleLinkSelector(topic.id);
     if ((await this.opts.page.count(link)) === 0) return { topic, entered: false, reason: 'row-not-on-list' };
     try {
@@ -327,8 +329,8 @@ export class DiscourseForum implements ForumPort {
       throw err;
     }
 
-    const onTopic = await untilAbort(this.opts.page.waitForURL(topicUrlPattern(topic.id), { timeout: ENTER_URL_MS }).then(() => true, missAs(false)), signal);
-    const rendered = onTopic && (await this.appears(`${SELECTORS.floorWide}, ${SELECTORS.floorNarrow}, ${TOPIC_POST}`, ENTER_CONTENT_MS, signal));
+    const onTopic = await untilAbort(this.opts.page.waitForURL(topicUrlPattern(topic.id), { timeout: TIMEOUTS.enterUrlMs }).then(() => true, fallbackUnlessUnexpected(false)), signal);
+    const rendered = onTopic && (await this.appears(`${SELECTORS.floorWide}, ${SELECTORS.floorNarrow}, ${TOPIC_POST}`, TIMEOUTS.enterContentMs, signal));
     if (rendered) return { topic, entered: true };
 
     await this.backToList(topic.id, signal);
@@ -358,11 +360,11 @@ export class DiscourseForum implements ForumPort {
   private async backToList(topicId: string, signal: AbortSignal): Promise<void> {
     if (!this.listUrl || this.onList()) return;
     if (topicUrlPattern(topicId).test(this.opts.page.url())) {
-      await untilAbort(this.opts.page.goBack('commit').catch(missAs(undefined)), signal);
-      if (this.onList() && (await this.appears(SELECTORS.topicRow, RETURN_ROW_MS, signal))) return;
+      await untilAbort(this.opts.page.goBack('commit').catch(fallbackUnlessUnexpected(undefined)), signal);
+      if (this.onList() && (await this.appears(SELECTORS.topicRow, TIMEOUTS.returnRowMs, signal))) return;
     }
     await this.goto(this.listUrl, signal);
-    await this.appears(SELECTORS.topicRow, LIST_WAIT_MS, signal);
+    await this.appears(SELECTORS.topicRow, TIMEOUTS.listMs, signal);
   }
 
   async readTopic(visit: TopicVisit, strategy: ReadStrategy, signal: AbortSignal): Promise<ReadResult> {
@@ -381,21 +383,21 @@ export class DiscourseForum implements ForumPort {
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {
     if (!visit.entered) return 'indeterminate';
     const id = visit.topic.id;
-    await untilAbort(this.opts.page.goBack('commit').catch(missAs(undefined)), signal);
+    await untilAbort(this.opts.page.goBack('commit').catch(fallbackUnlessUnexpected(undefined)), signal);
     const row = rowSelector(id);
-    let found = await this.appears(row, RETURN_ROW_MS, signal, 'visible');
+    let found = await this.appears(row, TIMEOUTS.returnRowMs, signal, 'visible');
     if (!found && this.listUrl) {
-      // T10: one refresh to re-check before calling it indeterminate.
+      // One refresh to re-check before calling it indeterminate.
       this.opts.warn('return-row-missing', `Topic ${id} was not on the list after going back; reloading the list once`);
       await this.goto(this.listUrl, signal);
-      found = await this.appears(row, RETURN_ROW_MS, signal, 'visible');
+      found = await this.appears(row, TIMEOUTS.returnRowMs, signal, 'visible');
     }
-    // T10 / §3: 2–3 s on the list lets the site flush the topic's last /topics/timings.
+    // 2–3 s on the list lets the site flush the topic's last /topics/timings.
     await this.pause(2, 3, signal);
     if (this.listUrl && !sortKept(this.listUrl, this.opts.page.url())) {
       this.opts.warn('sort-lost', `Back on ${this.opts.page.url()} instead of ${this.listUrl}; reopening the sorted list`);
       await this.goto(this.listUrl, signal);
-      found = await this.appears(row, LIST_WAIT_MS, signal, 'visible');
+      found = await this.appears(row, TIMEOUTS.listMs, signal, 'visible');
     }
     if (!found) return classifyReturn(visit.topic.unread, null);
     return classifyReturn(visit.topic.unread, { newTopicBadge: (await this.opts.page.count(`${row} ${SELECTORS.newTopicBadge}`)) > 0 });
@@ -407,17 +409,17 @@ export class DiscourseForum implements ForumPort {
     return module.source === 'connect-linuxdo' ? this.readConnect(this.site.progressUrl, signal) : this.readTrustLevel(this.site.progressUrl, signal);
   }
 
-  /** S07 for connect: enter, wait 2 s, force a reload, wait for the page, then parse (§5.1). */
+  /** Connect: enter, wait 2 s, force a reload, wait for the page, then parse. */
   private async readConnect(url: string, signal: AbortSignal): Promise<LevelSnapshot> {
     const ready = () => this.appears(CONNECT_READY, PROGRESS_READY_MS, signal);
     await this.goto(url, signal);
     await this.appears(`${CONNECT_READY}, ${CONNECT_AUTHORIZE_FORM}`, PROGRESS_READY_MS, signal);
     if ((await this.count(CONNECT_READY)) === 0) {
-      // Without any tl3 group the parser raises selector-contract-broken, which is exactly the report §5.1 asks for.
+      // Without any tl3 group the parser raises selector-contract-broken, which is exactly the report a changed page deserves.
       if (!(await this.onConnectAuthorizePage())) return parseConnect(await this.content());
       await this.awaitConnectAuthorization(url, signal);
     }
-    await this.opts.deps.sleeper.sleep(CONNECT_SETTLE_MS, signal);
+    await this.opts.deps.sleeper.sleep(TIMEOUTS.connectSettleMs, signal);
     await untilAbort(this.opts.page.reload('domcontentloaded'), signal);
     if (!(await ready())) throw new RunError('page-timeout', `${new URL(url).host} showed no progress within ${PROGRESS_READY_MS / 1000} s after the reload`);
     return parseConnect(await this.content());
@@ -434,7 +436,7 @@ export class DiscourseForum implements ForumPort {
   }
 
   /**
-   * §5.1: authorization is the user's to give. A headed window waits for it like a login (B04), never
+   * Authorization is the user's to give. A headed window waits for it like a login, never
    * reloading; a headless run cannot get it and ends as needs-auth.
    */
   private async awaitConnectAuthorization(url: string, signal: AbortSignal): Promise<void> {
@@ -451,7 +453,7 @@ export class DiscourseForum implements ForumPort {
     if (!authorized) throw new RunError('needs-auth', `${host} authorization was not given within ${LOGIN_TIMEOUT_MS / 60_000} minutes`);
   }
 
-  /** S07 for docofcard: the table's rows mark readiness; the loader stays in the DOM after they render (§5.1b). */
+  /** Docofcard: the table's rows mark readiness; the loader stays in the DOM after they render. */
   private async readTrustLevel(url: string, signal: AbortSignal): Promise<LevelSnapshot> {
     const untilRows = async () => {
       if (await this.appears(TRUST_LEVEL_SELECTORS.rows, TRUST_LEVEL_READY_MS, signal)) return;
@@ -468,7 +470,7 @@ export class DiscourseForum implements ForumPort {
       await this.explainMissingPage();
       throw new RunError('page-timeout', 'Trust level table disappeared after reload');
     }
-    // B04: the username comes from where /my/trust-level redirected.
+    // The username comes from where /my/trust-level redirected.
     const user = usernameFromUrl(this.opts.page.url());
     return user && !parsed.snapshot.username ? { ...parsed.snapshot, username: user } : parsed.snapshot;
   }

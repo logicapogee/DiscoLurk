@@ -8,7 +8,7 @@ export const categorySchema = z.object({
   enabledByDefault: z.boolean(),
 });
 
-/** §2.2; refinements tie each source field to the data it needs. */
+/** Refinements tie each source field to the data it needs. */
 export const siteSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
@@ -55,7 +55,7 @@ interface CategoriesFile {
 }
 
 /**
- * `data/sites.json` names its category table by file (§6.3 keeps `categories.json` separate);
+ * `data/sites.json` names its category table by file (`categories.json` stays separate);
  * `readData` resolves those names so this stays free of filesystem and bundling concerns.
  */
 export function loadBuiltinSites(sitesFile: SitesFile, readData: (name: string) => unknown): Site[] {

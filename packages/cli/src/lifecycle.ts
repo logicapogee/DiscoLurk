@@ -2,7 +2,7 @@ import type { Readable } from 'node:stream';
 
 export type Cleanup = () => Promise<void>;
 
-/** §10.4: the shell allows 15 s for shutdown before it kills the sidecar. */
+/** The shell allows 15 s for shutdown before it kills the sidecar. */
 export const SHUTDOWN_BUDGET_MS = 15_000;
 
 /**

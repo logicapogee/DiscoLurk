@@ -22,11 +22,11 @@ export interface BrowserSession {
   close(): Promise<void>;
 }
 
-/** F09: headed windows are 1200 wide and as tall as the screen; headless uses a fixed tall viewport. */
+/** Headed windows are 1200 wide and as tall as the screen; headless uses a fixed tall viewport. */
 export const HEADED_WIDTH = 1200;
 export const HEADLESS_VIEWPORT = { width: 1280, height: 1600 } as const;
 
-/** B07; the browser's own user agent is kept (B08). */
+/** Hides the automation flag; the browser's own user agent is kept. */
 export const LAUNCH_ARGS = ['--disable-blink-features=AutomationControlled'];
 export const IGNORE_DEFAULT_ARGS = ['--enable-automation'];
 
@@ -48,7 +48,7 @@ export function launchOptions(opts: Omit<LaunchOptions, 'profileDir' | 'runId'>)
   };
 }
 
-/** B01/B02/B07: one app-owned Profile directory, locked for the lifetime of the browser. */
+/** One app-owned Profile directory, locked for the lifetime of the browser. */
 export async function launchProfile(opts: LaunchOptions): Promise<BrowserSession> {
   await mkdir(opts.profileDir, { recursive: true });
   const lock = await acquireProfileLock(opts.profileDir, opts.runId);

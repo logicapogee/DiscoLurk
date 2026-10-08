@@ -1,4 +1,4 @@
-// Phase 0: runs every Appendix A selector and both §5 progress parsers over the captured fixtures
+// Runs every selector of the design's table and both progress parsers over the captured fixtures
 // and writes docs/PHASE0_REPORT.md. Counts come from linkedom and, unless --no-browser, are
 // cross-checked in headless system Chrome with the fixture loaded offline (scripts off, every
 // request aborted). Nothing here touches a real site.
@@ -41,7 +41,7 @@ interface Expectation {
   in: string[];
   mode: 'each' | 'any';
   min?: number;
-  /** Selectors sharing a group pass together when any one of them matches (A03 liked markers, A06 editors). */
+  /** Selectors sharing a group pass together when any one of them matches (liked markers, editors). */
   group?: string;
   /** Words used to suggest replacements found in the fixture when the selector misses. */
   hints: string[];
@@ -50,7 +50,7 @@ interface Expectation {
 
 /**
  * Selectors whose miss is a fact about the data at capture time, not a broken selector; recorded as
- * such instead of failing (rulings on the Phase 0 report).
+ * such instead of failing (rulings on the fixture report).
  */
 const ABSENT_IN_DATA: Record<string, Partial<Record<SelectorName, string>>> = {
   docofcard: {
@@ -59,7 +59,7 @@ const ABSENT_IN_DATA: Record<string, Partial<Record<SelectorName, string>>> = {
   },
 };
 
-/** Site facts found in Phase 0 that the selector table cannot show. */
+/** Site facts found while capturing fixtures that the selector table cannot show. */
 const SITE_NOTES: Record<string, string[]> = {
   docofcard: [
     '列表由站点主题渲染（`gf-*`），表头没有排序按钮；T02 两站统一用 `?order=posts` 进入，本次 list-sorted 即由该地址打开。',
@@ -68,7 +68,7 @@ const SITE_NOTES: Record<string, string[]> = {
   ],
 };
 
-/** Where each Appendix A selector is expected to match, by fixture kind. */
+/** Where each selector of the design's table is expected to match, by fixture kind. */
 const EXPECT: Record<SelectorName, Expectation> = {
   currentUser: { in: LOGGED_IN, mode: 'each', hints: ['current-user', 'header-dropdown', 'user-menu'] },
   loginUsername: { in: ['login'], mode: 'each', hints: ['login', 'account-name', 'username'] },
@@ -90,10 +90,10 @@ const EXPECT: Record<SelectorName, Expectation> = {
   firstPostById: { in: TOPICS, mode: 'any', hints: ['post_'] },
   likeButton: { in: ['topic-wide', 'liked'], mode: 'each', hints: ['like', 'reaction'] },
   likedReacted: { in: ['liked'], mode: 'any', hints: ['has-reacted', 'reaction'] },
-  likedIcon: { in: ['liked'], mode: 'any', hints: ['d-liked', 'reaction'], note: 'second evidence (A03)' },
+  likedIcon: { in: ['liked'], mode: 'any', hints: ['d-liked', 'reaction'], note: 'second evidence' },
   replyOpen: { in: ['reply-editor'], mode: 'each', hints: ['topic-footer', 'create', 'reply'] },
-  replyTextarea: { in: ['reply-editor'], mode: 'any', group: 'editor', hints: ['reply-control', 'textarea', 'editor'], note: 'textarea or .d-editor-input is enough (A06)' },
-  replyEditor: { in: ['reply-editor'], mode: 'any', group: 'editor', hints: ['d-editor', 'ProseMirror', 'editor'], note: 'textarea or .d-editor-input is enough (A06)' },
+  replyTextarea: { in: ['reply-editor'], mode: 'any', group: 'editor', hints: ['reply-control', 'textarea', 'editor'], note: 'textarea or .d-editor-input is enough' },
+  replyEditor: { in: ['reply-editor'], mode: 'any', group: 'editor', hints: ['d-editor', 'ProseMirror', 'editor'], note: 'textarea or .d-editor-input is enough' },
   replySubmit: { in: ['reply-editor'], mode: 'each', hints: ['reply-control', 'create', 'submit'] },
 };
 

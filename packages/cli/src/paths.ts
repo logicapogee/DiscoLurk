@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-/** §8.3 / D15: `<appData>/disco-lurk/`, using each platform's application-data root. */
+/** `<appData>/disco-lurk/`, using each platform's application-data root. */
 export function appDataDir(platform = process.platform, env = process.env, home = homedir()): string {
   switch (platform) {
     case 'darwin':

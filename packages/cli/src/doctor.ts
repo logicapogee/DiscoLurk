@@ -41,7 +41,7 @@ export interface DoctorOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-/** Playwright's own install locations for `channel: 'chrome' | 'msedge'` (§8.1). */
+/** Playwright's own install locations for `channel: 'chrome' | 'msedge'`. */
 export function browserCandidates(channel: BrowserChannel, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
   const home = env.HOME ?? '';
   if (platform === 'darwin') {
@@ -162,7 +162,7 @@ async function profileList(dir: string, siteId: string): Promise<string[]> {
   return out;
 }
 
-/** B06 / §8.3: which Profiles exist per site, and whether one is held by a running browser. */
+/** Which Profiles exist per site, and whether one is held by a running browser. */
 async function profileInventoryCheck(dir: string, sites: Site[]): Promise<DoctorCheck> {
   const parts: string[] = [];
   const missing: string[] = [];
@@ -180,7 +180,7 @@ async function profileInventoryCheck(dir: string, sites: Site[]): Promise<Doctor
   };
 }
 
-/** §2.2 / §7.1: the categories a run would use without `--categories`. */
+/** The categories a run would use without `--categories`. */
 async function siteCheck(site: Site, categories: () => Promise<Category[]>): Promise<DoctorCheck> {
   const title = `站点 ${site.id}（${site.displayName}）`;
   let list: Category[];
@@ -197,7 +197,7 @@ async function siteCheck(site: Site, categories: () => Promise<Category[]>): Pro
   return { id: `site-${site.id}`, title, status: 'ok', detail };
 }
 
-/** §11.3 */
+/** Checks the environment a run needs: browsers, Profiles, data files and, optionally, the network. */
 export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;

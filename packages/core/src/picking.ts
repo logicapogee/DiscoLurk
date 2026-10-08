@@ -5,7 +5,7 @@ const MIN_UNREAD_BEFORE_TOPUP = 3;
 const MAX_READ_TOPUP = 3;
 
 /**
- * T04 + T06: pinned rows never qualify; unread topics come first, a short unread list is topped
+ * Pinned rows never qualify; unread topics come first, a short unread list is topped
  * up with at most three read topics, and read topics are used only when nothing is unread.
  */
 export function selectCandidates(rows: readonly TopicCandidate[], random: RandomSource): TopicCandidate[] {
@@ -17,7 +17,7 @@ export function selectCandidates(rows: readonly TopicCandidate[], random: Random
   return [...unread, ...shuffle(read, random).slice(0, MAX_READ_TOPUP)];
 }
 
-/** T07: draws `min`–`max` candidates per category, or all of them when there are fewer. */
+/** Draws `min`–`max` candidates per category, or all of them when there are fewer. */
 export function sampleTopics<T>(
   candidates: readonly T[],
   random: RandomSource,

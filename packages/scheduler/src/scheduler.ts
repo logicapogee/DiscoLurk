@@ -26,7 +26,7 @@ export interface SchedulerDeps {
   newId(): string;
   loadPreset(presetId: string): { preset: RunPreset; categories: Category[] };
   siteOf(profileId: ProfileId): SiteId;
-  /** Runs are exclusive per Profile, not per site (§9.1). */
+  /** Runs are exclusive per Profile, not per site. */
   profileBusy(profileId: ProfileId): boolean;
   /** False when there is no graphical session for a headed browser (locked screen, logged out, SSH). */
   displayAvailable(): boolean;
@@ -47,7 +47,7 @@ export class ScheduleSkipped extends Error {
 
 const emptyScheduleState = (): ScheduleState => ({ paused: false, runOnStartConsumed: false, generatedDays: [], planned: [], history: [] });
 
-/** §9.1 / D5: materializes runs into immutable snapshots up front and persists them before anything fires. */
+/** Materializes runs into immutable snapshots up front and persists them before anything fires. */
 export class PlanScheduler implements Scheduler {
   private specs = new Map<ScheduleId, ScheduleSpec>();
   private state: SchedulerState | null = null;
@@ -116,7 +116,7 @@ export class PlanScheduler implements Scheduler {
     };
     if (!spec.enabled) skip('disabled');
     if (s.paused) skip('paused');
-    // P7: queueing would merge two runs into one long session and break the random-day semantics.
+    // Queueing would merge two runs into one long session and break the random-day semantics.
     if (this.deps.profileBusy(spec.profileId)) skip('overlap');
     let run = plan;
     if (plan.browserMode === 'headed' && !this.deps.displayAvailable()) {

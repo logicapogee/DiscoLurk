@@ -2,7 +2,7 @@ import { RunError, type LevelMetric, type LevelSnapshot } from '@disco-lurk/core
 import { toInt, type DomRoot } from '../parse';
 import type { ProgressModule } from './types';
 
-/** §5.1b */
+/** The docofcard trust level page (`/my/trust-level`). */
 export const trustLevelDocofcard: ProgressModule = {
   source: 'trust-level-docofcard',
   labelMap: {
@@ -31,8 +31,8 @@ const text = (el: Element | null | undefined) => (el?.textContent ?? '').replace
 export type TrustLevelPage = { state: 'loading' } | { state: 'ready'; snapshot: LevelSnapshot };
 
 /**
- * §5.1b. The page renders a loader before its table; until a table row exists it reports
- * `loading`, and the caller keeps waiting (S07). Without container or loader the contract is broken.
+ * The page renders a loader before its table; until a table row exists it reports
+ * `loading`, and the caller keeps waiting. Without container or loader the contract is broken.
  */
 export function parseTrustLevel(root: DomRoot): TrustLevelPage {
   const S = TRUST_LEVEL_SELECTORS;

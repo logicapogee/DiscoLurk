@@ -29,12 +29,12 @@ export interface LoginWaitOptions extends Partial<PollOptions> {
   signal: AbortSignal;
 }
 
-/** B04: interval and ceiling of the headed login poll. */
+/** Interval and ceiling of the headed login poll. */
 export const LOGIN_POLL_MS = 5_000;
 export const LOGIN_TIMEOUT_MS = 300_000;
 
 /**
- * B04: watches for `#current-user` without ever reloading, so a captcha, password entry or
+ * Watches for `#current-user` without ever reloading, so a captcha, password entry or
  * redirect in progress is left alone. Resolves false at the ceiling.
  */
 export async function waitForCurrentUser(page: ReadOnlyPage, opts: LoginWaitOptions): Promise<boolean> {
@@ -53,13 +53,13 @@ export async function waitForCurrentUser(page: ReadOnlyPage, opts: LoginWaitOpti
 
 const USER_PATH = /\/u\/([^/?#]+)/;
 
-/** B04: the username in a `/u/<name>` address, which is where `/my/...` pages redirect to. */
+/** The username in a `/u/<name>` address, which is where `/my/...` pages redirect to. */
 export function usernameFromUrl(url: string): string | null {
   const m = USER_PATH.exec(new URL(url).pathname);
   return m ? decodeURIComponent(m[1]!) : null;
 }
 
-/** B04: the username comes from where `/my/...` redirects, never from the avatar's title. */
+/** The username comes from where `/my/...` redirects, never from the avatar's title. */
 export async function readUsername(page: ReadOnlyPage, baseUrl: string): Promise<string | null> {
   await page.goto(new URL('/my/activity', baseUrl).href);
   await page.waitForURL(USER_PATH, { timeout: 15_000 }).catch(() => {});

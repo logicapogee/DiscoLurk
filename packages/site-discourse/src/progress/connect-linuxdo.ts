@@ -3,7 +3,7 @@ import { toInt, type DomRoot } from '../parse';
 import type { ProgressModule } from './types';
 
 /**
- * §5.1 labels as tests/fixtures/linuxdo/connect.html shows them. Counts of days, distinct users
+ * Connect's labels as tests/fixtures/linuxdo/connect.html shows them. Counts of days, distinct users
  * and flags raised by the user have no local estimate and stay `other`.
  */
 export const connectLinuxdo: ProgressModule = {
@@ -31,7 +31,7 @@ function metric(label: string, current: number | null, required: number | null):
   return { label, key: connectLinuxdo.labelMap[label] ?? 'other', current, required };
 }
 
-/** §5.1: all four `tl3-*` groups; a page with none of them breaks the contract. */
+/** All four `tl3-*` groups; a page with none of them breaks the contract. */
 export function parseConnect(root: DomRoot): LevelSnapshot {
   const metrics: LevelMetric[] = [];
   const push = (m: LevelMetric | null) => m && metrics.push(m);

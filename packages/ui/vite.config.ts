@@ -9,7 +9,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: false,
-    // §10.5: the oldest engines sharing this build are Safari 16 (WKWebView) and WebKitGTK 2.40.
+    // The oldest engines sharing this build are Safari 16 (WKWebView) and WebKitGTK 2.40.
     target: ['safari16', 'chrome110'],
   },
 });

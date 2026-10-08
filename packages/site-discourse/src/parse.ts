@@ -20,13 +20,13 @@ export interface ListRow {
   id: string;
   title: string;
   pinned: boolean;
-  /** T05: only the `new-topic` badge marks a never-visited topic. */
+  /** Only the `new-topic` badge marks a never-visited topic. */
   unread: boolean;
   unreadPosts: boolean;
   hasTitleLink: boolean;
 }
 
-/** T03–T05 */
+/** Rows of a topic list with what candidate picking needs from each. */
 export function parseTopicList(root: DomRoot): ListRow[] {
   return Array.from(root.querySelectorAll(SELECTORS.topicRow)).map((row) => {
     const link = row.querySelector(SELECTORS.topicLink);
@@ -48,7 +48,7 @@ export interface FloorReading {
 }
 
 /**
- * §4.3 from the counters' text: the wide timeline shows `current / total`; the narrow progress
+ * The floor counter from its text: the wide timeline shows `current / total`; the narrow progress
  * widget holds three spans of which the 1st and 3rd are current and total. Null when neither
  * renders a pair of numbers.
  */
@@ -66,7 +66,7 @@ export function parseFloorCounter(root: DomRoot): FloorReading | null {
   return floorCounterFromText(wide ? text(wide) : null, Array.from(root.querySelectorAll(SELECTORS.floorNarrow)).map(text));
 }
 
-/** A03 marker counts within `root`: the reactions container and, as second evidence, the liked icon. */
+/** Liked-marker counts within `root`: the reactions container and, as second evidence, the liked icon. */
 export function likedMarkers(root: DomRoot): { reacted: number; likedIcon: number } {
   return {
     reacted: root.querySelectorAll(SELECTORS.likedReacted).length,
@@ -74,13 +74,13 @@ export function likedMarkers(root: DomRoot): { reacted: number; likedIcon: numbe
   };
 }
 
-/** A03: a floor showing either marker is already liked, and its like button must not be pressed. */
+/** A floor showing either marker is already liked, and its like button must not be pressed. */
 export function isLiked(post: DomRoot): boolean {
   const m = likedMarkers(post);
   return m.reacted > 0 || m.likedIcon > 0;
 }
 
-/** A06: which of the editor selector sets the open composer exposes. */
+/** Which of the editor selector sets the open composer exposes. */
 export function editorKind(root: DomRoot): 'textarea' | 'd-editor-input' | 'prosemirror' | null {
   if (root.querySelector(SELECTORS.replyTextarea)) return 'textarea';
   if (root.querySelector(SELECTORS.replyEditor)) return 'd-editor-input';
@@ -108,7 +108,7 @@ function categoryName(a: Element): string {
 }
 
 /**
- * Category entries on the `/categories` page (§7.1, Appendix A): slug and id from `a[href]`
+ * Category entries on the `/categories` page: slug and id from `a[href]`
  * matching `/c/<slug>/<id>`, the name from the category name element inside the link. Links without
  * one, such as category badges on topic rows or subcategory badges, are not entries.
  */

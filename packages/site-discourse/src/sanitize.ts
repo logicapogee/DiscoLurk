@@ -35,7 +35,7 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const nameRe = (name: string, flags: string) => new RegExp(`(?<![A-Za-z0-9_])${escape(name)}(?![A-Za-z0-9_])`, flags);
 
 /**
- * Fixtures and diagnostics (§11.2) keep page structure but no identity: scripts and preloaded
+ * Fixtures and diagnostics keep page structure but no identity: scripts and preloaded
  * data (which carry the current user and CSRF token) are dropped, avatars point to a placeholder,
  * emails and form values are cleared, and every username or display name found on the page is
  * replaced by a stable alias, together with `knownUsernames` the caller already holds. Names in

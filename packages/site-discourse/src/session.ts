@@ -21,7 +21,7 @@ export interface OpenForumOptions {
 const LAUNCH_ATTEMPTS = 3;
 
 /**
- * B03: a missing browser, a held Profile lock and permission errors are reported at once; any
+ * A missing browser, a held Profile lock and permission errors are reported at once; any
  * other launch failure is retried, up to three attempts in all.
  */
 function retryable(err: unknown): boolean {

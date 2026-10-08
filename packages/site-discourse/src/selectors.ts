@@ -1,5 +1,5 @@
 /**
- * Appendix A, verbatim. Both built-in sites share these; a per-site difference found in Phase 0
+ * The design's selector table, verbatim. Both built-in sites share these; a per-site difference
  * belongs in `Site`, not in a second copy of this table.
  */
 export const SELECTORS = {
@@ -15,7 +15,7 @@ export const SELECTORS = {
   floorWide: '.timeline-replies',
   floorNarrow: '#topic-progress .nums span',
   firstPost: '.topic-post[data-post-number="1"]',
-  /** A cross-check only: once a long topic cloaks floor 1 this is an empty `div.post-stream--cloaked` (A04). */
+  /** A cross-check only: once a long topic cloaks floor 1 this is an empty `div.post-stream--cloaked`. */
   firstPostById: '#post_1',
   likeButton: 'button.btn-toggle-reaction-like',
   likedReacted: '.discourse-reactions-actions.has-reacted',
@@ -28,18 +28,18 @@ export const SELECTORS = {
 
 export type SelectorName = keyof typeof SELECTORS;
 
-/** §4.5: diagnostic fallbacks only; production clicks use `SELECTORS.likeButton`. */
+/** Diagnostic fallbacks only; production clicks use `SELECTORS.likeButton`. */
 export const LIKE_FALLBACK_SELECTORS = [
   '.discourse-reactions-reaction-button button',
   'button[title="点赞此帖子"]',
   '.post-menu-area button.reaction-button',
 ] as const;
 
-/** T02: deep mode opens a category already sorted by reply count; no header button is clicked. */
+/** Deep mode opens a category already sorted by reply count; no header button is clicked. */
 export const SORTED_BY_POSTS_QUERY = 'order=posts';
 
 /**
- * Category name on the `/categories` page. Appendix A names `.category-name`; docofcard's
+ * Category name on the `/categories` page. The selector table names `.category-name`; docofcard's
  * category-box layout has none and carries the name in its box heading instead.
  */
 export const CATEGORY_NAME_SELECTORS = ['.category-name', '.category-box-heading h3'] as const;
@@ -47,7 +47,7 @@ export const CATEGORY_NAME_SELECTORS = ['.category-name', '.category-box-heading
 /** Any link into a category; the `/categories` page has rendered once one exists. */
 export const CATEGORY_LINK = 'a[href*="/c/"]';
 
-/** Appendix A list URLs: `/c/<slug>/<id>` with optional parent slugs, plus the new/unread lists. */
+/** List URLs: `/c/<slug>/<id>` with optional parent slugs, plus the new/unread lists. */
 export const CATEGORY_PATH = /^\/c\/((?:[^/?#]+\/)*[^/?#]+)\/(\d+)\/?$/;
 
 /** Any rendered post of a topic; it marks entry when a one-floor topic shows no floor counter. */
@@ -55,25 +55,25 @@ export const TOPIC_POST = '.topic-post';
 
 export const rowSelector = (topicId: string) => `tr.topic-list-item[data-topic-id="${topicId}"]`;
 
-/** T08: the topic URL shape that confirms entry. */
+/** The topic URL shape that confirms entry. */
 export const topicUrlPattern = (topicId: string) => new RegExp(`/t/[^/?#]+/${topicId}(?:[/?#]|$)`);
 
 /**
- * Not Appendix A: signs that the site serves a challenge page instead of Discourse (B10, §1.3).
+ * Not from the selector table: signs that the site serves a challenge page instead of Discourse.
  * They are only reported, never interacted with.
  */
 export const CHALLENGE_SELECTOR = '#challenge-form, #challenge-stage, #cf-challenge-running, iframe[src*="challenges.cloudflare.com"]';
 export const CHALLENGE_TITLE = /just a moment|attention required|请稍候/i;
 
-/** Not Appendix A: the header's sign-in button, which Discourse renders only for anonymous visitors. */
+/** Not from the selector table: the header's sign-in button, which Discourse renders only for anonymous visitors. */
 export const ANONYMOUS_HEADER = '.d-header .login-button';
 
-/** §5.1: connect's progress page is ready once any of its four metric groups renders. */
+/** Connect's progress page is ready once any of its four metric groups renders. */
 export const CONNECT_READY = '.tl3-ring, .tl3-bar-item, .tl3-quota-card, .tl3-veto-item';
 
 /**
- * §5.1: signs that connect shows its OAuth authorization page instead of the progress page. No
- * authorization page has been seen live (Phase 0 capture recorded `authorizePage: false`), so this
+ * Signs that connect shows its OAuth authorization page instead of the progress page. No
+ * authorization page has been seen live (the fixture capture recorded `authorizePage: false`), so this
  * is a conservative guess: an authorize/OAuth address, or a form posting to an authorize endpoint.
  * The address is matched on its path only, because the progress page itself links to `/oauth2/log`.
  */

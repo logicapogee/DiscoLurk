@@ -1,4 +1,4 @@
-// Renders the 1024×1024 source icon (§10.5 palette) that `tauri icon` expands into every platform size.
+// Renders the 1024×1024 source icon (the app palette) that `tauri icon` expands into every platform size.
 import { writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 

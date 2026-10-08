@@ -17,15 +17,15 @@ export interface BrowseInput {
 
 export type BrowseOutcome = { stats: RunStats } & ({ end: 'error'; failure: RunFailure } | { end: Exclude<BrowseEnd, 'error'> });
 
-/** Appendix B: always taken, whatever the extra-wait switch says. */
+/** Always taken, whatever the extra-wait switch says. */
 const AFTER_READING = { minSec: 1, maxSec: 2 };
-/** Appendix B: taken only with the extra-wait switch on. */
+/** Taken only with the extra-wait switch on. */
 const BETWEEN_TOPICS = { minSec: 0.5, maxSec: 1.5 };
 
 /**
- * The `browsing` state of §6.2 / §7.1: rounds over the enabled categories until the target is
- * reached (S02), the user stops (S05), or a whole round enters no topic (S06). Endless mode
- * only ends on stop (S01). Category order is reshuffled every round.
+ * The `browsing` state: rounds over the enabled categories until the target is reached, the user
+ * stops, or a whole round enters no topic. Endless mode only ends on stop. Category order is
+ * reshuffled every round.
  */
 export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
   const { plan, forum, deps, signal, emit } = input;
@@ -112,7 +112,7 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
             publish();
           }
 
-          // Returning also gives the site its final /topics/timings flush (T10), so it runs even when the target is met.
+          // Returning also gives the site its final /topics/timings flush, so it runs even when the target is met.
           const verification = await forum.returnAndVerify(visit, signal);
           emit({ type: 'topic', at: at(), topicId: topic.id, phase: 'returned', result: verification });
 

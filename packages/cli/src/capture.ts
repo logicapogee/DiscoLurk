@@ -61,12 +61,12 @@ export interface CaptureReport {
   steps: Record<string, StepRecord>;
 }
 
-/** Narrow enough for Discourse to swap the timeline for `#topic-progress` (§4.3), still under 1000. */
+/** Narrow enough for Discourse to swap the timeline for `#topic-progress`, still under 1000. */
 const NARROW_WIDTHS = [880, 760];
 const BIG_TOPIC_REPLIES = 100;
 const MAX_LIST_TRIES = 10;
 /**
- * Reply-count cell of a list row; a capture-only aid for picking topics, not part of Appendix A.
+ * Reply-count cell of a list row; a capture-only aid for picking topics, not one of the production selectors.
  * The `gf-` cell is docofcard's theme, which replaces the stock columns.
  */
 const REPLIES_CELL = 'td.posts .number, td.num.posts span.number, .posts-map .number, .gf-stat-posts .gf-stat-number';
@@ -113,9 +113,9 @@ function rowsOf(html: string): Row[] {
 }
 
 /**
- * Development command behind `lurk capture` (Phase 0): with the user's own login in an app-owned
- * Profile, visits each page kind once at Appendix B's pace and stores sanitized HTML fixtures.
- * Topics are entered only by clicking their list row (T08); nothing is liked, typed or submitted.
+ * Development command behind `lurk capture`: with the user's own login in an app-owned
+ * Profile, visits each page kind once at a person's pace and stores sanitized HTML fixtures.
+ * Topics are entered only by clicking their list row; nothing is liked, typed or submitted.
  */
 export async function captureFixtures(opts: CaptureOptions): Promise<CaptureReport> {
   const { site, signal, log } = opts;
@@ -339,7 +339,7 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
         const doc = parseDocument(html);
         const marks = likedMarkers(doc.querySelector(`.topic-post[data-post-number="${floor}"]`) ?? doc);
         // The user's word that this floor is liked is the ground truth; recording that floor's like
-        // controls shows which marker the site really uses, including one Appendix A does not list.
+        // controls shows which marker the site really uses, including one the selector table does not list.
         const post = doc.querySelector(`.topic-post[data-post-number="${floor}"], #post_${floor}`);
         if (!post) {
           log(`  floor ${floor} is not rendered on this page; scroll it into view and try again`);
@@ -395,7 +395,7 @@ interface ProgressDeps {
 
 const values = (s: LevelSnapshot | null) => Object.fromEntries((s?.metrics ?? []).map((m) => [m.label, m.current]));
 
-/** S07 for connect: enter, wait 2 s, reload, wait for the page, then read. */
+/** Connect: enter, wait 2 s, reload, wait for the page, then read. */
 async function captureConnect(
   page: Page,
   url: string,
@@ -430,7 +430,7 @@ async function captureConnect(
 }
 
 /**
- * S07 for the docofcard trust level page. Also answers §17: the loader-to-table time, and whether
+ * The docofcard trust level page. Also records the loader-to-table time, and whether
  * a reload changes the values (a cache like connect's).
  */
 async function captureTrustLevel(page: Page, url: string, deps: ProgressDeps & { scrub(s: string): string }): Promise<StepRecord> {

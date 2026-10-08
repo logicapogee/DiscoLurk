@@ -36,7 +36,7 @@ export interface OpenRequest {
   warn(code: string, message: string): void;
 }
 
-/** Where a discovered site's category list is kept between runs (§7.1 step 2). */
+/** Where a discovered site's category list is kept between runs. */
 export interface CategoryStore {
   load(siteId: SiteId): Promise<Category[]>;
   save(siteId: SiteId, categories: Category[]): Promise<void>;
@@ -56,9 +56,9 @@ export interface CoordinatorEnv {
 }
 
 const TIMEOUTS = {
-  /** S07 allows 10 s for the page itself; the rest covers navigation and the forced reload. */
+  /** The progress page itself gets 10 s; the rest covers navigation and the forced reload. */
   verifyMs: 60_000,
-  /** S07: connect's statistics trail a run by about 3 minutes (Phase 1); the final read is retried once after this. */
+  /** Connect's statistics trail a run by about 3 minutes; the final read is retried once after this. */
   siteLagMs: 240_000,
   inspectMs: 60_000,
 } as const;
@@ -77,14 +77,14 @@ function checkMode(site: Site, browserMode: BrowserMode): AuthMode {
   return site.login === 'password' && browserMode === 'headless' ? 'credentials' : 'headless-check';
 }
 
-/** S09: a site with a progress page either read its baseline before browsing or runs without one. */
+/** A site with a progress page either read its baseline before browsing or runs without one. */
 function baselineOf(site: Site | null, initial: LevelSnapshot | null): RunResult['baseline'] {
   if (!site || site.progressSource === 'none') return 'not-applicable';
   return initial ? 'present' : 'missing';
 }
 
 /**
- * S08: the progress page's own numbers per metric key. `other` gathers several unrelated labels,
+ * The progress page's own numbers per metric key. `other` gathers several unrelated labels,
  * so it has no single value and is left to the snapshots in `RunResult.levels`.
  */
 export function reportedMetrics(initial: LevelSnapshot | null, final: LevelSnapshot): NonNullable<RunStats['reported']> {
@@ -98,7 +98,7 @@ export function reportedMetrics(initial: LevelSnapshot | null, final: LevelSnaps
 }
 
 /**
- * S08: how many confirmed topics the progress page's `topicsViewed` change does not show yet; null
+ * How many confirmed topics the progress page's `topicsViewed` change does not show yet; null
  * when there is no change to compare (no baseline, or no such metric) or nothing is missing.
  */
 export function reportedTopicsShortfall(stats: Pick<RunStats, 'confirmed' | 'reported'>): number | null {
@@ -108,12 +108,12 @@ export function reportedTopicsShortfall(stats: Pick<RunStats, 'confirmed' | 'rep
   return missing > 0 ? missing : null;
 }
 
-/** §6.1 / §6.2: the one kernel every entry point (CLI, server, scheduler) runs. */
+/** The one kernel every entry point (CLI, server, scheduler) runs. */
 export class DiscoLurkCoordinator implements RunCoordinator {
   constructor(private readonly env: CoordinatorEnv) {}
 
   async run(plan: RunPlanSnapshot, signal: AbortSignal, emit: (e: RunEvent) => void): Promise<RunResult> {
-    // §9.1: the snapshot's seed fixes this run's choices, so the same snapshot replays the same picks.
+    // The snapshot's seed fixes this run's choices, so the same snapshot replays the same picks.
     const deps: RuntimeDeps = { ...this.env.deps, random: seededRandom(plan.seed) };
     const at = () => new Date(deps.clock.now()).toISOString();
     let current: RunState = 'queued';
@@ -191,7 +191,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     };
 
     /**
-     * §6.2: where an interrupted phase goes. Every stop passes through `stopping`; only browsing has
+     * Where an interrupted phase goes. Every stop passes through `stopping`; only browsing has
      * progress worth verifying, and only a user stop or a failure leaves a browser to verify with.
      */
     const interrupt = (from: RunState, why: Interruption): RunResult | Promise<RunResult> => {
@@ -208,7 +208,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
         let auth = await forum.ensureAuthenticated(checkMode(runSite, plan.browserMode), live);
         if (auth.status !== 'authenticated') {
           state('awaiting_login');
-          // B04/B05: only a headed window has a person who can finish signing in.
+          // Only a headed window has a person who can finish signing in.
           if (plan.browserMode === 'headed') auth = await forum.ensureAuthenticated('headed-wait', live);
           if (auth.status === 'challenge-detected') {
             state('challenge_detected');
@@ -227,7 +227,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
           } catch (err) {
             const why = classify(err, live);
             if (why.kind === 'stop') throw err;
-            // §5.1: a progress page that wants an authorization the run cannot get ends it as a sign-in would.
+            // A progress page that wants an authorization the run cannot get ends it as a sign-in would.
             if (why.failure.code === 'needs-auth') {
               state('needs_auth');
               return end('cancelled', 'error', why.failure);
@@ -279,7 +279,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     try {
       const auth = await session.forum.ensureAuthenticated(checkMode(site, 'headless'), signal);
       if (auth.status !== 'authenticated') return { profileId, status: 'needs-auth', checkedAt: checkedAt() };
-      // §8.2 step 7: the health check is where a discovered site reads its categories.
+      // The health check is where a discovered site reads its categories.
       if (site.categorySource === 'discovered') await this.refreshCategories(site, session.forum, signal, () => {});
       return { profileId, status: 'ready', ...(auth.username ? { username: auth.username } : {}), checkedAt: checkedAt() };
     } catch (err) {
@@ -302,7 +302,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
   }
 
   /**
-   * S07: the browser stays open while connect catches up, then the final read runs once more and
+   * The browser stays open while connect catches up, then the final read runs once more and
    * its numbers replace the first ones. A user stop or a closed browser during the wait keeps the
    * first read; only the app exiting cancels the run, which the `true` result reports.
    */
@@ -338,7 +338,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     return false;
   }
 
-  /** §7.2: a discovered site re-reads its categories after every sign-in; a failed read keeps the stored list. */
+  /** A discovered site re-reads its categories after every sign-in; a failed read keeps the stored list. */
   private async refreshCategories(site: Site, forum: ForumPort, signal: AbortSignal, warn: (code: string, message: string) => void) {
     try {
       const found = await forum.discoverCategories(signal);

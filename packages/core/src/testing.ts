@@ -12,7 +12,7 @@ import type {
   TopicStrategy,
   TopicVisit,
 } from './ports';
-import { abortError, seededRandom, type Clock, type InterruptibleSleeper, type RuntimeDeps } from './runtime';
+import { seededRandom, untilAbort, type Clock, type InterruptibleSleeper, type RuntimeDeps } from './runtime';
 import type { Category, Site, TopicCandidate } from './terms';
 
 /** A minimal valid Site: discovered categories, no progress page. */
@@ -39,7 +39,7 @@ interface Timer {
 const flushIo = () => new Promise<void>((r) => setImmediate(r));
 
 /**
- * Deterministic time for tests (§13.2). Sleeps only complete when `drive` advances the clock,
+ * Deterministic time for tests. Sleeps only complete when `drive` advances the clock,
  * so a test can assert exactly how much virtual time passed between an abort and the result.
  */
 export class VirtualTime {
@@ -58,24 +58,16 @@ export class VirtualTime {
   };
 
   readonly sleeper: InterruptibleSleeper = {
-    sleep: (ms, signal) =>
-      new Promise<void>((resolve, reject) => {
-        if (signal.aborted) return reject(abortError(signal));
-        const timer: Timer = {
-          at: this.mono + Math.max(0, ms),
-          seq: this.seq++,
-          fire: () => {
-            signal.removeEventListener('abort', onAbort);
-            resolve();
-          },
-        };
-        const onAbort = () => {
-          this.timers = this.timers.filter((t) => t !== timer);
-          reject(abortError(signal));
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        this.timers.push(timer);
-      }),
+    sleep: (ms, signal) => {
+      let timer: Timer | undefined;
+      const elapsed = new Promise<void>((resolve) => {
+        timer = { at: this.mono + Math.max(0, ms), seq: this.seq++, fire: resolve };
+        if (!signal.aborted) this.timers.push(timer);
+      });
+      return untilAbort(elapsed, signal, () => {
+        this.timers = this.timers.filter((t) => t !== timer);
+      });
+    },
   };
 
   deps(seed = 1): RuntimeDeps {
@@ -145,7 +137,7 @@ export interface FixtureForumOptions {
   progress?: (kind: 'initial' | 'final', signal: AbortSignal) => Promise<LevelSnapshot | null>;
   /** What `discoverCategories` finds; defaults to none. */
   discovered?: Category[];
-  /** Answers `returnAndVerify` (T11); defaults to the badge gone for unread topics and not-applicable for the rest. */
+  /** Answers `returnAndVerify`; defaults to the badge gone for unread topics and not-applicable for the rest. */
   verify?: (topic: TopicCandidate) => ReadVerification;
 }
 
@@ -159,7 +151,7 @@ export type FixtureCall =
   | { op: 'performActions' }
   | { op: 'returnAndVerify'; topicId: string };
 
-/** A `ForumPort` over in-memory rows (§13.1, D11): proves kernel ordering and counting, nothing about the real site. */
+/** A `ForumPort` over in-memory rows: proves kernel ordering and counting, nothing about the real site. */
 export class FixtureForum implements ForumPort {
   readonly site: Site;
   readonly calls: FixtureCall[] = [];

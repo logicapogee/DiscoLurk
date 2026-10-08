@@ -9,9 +9,9 @@ export interface FloorSurface {
   scroll(dy: number): Promise<void>;
 }
 
-/** Appendix B; every value is a field-tested default (I12), not a tuning knob. */
+/** Every value is a field-tested default, not a tuning knob. */
 /**
- * F01 runs in two stages: wait for the floor counter for at most `counterCeilingMs`, polling every
+ * Entering a topic waits in two stages: wait for the floor counter for at most `counterCeilingMs`, polling every
  * `pollMs`; then, whether it appeared or not, pause `extraSec` before reading.
  */
 export const ENTRY_WAIT = { counterCeilingMs: 5_000, pollMs: 500, extraSec: [1, 3] } as const;
@@ -31,7 +31,7 @@ export const QUICK = { floors: [3, 5], dwellSec: [1, 2], stepPx: [400, 800], set
 interface Tracker {
   result: ReadResult;
   last: number | null;
-  /** Reports an advance; true when the strategy asked to stop (F06). */
+  /** Reports an advance; true when the strategy asked to stop. */
   advance(reading: FloorReading): boolean;
   /** Reports floors seen without a counter, never as confirmed. */
   estimate(floors: number): boolean;
@@ -49,7 +49,7 @@ function tracker(start: FloorReading | null, strategy: ReadStrategy): Tracker {
         t.result.endFloor = reading.current;
         return false;
       }
-      // F02: only the climb between consecutive readings counts; a reading below the high-water mark adds nothing.
+      // Only the climb between consecutive readings counts; a reading below the high-water mark adds nothing.
       if (reading.current <= t.last) return false;
       const verdict = strategy.onFloor({ from: t.last, to: reading.current, confirmed: true });
       t.last = reading.current;
@@ -69,15 +69,15 @@ function tracker(start: FloorReading | null, strategy: ReadStrategy): Tracker {
 }
 
 /**
- * Reads a topic the way §4.3 (deep) or §4.4 (quick) prescribes. Every wait goes through the
- * injected sleeper, so a stop lands within one sleep (S05) and tests run on virtual time.
+ * Reads a topic in deep or quick mode. Every wait goes through the injected sleeper, so a stop
+ * lands within one sleep and tests run on virtual time.
  */
 export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, deps: RuntimeDeps, signal: AbortSignal): Promise<ReadResult> {
   const sleep = (ms: number) => deps.sleeper.sleep(ms, signal);
   const pause = (range: readonly [number, number]) => pauseBetween(deps, range[0], range[1], signal);
   const px = (range: readonly [number, number]) => Math.round(randomBetween(deps.random, range[0], range[1]));
 
-  // F01: a counter that has not rendered yet reads as null, which would wrongly fall back to blind scrolling.
+  // A counter that has not rendered yet reads as null, which would wrongly fall back to blind scrolling.
   let first: FloorReading | null = null;
   for (let waited = 0; ; waited += ENTRY_WAIT.pollMs) {
     first = await surface.readCounter();
@@ -120,7 +120,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
   }
 
   if (!first || first.total < DEEP.shortTopicFloors) {
-    // F07 for short topics, F08 when no counter renders: a timed gentle scroll.
+    // Short topics, and topics that render no counter, get a timed gentle scroll.
     const until = deps.clock.monotonic() + randomBetween(deps.random, TRADITIONAL.durationSec[0], TRADITIONAL.durationSec[1]) * 1000;
     while (deps.clock.monotonic() < until && t.result.scrolls < DEEP.maxScrolls) {
       await scroll(px(TRADITIONAL.stepPx));
@@ -136,7 +136,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
   // Set once the big step has been taken for the current stall; a stall that outlasts it ends the topic.
   let escalated = false;
   while (t.result.scrolls < DEEP.maxScrolls) {
-    // F03: read first, then scroll, then let the counter catch up.
+    // Read first, then scroll, then let the counter catch up.
     await pause(DEEP.dwellSec);
     await scroll(px(DEEP.stepPx));
     await sleep(DEEP.settleMs);
@@ -152,7 +152,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
     if (++stuck < DEEP.stuckLimit) continue;
     if (escalated) break;
     if (t.result.scrolls >= DEEP.maxScrolls) break;
-    // F04
+    // A stalled counter gets one big step before the stall can end the topic.
     await scroll(DEEP.bigStepPx);
     await sleep(DEEP.bigSettleMs);
     stuck = 0;

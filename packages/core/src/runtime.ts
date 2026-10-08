@@ -1,8 +1,8 @@
-/** §6.1 / §13.2: every source of time and randomness is injected so tests can fix them. */
+/** Every source of time and randomness is injected so tests can fix them. */
 export interface Clock {
   /** Wall-clock epoch milliseconds; used for timestamps and schedules. */
   now(): number;
-  /** Monotonic milliseconds; used for durations so wall-clock jumps cannot shorten a run (S04). */
+  /** Monotonic milliseconds; used for durations so wall-clock jumps cannot shorten a run. */
   monotonic(): number;
 }
 
@@ -12,7 +12,7 @@ export interface RandomSource {
 }
 
 export interface InterruptibleSleeper {
-  /** Rejects with an `AbortError` as soon as `signal` aborts (S05, I9). */
+  /** Rejects with an `AbortError` as soon as `signal` aborts. */
   sleep(ms: number, signal: AbortSignal): Promise<void>;
 }
 
@@ -68,18 +68,11 @@ export const systemClock: Clock = {
 
 export const systemSleeper: InterruptibleSleeper = {
   sleep(ms, signal) {
-    return new Promise<void>((resolve, reject) => {
-      if (signal.aborted) return reject(abortError(signal));
-      const onAbort = () => {
-        clearTimeout(timer);
-        reject(abortError(signal));
-      };
-      const timer = setTimeout(() => {
-        signal.removeEventListener('abort', onAbort);
-        resolve();
-      }, ms);
-      signal.addEventListener('abort', onAbort, { once: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const elapsed = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
     });
+    return untilAbort(elapsed, signal, () => clearTimeout(timer));
   },
 };
 

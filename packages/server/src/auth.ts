@@ -19,7 +19,7 @@ export function tokenStrongEnough(token: string): boolean {
 }
 
 /**
- * §10.3: bearer token check plus per-IP lockout after 5 failures in 10 minutes, for 15 minutes.
+ * Bearer token check plus per-IP lockout after 5 failures in 10 minutes, for 15 minutes.
  * Loopback sources are never counted: every local process shares 127.0.0.1, so locking it would let
  * any of them lock the desktop UI out; local failures are slowed down by the server instead.
  */

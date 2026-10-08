@@ -11,7 +11,7 @@ export type BrowserChannel = 'chrome' | 'msedge';
 export type BrowserMode = 'headed' | 'headless';
 export type BrowseMode = 'deep' | 'quick';
 
-/** A category as addressed on its site; `path` is the list URL path such as `/c/develop/4` (Appendix C). */
+/** A category as addressed on its site; `path` is the list URL path such as `/c/develop/4`. */
 export interface Category {
   name: string;
   path: string;
@@ -19,7 +19,7 @@ export interface Category {
   enabledByDefault: boolean;
 }
 
-/** §2.2 */
+/** A forum the app can browse, and everything that differs between forums. */
 export interface Site {
   id: SiteId;
   displayName: string;
@@ -33,7 +33,7 @@ export interface Site {
   behaviorVerified: { clickEntryRequired: boolean | 'unverified' };
 }
 
-/** §8.3 */
+/** A browser Profile: one app-owned user data directory per site and name. */
 export type ProfileStatus = 'ready' | 'needs-auth' | 'locked' | 'recovering' | 'broken';
 
 export interface Profile {
@@ -53,7 +53,7 @@ export interface ProfileHealth {
 
 /**
  * A list-page row. It deliberately carries no URL: candidates are entered only by clicking
- * their title link on the list page (T08), so nothing downstream can navigate to them directly.
+ * their title link on the list page, so nothing downstream can navigate to them directly.
  */
 export interface TopicCandidate {
   id: string;
@@ -67,7 +67,7 @@ export type RunModeSpec =
   | { kind: 'topics'; min: number; max: number }
   | { kind: 'time'; minutes: number };
 
-/** A run mode whose random range has been fixed at materialization (§9.1). */
+/** A run mode whose random range has been fixed at materialization. */
 export type RunMode =
   | { kind: 'endless' }
   | { kind: 'topics'; count: number }
@@ -83,7 +83,7 @@ export interface InteractionPolicy {
   reply: { enabled: boolean; rate: number };
 }
 
-/** §2.2 / §11.1 */
+/** What a run does: browse mode, target, categories, interactions and waits. */
 export interface RunPreset {
   id: PresetId;
   siteId: SiteId;
@@ -105,7 +105,7 @@ export interface ResolvedPreset {
   samplePerCategory: { min: number; max: number };
 }
 
-/** §9.1 */
+/** One run fixed in advance: every random choice is drawn from `seed`, so the snapshot replays exactly. */
 export interface RunPlanSnapshot {
   id: RunId;
   scheduleId?: ScheduleId;

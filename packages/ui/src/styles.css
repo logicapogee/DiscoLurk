@@ -1,4 +1,4 @@
-/* §10.5 design tokens; light theme follows the system. */
+/* Design tokens; light theme follows the system. */
 :root {
   --bg: #1a1a2e;
   --panel: #16213e;

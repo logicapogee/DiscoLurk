@@ -14,7 +14,7 @@ const ATTEMPTS = 500;
 const gapsOk = (points: number[], gap: number) => points.every((p, i) => i === 0 || p - points[i - 1]! >= gap);
 
 /**
- * §9.1 random daily schedule: up to `runs` minute-of-day points inside [from, end], pairwise at
+ * Random daily schedule: up to `runs` minute-of-day points inside [from, end], pairwise at
  * least `minGapMinutes` apart, each nudged by ±`jitterMinutes` when that keeps the gaps. `from`
  * lets a day generated mid-window use only the part still ahead, so no run starts out missed.
  */

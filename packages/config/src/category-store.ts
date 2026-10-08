@@ -11,7 +11,7 @@ const fileSchema = z.object({
   categories: z.array(categorySchema),
 });
 
-/** §11.1: temp file + rename, so a crash mid-write leaves the previous file intact. */
+/** Temp file + rename, so a crash mid-write leaves the previous file intact. */
 export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   // Unique per write: two writers in one process (or two processes) never share a temp file.

@@ -23,11 +23,11 @@ export type AuthResult =
   | { status: 'challenge-detected' };
 
 export interface TopicStrategy {
-  /** Deep mode sorts the list by reply count (T02). */
+  /** Deep mode sorts the list by reply count. */
   browseMode: BrowseMode;
 }
 
-/** No topics means the list had nothing to click (§7.1 step 2); the category is skipped as `empty-category`. */
+/** No topics means the list had nothing to click; the category is skipped as `empty-category`. */
 export interface TopicBatch {
   category: Category;
   topics: TopicCandidate[];
@@ -40,14 +40,14 @@ export type TopicVisit =
 export interface FloorAdvance {
   from: number;
   to: number;
-  /** False for blind-scroll estimates (F08, Q04). */
+  /** False for estimates made without a floor counter. */
   confirmed: boolean;
 }
 
 export interface ReadStrategy {
   browseMode: BrowseMode;
   /**
-   * Called on every floor change (F06). Returning `'stop'` ends the topic: the target was reached,
+   * Called on every floor change. Returning `'stop'` ends the topic: the target was reached,
    * so further scrolling and interaction must not happen.
    */
   onFloor(advance: FloorAdvance): 'continue' | 'stop';
@@ -58,7 +58,7 @@ export interface ReadResult {
   endFloor: number | null;
   scrolls: number;
   stoppedByTarget: boolean;
-  /** Which floor counter layout (§4.3) the last reading came from; null when none rendered. */
+  /** Which floor counter layout the last reading came from; null when none rendered. */
   layout: 'wide' | 'narrow' | null;
 }
 
@@ -72,18 +72,18 @@ export interface ActionResult {
 }
 
 /**
- * T11. `not-applicable` is a topic that had no `new-topic` badge before it was entered: its row was
+ * How the list row looked on return. `not-applicable` is a topic that had no `new-topic` badge before it was entered: its row was
  * found again, but there is no badge whose disappearance could confirm anything.
  */
 export type ReadVerification = 'confirmed' | 'still-unread' | 'indeterminate' | 'not-applicable';
 
-/** §6.1: the site seam. Selectors, waits and error classification live behind it. */
+/** The site seam. Selectors, waits and error classification live behind it. */
 export interface ForumPort {
   readonly site: Site;
   ensureAuthenticated(mode: AuthMode, signal: AbortSignal): Promise<AuthResult>;
   discoverCategories(signal: AbortSignal): Promise<Category[]>;
   /**
-   * Resolves to null when the site's `progressSource` is `'none'`. `kind` tells the S07 end-of-run
+   * Resolves to null when the site's `progressSource` is `'none'`. `kind` tells the end-of-run
    * read from the baseline, so an adapter can treat them differently (connect lags behind and may
    * need a later re-read); today both read the same way.
    */
@@ -108,7 +108,7 @@ export interface RunCoordinator {
   beginAuth(profileId: ProfileId): Promise<AuthSession>;
 }
 
-/** §9.1 */
+/** When a schedule fires: a cron expression or a number of random runs inside a daily window. */
 export type ScheduleTrigger =
   | { kind: 'cron'; expression: string }
   | {
@@ -140,7 +140,7 @@ export type TriggerCause = 'planned' | 'run-on-start' | 'misfire' | 'manual';
 export interface ScheduleView {
   spec: ScheduleSpec;
   paused: boolean;
-  /** The already materialized snapshot that will run next (§9.1). */
+  /** The already materialized snapshot that will run next. */
   next: RunPlanSnapshot | null;
 }
 

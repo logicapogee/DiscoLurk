@@ -1,4 +1,4 @@
-// §12.1 packaging gate for the final `lurk` binary:
+// Packaging gate for the final `lurk` binary:
 //   1. launch system Chrome  2. persistent context  3. one locator click on a local static page
 //   4. screenshot, Profile written, clean close with no leftover browser process
 //   5. run again from a path outside the repository (Profile reused; sidecar ready line, token kept out of
@@ -85,7 +85,7 @@ async function selftestRun(label: string, bin: string, cwd: string, url: string,
     typeof result.clickedTo === 'string' && result.clickedTo.endsWith('/landing.html'),
     `landed on ${String(result.clickedTo)}`,
   );
-  record(`${label} navigator.webdriver is false (B07)`, result.webdriver === false, `webdriver=${String(result.webdriver)}`);
+  record(`${label} navigator.webdriver is false`, result.webdriver === false, `webdriver=${String(result.webdriver)}`);
   const shotOk = existsSync(screenshot) && statSync(screenshot).size > 1000 && readFileSync(screenshot).subarray(1, 4).toString() === 'PNG';
   record(`${label} screenshot`, shotOk, shotOk ? `${screenshot} (${statSync(screenshot).size} bytes)` : 'missing or not a PNG');
   const profileWritten = existsSync(join(profileDir, 'Local State')) && existsSync(join(profileDir, 'Default'));
@@ -95,7 +95,7 @@ async function selftestRun(label: string, bin: string, cwd: string, url: string,
   return result;
 }
 
-/** Starts `lurk sidecar` the way the shell does and reads its §10.3 ready line. */
+/** Starts `lurk sidecar` the way the shell does and reads its ready line. */
 async function startSidecar(bin: string, cwd: string) {
   // stdin stays an open pipe, as under the shell; closing it is the parent-gone signal.
   const child = spawn(bin, ['sidecar'], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });

@@ -3,10 +3,12 @@ import { join } from 'node:path';
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import { FileCategoryStore } from '@disco-lurk/config';
 import {
+  isAbortError,
   reportedTopicsShortfall,
   resolveRunMode,
   seededRandom,
   systemDeps,
+  type AuthSession,
   type BrowseMode,
   type BrowserChannel,
   type BrowserMode,
@@ -192,6 +194,27 @@ export function exitCodeFor(result: Pick<RunResult, 'outcome' | 'stopCause' | 'f
   }
   if (result.stopCause === 'user' || result.stopCause === 'app-exit' || result.outcome === 'cancelled') return EXIT.cancelled;
   return result.outcome === 'completed' ? EXIT.ok : EXIT.environment;
+}
+
+/**
+ * §11.1: `lurk login` succeeds once `#current-user` shows in the headed window. It runs no headless
+ * check afterwards, since a headless visit to linuxdo may meet a Cloudflare challenge; that check is `doctor`'s.
+ */
+export async function signIn(auth: AuthSession, signal: AbortSignal, log: (line: string) => void): Promise<number> {
+  try {
+    const result = await auth.continueWaiting(signal);
+    if (result.status !== 'authenticated') {
+      log(`Not signed in: ${result.status}`);
+      return EXIT.needsAuth;
+    }
+    log(`Signed in${result.username ? ` as ${result.username}` : ''}.`);
+    return EXIT.ok;
+  } catch (err) {
+    if (isAbortError(err)) return EXIT.cancelled;
+    throw err;
+  } finally {
+    await auth.close();
+  }
 }
 
 export interface CliEnvOptions {

@@ -25,6 +25,7 @@ import {
   profileIdOf,
   resolveCategories,
   siteCategories,
+  signIn,
   UsageError,
 } from './run';
 
@@ -197,31 +198,11 @@ async function login(argv: string[]): Promise<number> {
   const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: args.channel, exitSignal }));
   const profileId = profileIdOf(args.site.id, args.profile);
   const auth = await coordinator.beginAuth(profileId);
-  let result;
-  try {
-    console.log(`Sign in to ${args.site.displayName} in the Chrome window (Profile ${profileId}).`);
-    console.log('Checking for #current-user every 5 s for up to 300 s; the page is never reloaded.');
-    result = await auth.continueWaiting(signal);
-  } catch (err) {
-    if (isAbortError(err)) return EXIT.cancelled;
-    throw err;
-  } finally {
-    await auth.close();
-  }
-  if (result.status !== 'authenticated') {
-    console.error(`Not signed in: ${result.status}`);
-    return EXIT.needsAuth;
-  }
-  // §8.2 steps 5–7: a headless health check with the same Profile, which also discovers categories.
-  console.log('Signed in. Running the headless health check…');
-  const health = await coordinator.inspect(profileId);
-  console.log(`Profile ${profileId}: ${health.status}`);
-  if (args.site.categorySource === 'discovered') {
-    const categories = await siteCategories(args.site);
-    console.log(`${categories.length} categories discovered (new ones start disabled):`);
-    for (const c of categories) console.log(`  ${c.enabledByDefault ? '[x]' : '[ ]'} ${c.name}  ${c.path}`);
-  }
-  return health.status === 'ready' ? EXIT.ok : health.status === 'needs-auth' ? EXIT.needsAuth : EXIT.environment;
+  console.log(`Sign in to ${args.site.displayName} in the Chrome window (Profile ${profileId}).`);
+  console.log('Checking for #current-user every 5 s for up to 300 s; the page is never reloaded.');
+  const code = await signIn(auth, signal, console.log);
+  if (code === EXIT.ok && args.site.categorySource === 'discovered') console.log('Categories are discovered on the first run; new ones start disabled.');
+  return code;
 }
 
 async function run(argv: string[]): Promise<number> {

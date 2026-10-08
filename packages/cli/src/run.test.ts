@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyStats, type Category, type RunResult } from '@disco-lurk/core';
+import { emptyStats, type AuthResult, type AuthSession, type Category, type RunResult } from '@disco-lurk/core';
 import {
   buildPlan,
   createReporter,
@@ -12,6 +12,7 @@ import {
   parseRunArgs,
   parseRunMode,
   resolveCategories,
+  signIn,
   UsageError,
 } from './run';
 import { findSite } from './sites';
@@ -186,5 +187,42 @@ describe('CLI-002 run output (§11.1)', () => {
     expect(formatSummary(withViewed(3, 100, 101))).toContain('confirmed: topics 3');
     expect(formatSummary(withViewed(3, 100, 103))).not.toContain('may lag');
     expect(formatSummary(result)).not.toContain('may lag');
+  });
+});
+
+describe('lurk login (§11.1)', () => {
+  function session(answer: () => Promise<AuthResult>) {
+    const calls: string[] = [];
+    const auth: AuthSession = {
+      recheck: async () => {
+        calls.push('recheck');
+        return { status: 'authenticated' };
+      },
+      continueWaiting: async () => {
+        calls.push('continueWaiting');
+        return answer();
+      },
+      close: async () => {
+        calls.push('close');
+      },
+    };
+    return { auth, calls };
+  }
+
+  it('succeeds on #current-user in the headed window and runs no headless check afterwards', async () => {
+    const { auth, calls } = session(async () => ({ status: 'authenticated', username: 'alice' }));
+    const lines: string[] = [];
+    expect(await signIn(auth, new AbortController().signal, (l) => lines.push(l))).toBe(EXIT.ok);
+    expect(calls).toEqual(['continueWaiting', 'close']);
+    expect(lines).toEqual(['Signed in as alice.']);
+  });
+
+  it('maps a timed-out wait to exit 3 and a stop to exit 2, closing the browser either way', async () => {
+    const timedOut = session(async () => ({ status: 'needs-auth' }));
+    expect(await signIn(timedOut.auth, new AbortController().signal, () => {})).toBe(EXIT.needsAuth);
+    expect(timedOut.calls).toEqual(['continueWaiting', 'close']);
+    const stopped = session(() => Promise.reject(new DOMException('user', 'AbortError')));
+    expect(await signIn(stopped.auth, new AbortController().signal, () => {})).toBe(EXIT.cancelled);
+    expect(stopped.calls).toEqual(['continueWaiting', 'close']);
   });
 });

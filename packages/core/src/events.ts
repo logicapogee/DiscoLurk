@@ -51,7 +51,8 @@ export interface StatCounters {
 
 export interface RunStats {
   attempted: StatCounters;
-  confirmed: StatCounters;
+  /** `repliedTopics` counts topics with at least one confirmed reply, matching connect's 回复话题. */
+  confirmed: StatCounters & { repliedTopics: number };
   estimatedFloors: number;
   reported?: Partial<Record<MetricKey, { initial?: number; final: number }>>;
   /** Monotonic clock (S04). */
@@ -82,7 +83,7 @@ export function emptyCounters(): StatCounters {
 }
 
 export function emptyStats(): RunStats {
-  return { attempted: emptyCounters(), confirmed: emptyCounters(), estimatedFloors: 0, elapsedMs: 0 };
+  return { attempted: emptyCounters(), confirmed: { ...emptyCounters(), repliedTopics: 0 }, estimatedFloors: 0, elapsedMs: 0 };
 }
 
 export class RunError extends Error {

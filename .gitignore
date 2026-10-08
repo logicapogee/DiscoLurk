@@ -5,3 +5,6 @@ target/
 apps/desktop/src-tauri/binaries/
 apps/desktop/src-tauri/gen/
 .DS_Store
+!tests/fixtures/**/*.html
+# Written by `lurk capture` when an identity survives sanitizing; never commit these.
+tests/fixtures/**/*.leak.html

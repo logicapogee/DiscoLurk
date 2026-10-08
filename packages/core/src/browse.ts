@@ -108,6 +108,7 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
             stats.confirmed.replyLikes += r.replyLikes.confirmed;
             stats.attempted.replies += r.replies.attempted;
             stats.confirmed.replies += r.replies.confirmed;
+            if (r.replies.confirmed > 0) stats.confirmed.repliedTopics += 1;
             if (r.likeLimitHit && policy.like.enabled) {
               policy.like.enabled = false;
               emit({ type: 'warning', at: at(), code: 'like-limit', message: 'Likes disabled for this session' });

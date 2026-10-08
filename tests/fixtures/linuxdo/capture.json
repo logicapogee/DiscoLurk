@@ -1,0 +1,125 @@
+{
+  "siteId": "linuxdo",
+  "capturedAt": "2026-10-08T14:24:02.632Z",
+  "discourseVersion": "Discourse 2026.10.0-latest - https://github.com/discourse/discourse version 68ad0815c020028b11f7a3ea847bf3b32bb76db4",
+  "steps": {
+    "categories": {
+      "ok": true,
+      "note": "54 category links",
+      "files": [
+        "categories.html"
+      ],
+      "categoryCount": 54
+    },
+    "list": {
+      "ok": true,
+      "note": "/c/develop/4 has pinned and new-topic rows",
+      "files": [
+        "list.html"
+      ],
+      "path": "/c/develop/4",
+      "rows": 30,
+      "pinned": 1,
+      "newTopic": 29,
+      "unreadPosts": 0
+    },
+    "list-sorted": {
+      "ok": true,
+      "note": "sorted by posts; topic 2496114 has 6500 replies",
+      "files": [
+        "list-sorted.html"
+      ],
+      "url": "https://linux.do/c/develop/4?ascending=false&order=posts"
+    },
+    "topic": {
+      "ok": true,
+      "note": "wide {\"layout\":\"wide\",\"current\":4,\"total\":6485}, narrow at 880px {\"layout\":\"narrow\",\"current\":4,\"total\":6485}",
+      "files": [
+        "topic-wide.html",
+        "topic-narrow.html"
+      ],
+      "topicId": "2496114",
+      "replies": 6500,
+      "narrowWidth": 880,
+      "returnedUrl": "https://linux.do/c/develop/4?ascending=false&order=posts"
+    },
+    "reply-editor": {
+      "ok": true,
+      "note": "editor textarea; closed by #reply-control .discard-button",
+      "files": [
+        "reply-editor.html"
+      ],
+      "topicId": "2996592"
+    },
+    "progress": {
+      "ok": true,
+      "note": "12 metrics, level 2 → 3",
+      "files": [
+        "connect.html"
+      ],
+      "authorizePage": false,
+      "beforeReload": {
+        "访问天数": 57,
+        "浏览话题": 543,
+        "浏览帖子": 15466,
+        "回复话题": 24,
+        "点赞": 31,
+        "获赞": 113,
+        "获赞天数": 38,
+        "获赞用户": 107,
+        "被举报帖子": 0,
+        "举报用户": 0,
+        "被禁言": 0,
+        "被封禁": 0
+      },
+      "afterReload": {
+        "访问天数": 57,
+        "浏览话题": 543,
+        "浏览帖子": 15466,
+        "回复话题": 24,
+        "点赞": 31,
+        "获赞": 113,
+        "获赞天数": 38,
+        "获赞用户": 107,
+        "被举报帖子": 0,
+        "举报用户": 0,
+        "被禁言": 0,
+        "被封禁": 0
+      }
+    },
+    "liked": {
+      "ok": true,
+      "note": "floor 2; Appendix A liked markers on page {\"hasLike\":0,\"myLikes\":0,\"hasUsed\":0,\"container\":0}",
+      "files": [
+        "liked.html"
+      ],
+      "likedFloor": 2,
+      "likedFloorControls": [
+        "div.reactions-actions-summary",
+        "div.discourse-reactions-actions.custom-reaction-used.has-reactions.has-reacted.has-used-main-reaction",
+        "button.discourse-reactions-counter",
+        "span.discourse-reactions-list",
+        "span.reactions",
+        "span.discourse-reactions-list-emoji",
+        "span.reactions-counter",
+        "div.discourse-reactions-actions-button-shim",
+        "div.discourse-reactions-reaction-button[title=\"您无法再移除您自己的回应了\"]",
+        "button.btn.no-text.btn-icon.btn-toggle-reaction-like.btn-flat.reaction-button[title=\"您无法再移除您自己的回应了\"]",
+        "svg.fa.d-icon.d-icon-d-liked.svg-icon.fa-width-auto.svg-string",
+        "button.btn.no-text.btn-icon.post-action-menu__copy-link.btn-flat.post-action-feedback-button[title=\"将此帖子的链接复制到剪贴板\"]",
+        "button.btn.no-text.btn-icon.fk-d-menu__trigger.discourse-boosts-trigger.post-action-menu__boost.boost.btn-flat[title=\"Add a boost\"]",
+        "button.btn.no-text.btn-icon.post-action-menu__flag.create-flag.btn-flat[title=\"以私密方式举报此帖子以引起注意，或发送一个关于它的个人消息\"]",
+        "button.btn.no-text.btn-icon.fk-d-menu__trigger.bookmark-menu-trigger.post-action-menu__bookmark.btn-flat.bookmark.widget-button.bookmark-menu__trigger[title=\"将此帖子添加为书签\"]",
+        "button.btn.btn-icon-text.post-action-menu__reply.reply.create.fade-out.btn-flat[title=\"开始撰写对此帖子的回复\"]"
+      ],
+      "url": "https://linux.do/t/topic/2914014"
+    },
+    "login-form": {
+      "ok": true,
+      "note": "login form rendered for a signed-out visitor",
+      "files": [
+        "login.html"
+      ]
+    }
+  }
+}

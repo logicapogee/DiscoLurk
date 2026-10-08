@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@disco-lurk/config": "workspace:*",
     "@disco-lurk/core": "workspace:*",
     "@disco-lurk/server": "workspace:*",
     "@disco-lurk/site-discourse": "workspace:*",

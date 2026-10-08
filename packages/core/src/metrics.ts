@@ -40,7 +40,7 @@ export const ESTIMATE: Partial<Record<MetricKey, (s: RunStats) => number>> = {
   topicsViewed: (s) => s.confirmed.topics,
   postsRead: (s) => s.confirmed.floors,
   likesGiven: (s) => s.confirmed.likes + s.confirmed.replyLikes,
-  repliesPosted: (s) => s.confirmed.replies,
+  repliesPosted: (s) => s.confirmed.repliedTopics,
 };
 
 export interface EstimatedMetric extends LevelMetric {

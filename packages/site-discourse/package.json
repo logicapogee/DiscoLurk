@@ -4,6 +4,8 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@disco-lurk/core": "workspace:*"
+    "@disco-lurk/core": "workspace:*",
+    "linkedom": "0.18.12",
+    "playwright-core": "1.64.0"
   }
 }

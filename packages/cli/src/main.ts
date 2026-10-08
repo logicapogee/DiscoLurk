@@ -1,12 +1,16 @@
 import './inspector-shim';
 import { randomBytes } from 'node:crypto';
+import { join, resolve } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
-import { systemClock } from '@disco-lurk/core';
+import { isAbortError, RunError, systemClock } from '@disco-lurk/core';
 import { startServer } from '@disco-lurk/server';
 import { formatDoctor, runDoctor } from './doctor';
 import { profilesDir } from './paths';
 import { SidecarLifecycle } from './lifecycle';
+import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
+import { BUILTIN_SITES, findSite } from './sites';
 
 declare const __LURK_VERSION__: string | undefined;
 const VERSION = typeof __LURK_VERSION__ === 'string' ? __LURK_VERSION__ : '0.0.0-dev';
@@ -19,6 +23,7 @@ const USAGE = `lurk ${VERSION}
 Usage:
   lurk doctor [--json] [--port <n>] [--network]
   lurk sidecar   (started by the desktop shell: prints a ready line, exits when stdin closes)
+  lurk capture --site <id> [--profile <id>] [--channel chrome|msedge] [--out <dir>] [--steps <a,b>]   (development: Phase 0 fixtures; steps: ${CAPTURE_STEPS.join(',')})
   lurk --version`;
 
 async function doctor(argv: string[]): Promise<number> {
@@ -107,6 +112,69 @@ async function selftest(argv: string[]): Promise<number> {
   }
 }
 
+/** Development command (Phase 0): the user logs in; fixtures land in tests/fixtures/<siteId>/. */
+async function capture(argv: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      site: { type: 'string' },
+      profile: { type: 'string', default: 'default' },
+      channel: { type: 'string', default: 'chrome' },
+      out: { type: 'string' },
+      steps: { type: 'string' },
+    },
+  });
+  const site = values.site ? findSite(values.site) : undefined;
+  if (!site) {
+    console.error(`capture requires --site <${BUILTIN_SITES.map((s) => s.id).join('|')}>`);
+    return EXIT.environment;
+  }
+  if (values.channel !== 'chrome' && values.channel !== 'msedge') {
+    console.error('--channel must be chrome or msedge');
+    return EXIT.environment;
+  }
+  if (!process.stdin.isTTY) {
+    console.error('capture asks questions on the way; run it in an interactive terminal');
+    return EXIT.environment;
+  }
+  let steps: Set<string> | undefined;
+  try {
+    steps = values.steps ? expandSteps(values.steps.split(',').map((s) => s.trim())) : undefined;
+  } catch (err) {
+    console.error((err as Error).message);
+    return EXIT.environment;
+  }
+  const controller = new AbortController();
+  process.once('SIGINT', () => controller.abort());
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const outDir = resolve(values.out ?? join('tests', 'fixtures', site.id));
+  try {
+    const report = await captureFixtures({
+      site,
+      profileDir: join(profilesDir(), site.id, values.profile),
+      outDir,
+      channel: values.channel,
+      signal: controller.signal,
+      ...(steps ? { steps } : {}),
+      log: (m) => console.log(m),
+      ask: (q) => rl.question(`\n>>> ${q}\n`),
+    });
+    const failed = Object.entries(report.steps).filter(([, r]) => !r.ok);
+    console.log(`\nFixtures and capture.json written to ${outDir}`);
+    if (failed.length) console.log(`Steps needing attention: ${failed.map(([n, r]) => `${n} (${r.note})`).join('; ')}`);
+    return EXIT.ok;
+  } catch (err) {
+    if (isAbortError(err)) return EXIT.cancelled;
+    if (err instanceof RunError) {
+      console.error(`${err.code}: ${err.message}`);
+      return err.code === 'needs-auth' ? EXIT.needsAuth : err.code === 'browser-missing' || err.code === 'profile-locked' ? EXIT.environment : EXIT.contract;
+    }
+    throw err;
+  } finally {
+    rl.close();
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
@@ -116,6 +184,8 @@ async function main(argv: string[]): Promise<number> {
       return sidecar(rest);
     case 'selftest':
       return selftest(rest);
+    case 'capture':
+      return capture(rest);
     case '--version':
     case '-v':
       console.log(VERSION);

@@ -10,6 +10,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p packages/ui/tsconfig.json --noEmit",
+    "lurk": "node scripts/run-bundled.ts packages/cli/src/main.ts",
+    "verify:selectors": "node scripts/run-bundled.ts scripts/verify-selectors.ts",
     "build:ui": "pnpm --filter @disco-lurk/ui build",
     "build:sidecar": "node scripts/build-sidecar.ts",
     "gate:sidecar": "node scripts/gate-sidecar.ts",
@@ -26,6 +28,7 @@
     "@types/ws": "^8.18.1",
     "@yao-pkg/pkg": "6.23.0",
     "esbuild": "0.28.2",
+    "playwright-core": "1.64.0",
     "typescript": "~5.9.3",
     "vitest": "5.0.3"
   }

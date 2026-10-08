@@ -231,6 +231,9 @@ describe('server API', () => {
     expect(log.headers.get('content-disposition')).toContain(`${runId}.jsonl`);
     const states = log.body.trim().split('\n').map((l) => (JSON.parse(l) as RunEvent).type);
     expect(new Set(states)).toEqual(new Set(['state']));
+    const exported = await call<{ path: string; lines: number }>('POST', `/runs/${runId}/export`, { types: ['state'] });
+    expect(exported.body.path.startsWith(join(h.dataDir, 'exports'))).toBe(true);
+    expect(exported.body.lines).toBe(states.length);
     const all = await call<RunEvent[]>('GET', `/runs/${runId}/events`);
     expect(all.body.some((e) => e.type === 'topic')).toBe(true);
     expect(h.shell.notices.map(([t]) => t)).toContain('运行结束');

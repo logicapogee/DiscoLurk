@@ -1,5 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto';
-import { join } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { Category, CategoryStore, Clock, ProfileId, RunCoordinator, RunEvent, Site, StopRequest } from '@disco-lurk/core';
 import type { PresetSave, ProfileCreate, ProfilePatch, ScheduleList, ServerInfo, Settings, SiteView, StoredPreset, UpdateInfo } from './contract';
 import { LoginManager } from './logins';
@@ -161,6 +162,11 @@ export function createApp(deps: AppDeps): LurkApp {
       release();
       hub.publish({ type: 'profiles-changed' });
     }
+  };
+  const runLog = async (runId: string, types: string | null) => {
+    if (!runs.get(runId) && !history.get(runId)) throw new HttpError(404, 'unknown-run', `Unknown run ${runId}`);
+    const wanted = types?.split(',').filter((t): t is RunEvent['type'] => EVENT_TYPES.has(t as RunEvent['type']));
+    return (await history.readEvents(runId)).filter((l) => !wanted?.length || wanted.includes((JSON.parse(l) as RunEvent).type));
   };
   const startPreset = async (presetId: string) => {
     const preset = presets.get(presetId);
@@ -364,15 +370,28 @@ export function createApp(deps: AppDeps): LurkApp {
       path: '/runs/:id/log',
       handle: async ({ params, query }) => {
         const id = params.id!;
-        if (!runs.get(id) && !history.get(id)) throw new HttpError(404, 'unknown-run', `Unknown run ${id}`);
-        const wanted = query.get('types')?.split(',').filter((t): t is RunEvent['type'] => EVENT_TYPES.has(t as RunEvent['type']));
-        const lines = (await history.readEvents(id)).filter((l) => !wanted?.length || wanted.includes((JSON.parse(l) as RunEvent).type));
+        const lines = await runLog(id, query.get('types'));
         return {
           status: 200,
           text: lines.join('\n') + (lines.length ? '\n' : ''),
           contentType: 'application/x-ndjson; charset=utf-8',
           headers: { 'Content-Disposition': `attachment; filename="${id}.jsonl"` },
         };
+      },
+    },
+    {
+      // The desktop webview has no download manager, so the shell's UI asks for a file on disk instead.
+      method: 'POST',
+      path: '/runs/:id/export',
+      handle: async ({ params, body }) => {
+        const id = params.id!;
+        const types = (body as { types?: unknown } | undefined)?.types;
+        const lines = await runLog(id, Array.isArray(types) ? types.filter((t) => typeof t === 'string').join(',') : null);
+        const stamp = new Date(deps.clock.now()).toISOString().replace(/[:.]/g, '-');
+        const path = join(deps.dataDir, 'exports', `${id.replace(/[^A-Za-z0-9_-]/g, '_')}-${stamp}.jsonl`);
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, lines.join('\n') + (lines.length ? '\n' : ''));
+        return ok({ path, lines: lines.length });
       },
     },
 

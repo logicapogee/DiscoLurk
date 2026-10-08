@@ -48,17 +48,22 @@ export interface FloorReading {
 }
 
 /**
- * §4.3: the wide timeline shows `current / total`; the narrow progress widget holds three spans
- * of which the 1st and 3rd are current and total. Null when neither renders a pair of numbers.
+ * §4.3 from the counters' text: the wide timeline shows `current / total`; the narrow progress
+ * widget holds three spans of which the 1st and 3rd are current and total. Null when neither
+ * renders a pair of numbers.
  */
-export function parseFloorCounter(root: DomRoot): FloorReading | null {
-  const wide = /(\d[\d,]*)\s*\/\s*(\d[\d,]*)/.exec(text(root.querySelector(SELECTORS.floorWide)));
-  if (wide) return { layout: 'wide', current: toInt(wide[1])!, total: toInt(wide[2])! };
-  const spans = Array.from(root.querySelectorAll(SELECTORS.floorNarrow));
-  const current = toInt(spans[0]?.textContent);
-  const total = toInt(spans[2]?.textContent);
-  if (spans.length >= 3 && current !== null && total !== null) return { layout: 'narrow', current, total };
+export function floorCounterFromText(wide: string | null, narrow: readonly string[]): FloorReading | null {
+  const pair = /(\d[\d,]*)\s*\/\s*(\d[\d,]*)/.exec(wide ?? '');
+  if (pair) return { layout: 'wide', current: toInt(pair[1])!, total: toInt(pair[2])! };
+  const current = toInt(narrow[0]);
+  const total = toInt(narrow[2]);
+  if (narrow.length >= 3 && current !== null && total !== null) return { layout: 'narrow', current, total };
   return null;
+}
+
+export function parseFloorCounter(root: DomRoot): FloorReading | null {
+  const wide = root.querySelector(SELECTORS.floorWide);
+  return floorCounterFromText(wide ? text(wide) : null, Array.from(root.querySelectorAll(SELECTORS.floorNarrow)).map(text));
 }
 
 /** A03 marker counts within `root`: the reactions container and, as second evidence, the liked icon. */

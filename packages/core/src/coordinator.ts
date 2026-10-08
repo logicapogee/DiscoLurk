@@ -262,7 +262,8 @@ export class DiscoLurkCoordinator implements RunCoordinator {
         return;
       }
       const known = await this.env.categories.load(site.id);
-      await this.env.categories.save(site.id, mergeDiscoveredCategories(known, found));
+      const merged = mergeDiscoveredCategories(known, found);
+      if (JSON.stringify(merged) !== JSON.stringify(known)) await this.env.categories.save(site.id, merged);
     } catch (err) {
       const why = classify(err, signal);
       if (why.kind === 'stop') throw err;

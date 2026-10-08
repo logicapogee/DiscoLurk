@@ -316,6 +316,21 @@ describe('CAT-001 discovered categories (§7.1 step 2, §7.2)', () => {
     ]);
   });
 
+  it('leaves the stored list untouched when the site shows the same categories', async () => {
+    const discovered = site({ id: 'fixture', categorySource: 'discovered' });
+    delete discovered.builtinCategories;
+    const t = setup({ site: discovered, forum: { discovered: found } });
+    await t.categoryStore.save('fixture', found);
+    let saves = 0;
+    const save = t.categoryStore.save.bind(t.categoryStore);
+    t.categoryStore.save = async (id, list) => {
+      saves++;
+      await save(id, list);
+    };
+    await t.run(plan({ kind: 'topics', count: 1 }));
+    expect(saves).toBe(0);
+  });
+
   it('builtin sites never discover', async () => {
     const t = setup({ forum: { discovered: found } });
     await t.run(plan({ kind: 'topics', count: 1 }));

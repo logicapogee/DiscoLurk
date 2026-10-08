@@ -1,4 +1,4 @@
-import { SELECTORS, parseFloorCounter } from '@disco-lurk/site-discourse';
+import { SELECTORS, floorCounterFromText, parseFloorCounter } from '@disco-lurk/site-discourse';
 import { describe, expect, it } from 'vitest';
 import { SITE_IDS, count, fixture, textOf, type SiteId } from './fixtures';
 
@@ -27,6 +27,14 @@ describe.each(SITE_IDS)('FLOOR-001 floor counter in both layouts (ยง4.3, F02) โ€
 
   it('reports the same total in both layouts', () => {
     expect(parseFloorCounter(narrow)?.total).toBe(parseFloorCounter(wide)?.total);
+  });
+
+  it('reads the same values from the counters\' text alone, as the live page hands them over', () => {
+    for (const doc of [wide, narrow]) {
+      const wideText = doc.querySelector(SELECTORS.floorWide);
+      const narrowTexts = Array.from(doc.querySelectorAll(SELECTORS.floorNarrow)).map(textOf);
+      expect(floorCounterFromText(wideText ? textOf(wideText) : null, narrowTexts)).toEqual(parseFloorCounter(doc));
+    }
   });
 
   it('returns null when neither counter is rendered (F08)', () => {

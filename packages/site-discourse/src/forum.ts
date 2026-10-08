@@ -26,7 +26,7 @@ import {
 } from '@disco-lurk/core';
 import { waitForCurrentUser } from './auth';
 import { expectedMiss, type LoadState, type ReadOnlyPage } from './page';
-import { categoryLinks, parseDocument, parseFloorCounter, parseTopicList, type CategoryLink } from './parse';
+import { categoryLinks, floorCounterFromText, parseDocument, parseTopicList, type CategoryLink, type FloorReading } from './parse';
 import { parseConnect } from './progress/connect-linuxdo';
 import { progressModuleFor } from './progress/index';
 import { parseTrustLevel, TRUST_LEVEL_SELECTORS } from './progress/trust-level-docofcard';
@@ -147,6 +147,30 @@ function untilAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+/** A topic page as reading sees it: the floor counters' text and wheel input over the post stream. */
+class PageFloorSurface implements FloorSurface {
+  private pointed = false;
+
+  constructor(
+    private readonly page: ReadOnlyPage,
+    private readonly center: { x: number; y: number },
+  ) {}
+
+  async readCounter(): Promise<FloorReading | null> {
+    const texts = await Promise.all([this.page.text(SELECTORS.floorWide), this.page.texts(SELECTORS.floorNarrow)]).catch(missAs(null));
+    return texts && floorCounterFromText(...texts);
+  }
+
+  async scroll(dy: number): Promise<void> {
+    // Real wheel input over the post stream: Discourse's screen tracker pauses when it sees no scroll events (§3).
+    if (!this.pointed) {
+      await this.page.moveMouse(this.center.x, this.center.y);
+      this.pointed = true;
+    }
+    await this.page.wheel(0, dy);
+  }
+}
+
 /**
  * §6.1 production `ForumPort`: one implementation for every Discourse site, configured only by
  * `Site`. It reads and navigates; the only form it ever submits is the B10 password login.
@@ -193,8 +217,8 @@ export class DiscourseForum implements ForumPort {
   }
 
   private async challenged(): Promise<boolean> {
-    if ((await this.count(CHALLENGE_SELECTOR)) > 0) return true;
-    return CHALLENGE_TITLE.test(await this.page.title().catch(missAs('')));
+    const [marks, title] = await Promise.all([this.count(CHALLENGE_SELECTOR), this.page.title().catch(missAs(''))]);
+    return marks > 0 || CHALLENGE_TITLE.test(title);
   }
 
   private async content(): Promise<Document> {
@@ -228,8 +252,9 @@ export class DiscourseForum implements ForumPort {
     await this.goto(this.site.baseUrl, signal);
     const start = this.deps.clock.monotonic();
     for (;;) {
-      if ((await this.count(SELECTORS.currentUser)) > 0) return { status: 'authenticated' };
-      if ((await this.count(`${ANONYMOUS_HEADER}, ${SELECTORS.loginUsername}`)) > 0) return { status: 'needs-auth' };
+      const [user, anonymous] = await Promise.all([this.count(SELECTORS.currentUser), this.count(`${ANONYMOUS_HEADER}, ${SELECTORS.loginUsername}`)]);
+      if (user > 0) return { status: 'authenticated' };
+      if (anonymous > 0) return { status: 'needs-auth' };
       if (this.deps.clock.monotonic() - start >= SIGN_IN_CHECK_MS) break;
       await this.deps.sleeper.sleep(1_000, signal);
     }
@@ -319,16 +344,8 @@ export class DiscourseForum implements ForumPort {
 
   async readTopic(visit: TopicVisit, strategy: ReadStrategy, signal: AbortSignal): Promise<ReadResult> {
     if (!visit.entered) return { startFloor: null, endFloor: null, scrolls: 0, stoppedByTarget: false, layout: null };
-    const page = this.page;
-    const { width, height } = await page.viewportSize();
-    const surface: FloorSurface = {
-      readCounter: async () => parseFloorCounter(parseDocument(await page.content())),
-      async scroll(dy) {
-        // Real wheel input over the post stream: Discourse's screen tracker pauses when it sees no scroll events (§3).
-        await page.moveMouse(Math.round(width / 2), Math.round(height / 2));
-        await page.wheel(0, dy);
-      },
-    };
+    const { width, height } = await this.page.viewportSize();
+    const surface = new PageFloorSurface(this.page, { x: Math.round(width / 2), y: Math.round(height / 2) });
     return readFloors(surface, strategy, this.deps, signal);
   }
 

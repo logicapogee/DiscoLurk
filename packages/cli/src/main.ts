@@ -3,12 +3,13 @@ import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
-import { DiscoLurkCoordinator, isAbortError, RunError, systemClock } from '@disco-lurk/core';
-import { startServer } from '@disco-lurk/server';
+import { DiscoLurkCoordinator, isAbortError, RunError } from '@disco-lurk/core';
 import { formatDoctor, runDoctor } from './doctor';
 import { FileCategoryStore } from '@disco-lurk/config';
-import { profilesDir, sitesDir } from './paths';
+import { appDataDir, profilesDir, sitesDir } from './paths';
 import { SidecarLifecycle } from './lifecycle';
+import { serve } from './serve';
+import { bootServer, stdoutShell } from './sidecar';
 import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
 import { installStopHandlers } from './signals';
@@ -44,6 +45,8 @@ Usage:
            [--reply --i-understand-auto-reply-risk [--reply-rate <%>]]
            [--extra-wait <min>-<max>|off] [--experiments useNewList,useUnreadList,refreshCategories,smartRanked]
   lurk doctor [--json] [--port <n>] [--network]
+  lurk serve [--host 127.0.0.1] [--port 8080] [--headless] [--origin <url>]... [--ui <dir>] [--data <dir>]
+             (remote web UI; a non-loopback --host requires LURK_TOKEN)
   lurk sidecar   (started by the desktop shell: prints a ready line, exits when stdin closes)
   lurk capture --site <id> [--profile <id>] [--channel chrome|msedge] [--out <dir>] [--steps <a,b>]   (development: Phase 0 fixtures; steps: ${CAPTURE_STEPS.join(',')})
   lurk --version`;
@@ -76,26 +79,25 @@ async function sidecar(argv: string[]): Promise<number> {
   // them from crashing the sidecar before cleanup finishes.
   process.stdout.on('error', () => {});
   process.stderr.on('error', () => {});
-  const lifecycle = new SidecarLifecycle((m) => console.error(m));
+  const log = (m: string) => console.error(m);
+  const lifecycle = new SidecarLifecycle(log);
   // The shell spawns the sidecar on loopback only; remote access is the separate `serve` command.
-  const server = await startServer({
+  const server = await bootServer({
+    version: VERSION,
     host: '127.0.0.1',
     port: 0,
     token,
-    version: VERSION,
-    clock: systemClock,
-    log: (m) => console.error(m),
-    handlers: {
-      doctor: () => runDoctor({ version: VERSION, profilesDir: profilesDir(), listeningPort: server.port }),
-      shutdown: () => lifecycle.shutdown('/shutdown request'),
-    },
+    dataDir: appDataDir(),
+    headlessOnly: false,
+    lifecycle,
+    shell: stdoutShell(),
+    log,
   });
   console.log(JSON.stringify({ event: 'ready', port: server.port, token }));
   lifecycle.watchParent(process.stdin);
   process.once('SIGTERM', () => void lifecycle.shutdown('SIGTERM'));
   process.once('SIGINT', () => void lifecycle.shutdown('SIGINT'));
   await lifecycle.done;
-  await server.close();
   return EXIT.ok;
 }
 
@@ -242,6 +244,8 @@ async function main(argv: string[]): Promise<number> {
       return doctor(rest);
     case 'sidecar':
       return sidecar(rest);
+    case 'serve':
+      return serve(rest, VERSION);
     case 'selftest':
       return selftest(rest);
     case 'capture':

@@ -2,9 +2,15 @@
   "name": "@disco-lurk/server",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts"
+  },
   "dependencies": {
+    "@disco-lurk/config": "workspace:*",
     "@disco-lurk/core": "workspace:*",
-    "ws": "8.22.0"
+    "@disco-lurk/scheduler": "workspace:*",
+    "ws": "8.22.0",
+    "zod": "4.6.5"
   }
 }

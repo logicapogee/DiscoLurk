@@ -1,20 +1,70 @@
+import { readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Clock, RunEvent } from '@disco-lurk/core';
+import { extname, join, normalize, sep } from 'node:path';
+import type { Clock } from '@disco-lurk/core';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { bearer, isLoopback, MIN_TOKEN_BYTES, TokenGuard, tokenStrongEnough } from './auth';
+import { HEARTBEAT_MS, type ServerFrame } from './contract';
 
 /** The shell's webview origin (Windows serves it over http://tauri.localhost). */
 export const TAURI_ORIGINS = ['tauri://localhost', 'http://tauri.localhost'] as const;
 export const WS_AUTH_TIMEOUT_MS = 5000;
 /** Loopback failures are not counted toward lockout, so each one costs a fixed pause instead. */
 export const LOOPBACK_FAILURE_DELAY_MS = 250;
+const MAX_BODY_BYTES = 1024 * 1024;
 
 export const WS_CLOSE = { authFailed: 4401, authTimeout: 4408, tokenRotated: 4001 } as const;
 
-export interface ServerHandlers {
-  doctor(): Promise<unknown>;
-  shutdown(): Promise<void>;
+export class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message?: string,
+  ) {
+    super(message ?? code);
+  }
+}
+
+export interface Reply {
+  status: number;
+  body?: unknown;
+  /** Sent as-is instead of JSON, with `contentType`. */
+  text?: string;
+  contentType?: string;
+  headers?: Record<string, string>;
+  /** Runs once the response has been written, for actions that would cut the response short. */
+  after?: () => void | Promise<void>;
+}
+
+export interface RouteContext {
+  params: Record<string, string>;
+  query: URLSearchParams;
+  body: unknown;
+  ip: string;
+}
+
+export interface Route {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  /** Segments starting with `:` capture one URL-decoded path segment. */
+  path: string;
+  /** False only for `/health`; everything else needs the bearer token. */
+  auth?: boolean;
+  handle(ctx: RouteContext): Promise<Reply>;
+}
+
+/** Frames published here reach every authenticated WebSocket. */
+export class EventHub {
+  private listeners = new Set<(frame: ServerFrame) => void>();
+
+  subscribe(fn: (frame: ServerFrame) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  publish(frame: ServerFrame): void {
+    for (const fn of this.listeners) fn(frame);
+  }
 }
 
 export interface ServerOptions {
@@ -23,27 +73,108 @@ export interface ServerOptions {
   token: string;
   version: string;
   clock: Clock;
-  handlers: ServerHandlers;
+  routes: Route[];
+  hub?: EventHub;
+  /** The built UI, served to remote browsers; the desktop shell bundles its own copy. */
+  staticDir?: string;
   allowedOrigins?: readonly string[];
   wsAuthTimeoutMs?: number;
   loopbackFailureDelayMs?: number;
+  heartbeatMs?: number;
   log?: (message: string) => void;
 }
 
 export interface LurkServer {
   readonly port: number;
   rotateToken(token: string): void;
-  broadcast(event: RunEvent): void;
   close(): Promise<void>;
 }
 
-type Route = { method: 'GET' | 'POST'; auth: boolean; handle: (res: ServerResponse) => Promise<void> };
+const CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8',
+};
 
-function send(res: ServerResponse, status: number, body?: unknown): void {
-  res.statusCode = status;
-  if (body === undefined) return void res.end();
+/** The remote UI talks only to the origin that served it. */
+const STATIC_CSP = "default-src 'self'; connect-src 'self' ws: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'";
+
+function send(res: ServerResponse, reply: Reply): void {
+  res.statusCode = reply.status;
+  for (const [k, v] of Object.entries(reply.headers ?? {})) res.setHeader(k, v);
+  if (reply.text !== undefined) {
+    res.setHeader('Content-Type', reply.contentType ?? 'text/plain; charset=utf-8');
+    return void res.end(reply.text);
+  }
+  if (reply.body === undefined) return void res.end();
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.end(JSON.stringify(body));
+  res.end(JSON.stringify(reply.body));
+}
+
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new HttpError(413, 'body-too-large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (size === 0) return resolve(undefined);
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        reject(new HttpError(400, 'invalid-json'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function match(pattern: string, path: string): Record<string, string> | null {
+  const want = pattern.split('/');
+  const got = path.split('/');
+  if (want.length !== got.length) return null;
+  const params: Record<string, string> = {};
+  for (let i = 0; i < want.length; i++) {
+    const w = want[i]!;
+    const g = got[i]!;
+    if (w.startsWith(':')) {
+      if (!g) return null;
+      try {
+        params[w.slice(1)] = decodeURIComponent(g);
+      } catch {
+        return null;
+      }
+    } else if (w !== g) return null;
+  }
+  return params;
+}
+
+async function serveStatic(dir: string, pathname: string, res: ServerResponse): Promise<boolean> {
+  const rel = normalize(decodeURIComponent(pathname === '/' ? '/index.html' : pathname)).replace(/^([/\\])+/, '');
+  const file = join(dir, rel);
+  if (!file.startsWith(dir.endsWith(sep) ? dir : dir + sep)) return false;
+  try {
+    if (!(await stat(file)).isFile()) return false;
+  } catch {
+    return false;
+  }
+  res.statusCode = 200;
+  res.setHeader('Content-Type', CONTENT_TYPES[extname(file)] ?? 'application/octet-stream');
+  res.setHeader('Content-Security-Policy', STATIC_CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.end(await readFile(file));
+  return true;
 }
 
 export async function startServer(opts: ServerOptions): Promise<LurkServer> {
@@ -58,26 +189,10 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
     else respond();
   };
 
-  const routes: Record<string, Route> = {
-    '/health': {
-      method: 'GET',
-      auth: false,
-      handle: async (res) => send(res, 200, { status: 'ok', version: opts.version }),
-    },
-    '/doctor': {
-      method: 'GET',
-      auth: true,
-      handle: async (res) => send(res, 200, await opts.handlers.doctor()),
-    },
-    '/shutdown': {
-      method: 'POST',
-      auth: true,
-      handle: async (res) => {
-        send(res, 202, { status: 'shutting-down' });
-        await opts.handlers.shutdown();
-      },
-    },
-  };
+  const routes: Route[] = [
+    { method: 'GET', path: '/health', auth: false, handle: async () => ({ status: 200, body: { status: 'ok', version: opts.version } }) },
+    ...opts.routes,
+  ];
 
   const cors = (req: IncomingMessage, res: ServerResponse) => {
     const origin = req.headers.origin;
@@ -85,25 +200,45 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+  };
+
+  const handle = async (req: IncomingMessage, res: ServerResponse) => {
+    cors(req, res);
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    if (req.method === 'OPTIONS') return send(res, { status: 204 });
+    let pathMatched = false;
+    for (const route of routes) {
+      const params = match(route.path, url.pathname);
+      if (!params) continue;
+      pathMatched = true;
+      if (route.method !== req.method) continue;
+      if (route.auth !== false) {
+        const ip = req.socket.remoteAddress ?? 'unknown';
+        const verdict = guard.check(ip, bearer(req.headers.authorization));
+        if (verdict === 'locked') return send(res, { status: 429, body: { error: 'locked' } });
+        if (verdict === 'denied') return afterFailure(ip, () => send(res, { status: 401, body: { error: 'unauthorized' } }));
+      }
+      const body = req.method === 'GET' || req.method === 'DELETE' ? undefined : await readBody(req);
+      const reply = await route.handle({ params, query: url.searchParams, body, ip: req.socket.remoteAddress ?? 'unknown' });
+      send(res, reply);
+      if (reply.after) await reply.after();
+      return;
+    }
+    if (pathMatched) return send(res, { status: 405, body: { error: 'method-not-allowed' } });
+    if (req.method === 'GET' && opts.staticDir && (await serveStatic(opts.staticDir, url.pathname, res))) return;
+    send(res, { status: 404, body: { error: 'not-found' } });
   };
 
   const http = createServer((req, res) => {
-    cors(req, res);
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    const route = routes[url.pathname];
-    if (req.method === 'OPTIONS') return send(res, 204);
-    if (!route) return send(res, 404, { error: 'not-found' });
-    if (req.method !== route.method) return send(res, 405, { error: 'method-not-allowed' });
-    if (route.auth) {
-      const ip = req.socket.remoteAddress ?? 'unknown';
-      const verdict = guard.check(ip, bearer(req.headers.authorization));
-      if (verdict === 'locked') return send(res, 429, { error: 'locked' });
-      if (verdict === 'denied') return afterFailure(ip, () => send(res, 401, { error: 'unauthorized' }));
-    }
-    route.handle(res).catch((err: unknown) => {
-      log(`route ${url.pathname} failed: ${String(err)}`);
-      if (!res.headersSent) send(res, 500, { error: 'internal' });
+    handle(req, res).catch((err: unknown) => {
+      if (err instanceof HttpError) {
+        if (!res.headersSent) send(res, { status: err.status, body: { error: err.code, message: err.message } });
+        return;
+      }
+      log(`${req.method} ${req.url} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+      if (!res.headersSent) send(res, { status: 500, body: { error: 'internal', message: err instanceof Error ? err.message : String(err) } });
     });
   });
 
@@ -128,13 +263,21 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
         return;
       }
       authed.add(ws);
-      ws.send(JSON.stringify({ type: 'auth-ok' }));
+      ws.send(JSON.stringify({ type: 'auth-ok' } satisfies ServerFrame));
     });
     ws.on('close', () => {
       clearTimeout(timer);
       authed.delete(ws);
     });
   });
+
+  const push = (frame: ServerFrame) => {
+    const data = JSON.stringify(frame);
+    for (const ws of authed) ws.send(data);
+  };
+  const unsubscribe = opts.hub?.subscribe(push);
+  const heartbeat = setInterval(() => push({ type: 'heartbeat', at: new Date(opts.clock.now()).toISOString() }), opts.heartbeatMs ?? HEARTBEAT_MS);
+  heartbeat.unref();
 
   await new Promise<void>((resolve, reject) => {
     http.once('error', reject);
@@ -152,12 +295,10 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
       for (const ws of authed) ws.close(WS_CLOSE.tokenRotated, 'token-rotated');
       authed.clear();
     },
-    broadcast(event) {
-      const frame = JSON.stringify({ type: 'event', event });
-      for (const ws of authed) ws.send(frame);
-    },
     close: () =>
       new Promise<void>((resolve) => {
+        clearInterval(heartbeat);
+        unsubscribe?.();
         for (const ws of wss.clients) ws.terminate();
         wss.close();
         http.closeAllConnections();

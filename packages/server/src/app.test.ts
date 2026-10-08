@@ -1,0 +1,418 @@
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  DiscoLurkCoordinator,
+  seededRandom,
+  systemClock,
+  systemSleeper,
+  type AuthMode,
+  type AuthResult,
+  type Category,
+  type CategoryStore,
+  type InterruptibleSleeper,
+  type RunEvent,
+} from '@disco-lurk/core';
+import { FixtureForum, fixtureSite } from '@disco-lurk/core/testing';
+import { afterEach, describe, expect, it } from 'vitest';
+import WebSocket from 'ws';
+import { createApp, defaultPreset, isNewer, type LurkApp, type ShellChannel } from './app';
+import type { ActiveRun, LoginView, RunRecord, ScheduleList, ServerFrame, Settings, StoredPreset } from './contract';
+import { startServer, type LurkServer } from './server';
+
+/** Every kernel wait shrinks to a few milliseconds, so a fixture run takes real but short time. */
+const fastSleeper: InterruptibleSleeper = { sleep: (ms, signal) => systemSleeper.sleep(Math.min(ms, 3), signal) };
+
+const categories: Category[] = [
+  { name: 'a', path: '/c/a/1', id: 1, enabledByDefault: true },
+  { name: 'b', path: '/c/b/2', id: 2, enabledByDefault: false },
+];
+const site = fixtureSite({ id: 'fx', displayName: 'Fixture', categorySource: 'builtin', builtinCategories: categories });
+
+class MemoryCategories implements CategoryStore {
+  async load() {
+    return [];
+  }
+  async save() {}
+}
+
+interface Harness {
+  base: string;
+  token: string;
+  app: LurkApp;
+  server: LurkServer;
+  shell: { notices: Array<[string, string]>; settings: Settings[]; tokens: string[]; active: number[] };
+  locks: Map<string, number>;
+  /** How the next sign-in check answers, per mode. */
+  auth: { next: (mode: AuthMode) => Promise<AuthResult> };
+  dataDir: string;
+  shutdowns: () => number;
+}
+
+let current: Harness | undefined;
+afterEach(async () => {
+  if (!current) return;
+  await current.app.close();
+  await current.server.close();
+  current = undefined;
+});
+
+async function boot(opts: { headlessOnly?: boolean } = {}): Promise<Harness> {
+  const dataDir = mkdtempSync(join(tmpdir(), 'lurk-app-'));
+  const profilesDir = join(dataDir, 'profiles');
+  const locks = new Map<string, number>();
+  const shell: Harness['shell'] = { notices: [], settings: [], tokens: [], active: [] };
+  const channel: ShellChannel = {
+    notify: (t, b) => shell.notices.push([t, b]),
+    settings: (s) => shell.settings.push(s),
+    token: (t) => shell.tokens.push(t),
+    activeRuns: (n) => shell.active.push(n),
+  };
+  const auth: Harness['auth'] = { next: async () => ({ status: 'authenticated', username: 'alice' }) };
+  let app: LurkApp;
+  const coordinator = new DiscoLurkCoordinator({
+    deps: { clock: systemClock, random: seededRandom(1), sleeper: fastSleeper },
+    categories: new MemoryCategories(),
+    resolveProfile: async (id) => ({ profile: await app.services.profiles.resolve(id), site }),
+    open: async () => {
+      const forum = new FixtureForum({
+        site,
+        sleeper: fastSleeper,
+        topics: (path, call) => Array.from({ length: 3 }, (_, i) => ({ id: `${path}-${call}-${i}`, title: 't', unread: true, pinned: false })),
+        latency: { collect: 2, enter: 2, dwell: 2, back: 2 },
+        auth: (mode) => auth.next(mode),
+      });
+      return { forum, closed: new AbortController().signal, close: async () => {} };
+    },
+  });
+  let shutdowns = 0;
+  app = createApp({
+    version: '1.2.3',
+    clock: systemClock,
+    dataDir,
+    profilesDir,
+    coordinator,
+    sites: [site],
+    categories: new MemoryCategories(),
+    lockHolder: async (dir) => locks.get(dir) ?? null,
+    doctor: async () => ({ checks: [] }),
+    shutdown: async () => void shutdowns++,
+    displayAvailable: () => true,
+    shell: channel,
+    latestRelease: async () => ({ tag: 'v1.3.0', url: 'https://example.invalid/r' }),
+    releasePage: 'https://example.invalid/releases',
+    ...(opts.headlessOnly ? { headlessOnly: true } : {}),
+  });
+  await app.start();
+  const token = randomBytes(32).toString('base64url');
+  const server = await startServer({ host: '127.0.0.1', port: 0, token, version: '1.2.3', clock: systemClock, routes: app.routes, hub: app.hub, loopbackFailureDelayMs: 1 });
+  app.bindTokenRotation((t) => server.rotateToken(t));
+  current = { base: `http://127.0.0.1:${server.port}`, token, app, server, shell, locks, auth, dataDir, shutdowns: () => shutdowns };
+  return current;
+}
+
+function api(h: Harness) {
+  const call = async <T = unknown>(method: string, path: string, body?: unknown, token = h.token) => {
+    const res = await fetch(`${h.base}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    const text = await res.text();
+    return { status: res.status, body: (text && res.headers.get('content-type')?.startsWith('application/json') ? JSON.parse(text) : text) as T, headers: res.headers };
+  };
+  return call;
+}
+
+async function events(h: Harness) {
+  const ws = new WebSocket(h.base.replace('http', 'ws') + '/events');
+  const frames: ServerFrame[] = [];
+  const waiters: Array<{ test: (f: ServerFrame) => boolean; resolve: (f: ServerFrame) => void }> = [];
+  ws.on('message', (d) => {
+    const f = JSON.parse(String(d)) as ServerFrame;
+    frames.push(f);
+    for (const w of waiters.slice()) if (w.test(f)) {
+      waiters.splice(waiters.indexOf(w), 1);
+      w.resolve(f);
+    }
+  });
+  await new Promise((r) => ws.once('open', r));
+  ws.send(JSON.stringify({ type: 'auth', token: h.token }));
+  const until = (test: (f: ServerFrame) => boolean, ms = 5000) =>
+    new Promise<ServerFrame>((resolve, reject) => {
+      const hit = frames.find(test);
+      if (hit) return resolve(hit);
+      const t = setTimeout(() => reject(new Error('frame not seen in time')), ms);
+      waiters.push({ test, resolve: (f) => (clearTimeout(t), resolve(f)) });
+    });
+  await until((f) => f.type === 'auth-ok');
+  return { ws, frames, until };
+}
+
+const preset = (over: Partial<StoredPreset> = {}): StoredPreset => ({
+  ...defaultPreset(site, categories),
+  id: 'p1',
+  name: '测试',
+  profileId: 'fx/main',
+  browserMode: 'headless',
+  extraWait: { enabled: false, minSec: 1, maxSec: 3 },
+  ...over,
+});
+
+async function withProfile(h: Harness, name = 'main') {
+  const res = await api(h)('POST', '/profiles', { siteId: 'fx', name, channel: 'chrome' });
+  expect(res.status).toBe(201);
+}
+
+describe('server API', () => {
+  it('lists sites with their categories and a default preset that keeps likes and replies off', async () => {
+    const h = await boot();
+    const call = api(h);
+    const sites = await call<Array<{ site: { id: string }; categories: Category[] }>>('GET', '/sites');
+    expect(sites.body.map((s) => s.site.id)).toEqual(['fx']);
+    expect(sites.body[0]!.categories).toHaveLength(2);
+    const d = await call<StoredPreset>('GET', '/sites/fx/default-preset');
+    expect(d.body).toMatchObject({ browseMode: 'deep', runMode: { kind: 'endless' }, categoryPaths: ['/c/a/1'] });
+    expect(d.body.interaction.like.enabled).toBe(false);
+    expect(d.body.interaction.reply.enabled).toBe(false);
+    expect((await call('GET', '/sites/nope/default-preset')).status).toBe(404);
+  });
+
+  it('persists presets and requires an explicit confirmation to turn automatic replies on', async () => {
+    const h = await boot();
+    const call = api(h);
+    expect((await call('PUT', '/presets/p1', { preset: preset() })).status).toBe(200);
+    const replying = preset({ interaction: { ...preset().interaction, reply: { enabled: true, rate: 5 } } });
+    const refused = await call<{ error: string }>('PUT', '/presets/p1', { preset: replying });
+    expect(refused.status).toBe(428);
+    expect(refused.body.error).toBe('reply-confirmation-required');
+    expect((await call<StoredPreset[]>('GET', '/presets')).body[0]!.interaction.reply.enabled).toBe(false);
+    expect((await call('PUT', '/presets/p1', { preset: replying, confirmReply: true })).status).toBe(200);
+    expect((await call('PUT', '/presets/p1', { preset: { ...preset(), runMode: { kind: 'topics', min: 5, max: 2 } } })).status).toBe(422);
+    expect((await call('PUT', '/presets/other', { preset: preset() })).status).toBe(422);
+
+    // A restart reads the same file back.
+    const again = createApp({ ...appDepsOf(h) });
+    await again.start();
+    expect(again.services.presets.get('p1')?.interaction.reply.enabled).toBe(true);
+    expect((await call('DELETE', '/presets/p1')).status).toBe(204);
+    expect((await call('DELETE', '/presets/p1')).status).toBe(404);
+  });
+
+  it('starts a run, streams its RunEvents, refuses a second run on the same Profile and stops it', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset() });
+    const ws = await events(h);
+    const started = await call<ActiveRun>('POST', '/runs', { presetId: 'p1' });
+    expect(started.status).toBe(202);
+    const runId = started.body.runId;
+    await ws.until((f) => f.type === 'event' && f.runId === runId && f.event.type === 'state' && f.event.state === 'browsing');
+    await ws.until((f) => f.type === 'event' && f.event.type === 'topic' && f.event.phase === 'read');
+
+    const second = await call<{ error: string }>('POST', '/runs', { presetId: 'p1' });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toBe('profile-busy');
+    const profiles = await call<Array<{ id: string; status: string; busy: boolean }>>('GET', '/profiles');
+    expect(profiles.body).toEqual([expect.objectContaining({ id: 'fx/main', status: 'locked', busy: true })]);
+    expect((await call<ActiveRun[]>('GET', '/runs/active')).body.map((r) => r.runId)).toEqual([runId]);
+
+    expect((await call('POST', `/runs/${runId}/stop`)).status).toBe(200);
+    const ended = (await ws.until((f) => f.type === 'run' && f.run.runId === runId && f.run.result !== undefined)) as Extract<ServerFrame, { type: 'run' }>;
+    expect(ended.run.result).toMatchObject({ outcome: 'completed', stopCause: 'user' });
+    expect((await call<ActiveRun[]>('GET', '/runs/active')).body).toEqual([]);
+
+    const history = await call<RunRecord[]>('GET', '/runs/history');
+    expect(history.body.map((r) => r.runId)).toEqual([runId]);
+    expect(history.body[0]!.result.stats.confirmed.topics).toBeGreaterThan(0);
+    const log = await call<string>('GET', `/runs/${runId}/log?types=state`);
+    expect(log.headers.get('content-disposition')).toContain(`${runId}.jsonl`);
+    const states = log.body.trim().split('\n').map((l) => (JSON.parse(l) as RunEvent).type);
+    expect(new Set(states)).toEqual(new Set(['state']));
+    const all = await call<RunEvent[]>('GET', `/runs/${runId}/events`);
+    expect(all.body.some((e) => e.type === 'topic')).toBe(true);
+    expect(h.shell.notices.map(([t]) => t)).toContain('运行结束');
+    expect(h.shell.active).toEqual([1, 0]);
+    expect((await call<Settings>('GET', '/settings')).body.currentPresetId).toBe('p1');
+
+    // The Profile is free again at once.
+    const next = await call<ActiveRun>('POST', '/runs/current');
+    expect(next.status).toBe(202);
+    await call('POST', '/runs/stop');
+    await ws.until((f) => f.type === 'run' && f.run.runId === next.body.runId && f.run.result !== undefined);
+    ws.ws.close();
+  });
+
+  it('answers 409 when another process holds the Profile lock', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset() });
+    h.locks.set(h.app.services.profiles.dirOf('fx/main'), 4242);
+    const res = await call<{ error: string; message: string }>('POST', '/runs', { presetId: 'p1' });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: 'profile-locked' });
+    expect((await call('POST', '/profiles/fx/main/login')).status).toBe(409);
+    expect((await call('DELETE', '/profiles/fx/main')).status).toBe(409);
+  });
+
+  it('walks a sign-in through needs-auth, recheck and the health check, then frees the Profile', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    const ws = await events(h);
+    h.auth.next = async (mode) => (mode === 'headed-wait' ? { status: 'needs-auth' } : { status: 'authenticated', username: 'alice' });
+    // Only the recheck signs in; the health check after it runs headless and passes too.
+    const loginFrame = (phase: string) => (f: ServerFrame) => f.type === 'login' && f.login.phase === phase;
+    expect((await call<LoginView>('POST', '/profiles/fx/main/login')).status).toBe(202);
+    await ws.until(loginFrame('needs-auth'));
+    expect((await call<{ error: string }>('POST', '/runs', { presetId: 'x' })).status).toBe(404);
+    await call('PUT', '/presets/p1', { preset: preset() });
+    expect((await call<{ error: string }>('POST', '/runs', { presetId: 'p1' })).body.error).toBe('profile-busy');
+    await call('POST', '/profiles/fx/main/login/recheck');
+    const done = (await ws.until(loginFrame('done'))) as Extract<ServerFrame, { type: 'login' }>;
+    expect(done.login).toMatchObject({ username: 'alice', health: { status: 'ready', username: 'alice' } });
+    const profiles = await call<Array<{ status: string; busy: boolean }>>('GET', '/profiles');
+    expect(profiles.body[0]).toMatchObject({ status: 'ready', busy: false });
+    ws.ws.close();
+  });
+
+  it('closing a sign-in releases the Profile', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    h.auth.next = (_mode) => new Promise(() => {});
+    const ws = await events(h);
+    await call('POST', '/profiles/fx/main/login');
+    await ws.until((f) => f.type === 'login' && f.login.phase === 'waiting');
+    const closed = await call<LoginView>('POST', '/profiles/fx/main/login/close');
+    expect(closed.body.phase).toBe('closed');
+    expect((await call<Array<{ busy: boolean }>>('GET', '/profiles')).body[0]!.busy).toBe(false);
+    ws.ws.close();
+  });
+
+  it('defines schedules over the kernel scheduler, in memory', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset() });
+    const spec = {
+      id: 's1',
+      name: '每天',
+      profileId: 'fx/main',
+      presetId: 'p1',
+      enabled: true,
+      browserMode: 'headless',
+      timezone: 'Asia/Shanghai',
+      trigger: { kind: 'daily-window', runs: 2, start: '00:00', end: '23:59', jitterMinutes: 15, minGapMinutes: 30 },
+      misfire: { policy: 'skip', graceMinutes: 30 },
+      overlap: 'skip',
+      unavailableDisplay: 'skip',
+      runOnStart: false,
+    };
+    const saved = await call<ScheduleList>('PUT', '/schedules/s1', spec);
+    expect(saved.status).toBe(200);
+    expect(saved.body.persisted).toBe(false);
+    expect(saved.body.schedules[0]!.spec.id).toBe('s1');
+    const cron = await call<{ error: string }>('PUT', '/schedules/s1', { ...spec, trigger: { kind: 'cron', expression: '0 8 * * *' } });
+    expect(cron.status).toBe(422);
+    expect(cron.body.error).toBe('cron-unsupported');
+    expect((await call('PUT', '/schedules/s1', { ...spec, timezone: 'Mars/Base' })).status).toBe(422);
+
+    const ws = await events(h);
+    const fired = await call<{ runId: string }>('POST', '/schedules/s1/trigger');
+    expect(fired.status).toBe(202);
+    const again = await call<{ error: string }>('POST', '/schedules/s1/trigger');
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe('skipped-overlap');
+    await call('POST', '/runs/stop');
+    await ws.until((f) => f.type === 'run' && f.run.runId === fired.body.runId && f.run.result !== undefined);
+    expect((await call<unknown[]>('GET', '/schedules/s1/history')).body).toHaveLength(2);
+    expect((await call<ScheduleList>('POST', '/schedules/s1/pause')).body.schedules[0]!.paused).toBe(true);
+    expect((await call<ScheduleList>('DELETE', '/schedules/s1')).body.schedules).toEqual([]);
+    ws.ws.close();
+  });
+
+  it('saves settings, tells the shell and rotates the token', async () => {
+    const h = await boot();
+    const call = api(h);
+    const put = await call<Settings>('PUT', '/settings', { closeToTray: false, notifications: false });
+    expect(put.body).toMatchObject({ closeToTray: false, notifications: false, updateCheck: true });
+    expect(h.shell.settings.at(-1)?.closeToTray).toBe(false);
+    expect((await call('PUT', '/settings', { language: 'en' })).status).toBe(422);
+
+    const rotated = await call<{ token: string }>('POST', '/token/rotate');
+    expect(rotated.status).toBe(200);
+    expect((await call('GET', '/settings')).status).toBe(401);
+    expect((await call('GET', '/settings', undefined, rotated.body.token)).status).toBe(200);
+    expect(h.shell.tokens).toEqual([rotated.body.token]);
+  });
+
+  it('reports a newer release only while the update check is on', async () => {
+    const h = await boot();
+    const call = api(h);
+    expect((await call('GET', '/update-check')).body).toEqual({ current: '1.2.3', latest: 'v1.3.0', newer: true, releaseUrl: 'https://example.invalid/r' });
+    await call('PUT', '/settings', { updateCheck: false });
+    expect((await call<{ latest: null }>('GET', '/update-check')).body.latest).toBeNull();
+    expect(isNewer('v1.2.10', '1.2.9')).toBe(true);
+    expect(isNewer('1.2.3', '1.2.3')).toBe(false);
+    expect(isNewer('garbage', '1.0.0')).toBe(false);
+  });
+
+  it('forces runs headless and refuses headed sign-in without a display', async () => {
+    const h = await boot({ headlessOnly: true });
+    const call = api(h);
+    expect((await call<{ headlessOnly: boolean }>('GET', '/info')).body.headlessOnly).toBe(true);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset({ browserMode: 'headed' }) });
+    expect((await call<{ error: string }>('POST', '/profiles/fx/main/login')).body.error).toBe('no-display');
+    const run = await call<ActiveRun>('POST', '/runs', { presetId: 'p1' });
+    expect(run.body.plan.browserMode).toBe('headless');
+    await call('POST', '/runs/stop');
+  });
+
+  it('answers /shutdown before shutting down, and creates, edits and deletes Profiles', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    expect((await call('POST', '/profiles', { siteId: 'fx', name: 'main', channel: 'chrome' })).status).toBe(409);
+    expect((await call('POST', '/profiles', { siteId: 'fx', name: '../x', channel: 'chrome' })).status).toBe(422);
+    expect((await call('PATCH', '/profiles/fx/main', { proxy: 'http://127.0.0.1:7890' })).status).toBe(200);
+    expect(await h.app.services.profiles.resolve('fx/main')).toMatchObject({ channel: 'chrome', proxy: 'http://127.0.0.1:7890' });
+    mkdirSync(join(h.dataDir, 'profiles', 'fx', 'cli-made'), { recursive: true });
+    expect((await call<Array<{ id: string }>>('GET', '/profiles')).body.map((p) => p.id)).toEqual(['fx/cli-made', 'fx/main']);
+    const backup = await call<{ path: string }>('POST', '/profiles/fx/main/backup');
+    expect(backup.body.path).toContain(join(h.dataDir, 'backups'));
+    expect((await call('DELETE', '/profiles/fx/main')).status).toBe(204);
+    expect((await call('POST', '/shutdown')).status).toBe(202);
+    expect(h.shutdowns()).toBe(1);
+  });
+});
+
+/** The dependencies of a running harness, for a second app over the same data directory. */
+function appDepsOf(h: Harness): Parameters<typeof createApp>[0] {
+  return {
+    version: '1.2.3',
+    clock: systemClock,
+    dataDir: h.dataDir,
+    profilesDir: join(h.dataDir, 'profiles'),
+    coordinator: new DiscoLurkCoordinator({
+      deps: { clock: systemClock, random: seededRandom(1), sleeper: fastSleeper },
+      categories: new MemoryCategories(),
+      resolveProfile: async () => {
+        throw new Error('unused');
+      },
+      open: async () => {
+        throw new Error('unused');
+      },
+    }),
+    sites: [site],
+    categories: new MemoryCategories(),
+    lockHolder: async () => null,
+    doctor: async () => null,
+    shutdown: async () => {},
+    displayAvailable: () => true,
+  };
+}

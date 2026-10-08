@@ -89,6 +89,7 @@ function setup(opts: Setup = {}) {
     ...opts.forum,
   });
   const categoryStore = new MemoryCategories();
+  const browser = new AbortController();
   let closed = 0;
   const env: CoordinatorEnv = {
     deps: time.deps(1),
@@ -97,6 +98,7 @@ function setup(opts: Setup = {}) {
       if (opts.open) opts.open();
       return {
         forum,
+        closed: browser.signal,
         close: async () => {
           closed++;
         },
@@ -110,7 +112,7 @@ function setup(opts: Setup = {}) {
   const controller = new AbortController();
   const run = (p: RunPlanSnapshot) => time.drive(coordinator.run(p, controller.signal, (e) => events.push(e)));
   const states = () => events.filter((e) => e.type === 'state').map((e) => (e as { state: RunState }).state);
-  return { time, forum, coordinator, events, controller, run, states, categoryStore, closed: () => closed };
+  return { time, forum, coordinator, events, controller, browser, run, states, categoryStore, closed: () => closed };
 }
 
 /** A headed login that only succeeds once the virtual clock passes `atMs`; it polls like B04. */
@@ -138,11 +140,11 @@ describe('STATE-001 run state machine (§6.2)', () => {
     expect(out.outcome).toBe('completed');
   });
 
-  it('awaiting_login → cancelled when the user stops while waiting for sign-in', async () => {
+  it('awaiting_login → stopping → cancelled when the user stops while waiting for sign-in', async () => {
     const t = setup({ signInAt: 300_000 });
     t.time.at(20_000, () => t.controller.abort(stopRequest('user')));
     const out = await t.run(plan({ kind: 'endless' }, 'headed'));
-    expect(t.states()).toEqual(['queued', 'launching', 'awaiting_login', 'cancelled']);
+    expect(t.states()).toEqual(['queued', 'launching', 'awaiting_login', 'stopping', 'cancelled']);
     expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'user' });
     expect(t.forum.calls.some((c) => c.op === 'collectTopics')).toBe(false);
     expect(t.closed()).toBe(1);
@@ -361,23 +363,16 @@ describe('AUTH-001 (kernel side) AuthSession', () => {
   });
 });
 
-describe('STATE-001 browser closed from outside', () => {
-  const closed = () => new RunError('cancelled', 'The browser was closed');
+describe('STATE-001 browser closed from outside (§6.2)', () => {
+  const closeAt = (t: ReturnType<typeof setup>, ms: number) => t.time.at(ms, () => t.browser.abort(stopRequest('browser-closed')));
 
   it('mid-browse: stopping → cancelled without verification, stats kept, browser session closed', async () => {
-    let collects = 0;
-    const t = setup({
-      forum: {
-        progress: async () => level(21, 175),
-        topics: (path, call) => {
-          if (++collects > 1) throw closed();
-          return unread(path, call);
-        },
-      },
-    });
+    const t = setup({ forum: { progress: async () => level(21, 175) } });
+    closeAt(t, 40_000);
     const out = await t.run(plan({ kind: 'endless' }));
     expect(t.states().slice(-3)).toEqual(['browsing', 'stopping', 'cancelled']);
-    expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'error', failure: { code: 'cancelled' } });
+    expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'browser-closed' });
+    expect(out.failure).toBeUndefined();
     expect(out.stats.confirmed.topics).toBeGreaterThan(0);
     expect(t.forum.calls.filter((c) => c.op === 'readProgress')).toHaveLength(1);
     expect(t.closed()).toBe(1);
@@ -386,21 +381,29 @@ describe('STATE-001 browser closed from outside', () => {
   it('during the initial progress read: no degraded run, stopping → cancelled', async () => {
     const t = setup({
       forum: {
-        progress: async () => {
-          throw closed();
-        },
+        progress: (_kind, signal) => t.time.sleeper.sleep(10_000, signal).then(() => level(21, 175)),
       },
     });
+    closeAt(t, 5_000);
     const out = await t.run(plan({ kind: 'endless' }));
     expect(t.states().slice(-3)).toEqual(['reading_initial_progress', 'stopping', 'cancelled']);
-    expect(out.failure?.code).toBe('cancelled');
+    expect(out.stopCause).toBe('browser-closed');
     expect(t.forum.calls.some((c) => c.op === 'collectTopics')).toBe(false);
   });
 
-  it('during sign-in: cancelled rather than failed', async () => {
-    const t = setup({ forum: { auth: async () => ({ status: 'failed', failure: { code: 'cancelled', message: 'closed' } }) } });
+  it('during sign-in: awaiting_login → stopping → cancelled rather than failed', async () => {
+    const t = setup({ signInAt: 300_000 });
+    closeAt(t, 20_000);
     const out = await t.run(plan({ kind: 'endless' }, 'headed'));
-    expect(t.states()).toEqual(['queued', 'launching', 'cancelled']);
-    expect(out.failure?.code).toBe('cancelled');
+    expect(t.states()).toEqual(['queued', 'launching', 'awaiting_login', 'stopping', 'cancelled']);
+    expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'browser-closed' });
+    expect(t.closed()).toBe(1);
+  });
+
+  it('ends a waiting AuthSession as a stop', async () => {
+    const t = setup({ signInAt: 300_000 });
+    const session = await t.coordinator.beginAuth('fixture/main');
+    closeAt(t, 20_000);
+    await expect(t.time.drive(session.continueWaiting(new AbortController().signal))).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

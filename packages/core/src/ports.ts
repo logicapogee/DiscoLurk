@@ -1,4 +1,4 @@
-import type { RunEvent, RunFailure, RunResult } from './events';
+import type { RunEvent, RunResult } from './events';
 import type { LevelSnapshot } from './metrics';
 import type {
   BrowseMode,
@@ -16,11 +16,11 @@ import type {
 
 export type AuthMode = 'headed-wait' | 'headless-check' | 'credentials';
 
+/** Page and network failures are thrown as `RunError`; these are the answers a working page can give. */
 export type AuthResult =
   | { status: 'authenticated'; username?: string }
   | { status: 'needs-auth' }
-  | { status: 'challenge-detected' }
-  | { status: 'failed'; failure: RunFailure };
+  | { status: 'challenge-detected' };
 
 export interface TopicStrategy {
   /** Deep mode sorts the list by reply count (T02). */

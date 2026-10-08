@@ -1,4 +1,4 @@
-import { emptyStats, RunError, type RunEvent, type RunFailure, type RunStats } from './events';
+import { emptyStats, toFailure, type RunEvent, type RunFailure, type RunStats } from './events';
 import { sampleTopics, selectCandidates } from './picking';
 import type { ActionPolicy, ForumPort } from './ports';
 import { isAbortError, randomBetween, shuffle, throwIfAborted, type RuntimeDeps } from './runtime';
@@ -15,17 +15,7 @@ export interface BrowseInput {
   emit: (e: RunEvent) => void;
 }
 
-export interface BrowseOutcome {
-  end: BrowseEnd;
-  stats: RunStats;
-  /** Set when `end` is `error`. */
-  failure?: RunFailure;
-}
-
-export function toFailure(err: unknown): RunFailure {
-  if (err instanceof RunError) return { code: err.code, message: err.message };
-  return { code: 'internal', message: err instanceof Error ? err.message : String(err) };
-}
+export type BrowseOutcome = { stats: RunStats } & ({ end: 'error'; failure: RunFailure } | { end: Exclude<BrowseEnd, 'error'> });
 
 const BETWEEN_TOPICS = { minSec: 0.5, maxSec: 1.5 };
 
@@ -58,7 +48,6 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
   const { extraWait } = preset;
 
   try {
-    if (preset.categories.length === 0) throw new RunError('no-candidates', 'No category is enabled for this run');
     for (;;) {
       let enteredThisRound = 0;
       for (const category of shuffle(preset.categories, deps.random)) {

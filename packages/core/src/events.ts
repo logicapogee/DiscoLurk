@@ -76,7 +76,7 @@ export type RunOutcome = 'completed' | 'failed' | 'cancelled';
  * Why browsing ended. A user stop that still verified ends in `completed` (§6.2 stopping →
  * verifying → completed), so callers read the cause, not the outcome, to tell it from a met target.
  */
-export type StopCause = 'target' | 'user' | 'app-exit' | 'no-progress' | 'error';
+export type StopCause = 'target' | StopRequest | 'no-progress' | 'error';
 
 export interface RunResult {
   outcome: RunOutcome;
@@ -89,16 +89,23 @@ export interface RunResult {
   levels: { initial: LevelSnapshot | null; final: LevelSnapshot | null };
 }
 
-/** Abort reasons a run's signal carries, so the coordinator can tell a user stop from the app exiting. */
-export type StopRequest = 'user' | 'app-exit';
+/**
+ * Abort reasons a run's signal carries, so the coordinator can tell a user stop from the app
+ * exiting or the browser window being closed from outside (§6.2).
+ */
+export type StopRequest = 'user' | 'app-exit' | 'browser-closed';
+
+const STOP_REQUESTS: readonly StopRequest[] = ['user', 'app-exit', 'browser-closed'];
 
 export function stopRequest(reason: StopRequest): DOMException {
   return new DOMException(reason, 'AbortError');
 }
 
+/** A plain `abort()` without one of these reasons counts as a user stop. */
 export function stopRequestOf(signal: AbortSignal): StopRequest {
   const reason: unknown = signal.reason;
-  return reason instanceof DOMException && reason.message === 'app-exit' ? 'app-exit' : 'user';
+  const named = reason instanceof DOMException ? STOP_REQUESTS.find((r) => r === reason.message) : undefined;
+  return named ?? 'user';
 }
 
 export function emptyCounters(): StatCounters {
@@ -117,4 +124,9 @@ export class RunError extends Error {
     super(message);
     this.name = 'RunError';
   }
+}
+
+export function toFailure(err: unknown): RunFailure {
+  if (err instanceof RunError) return { code: err.code, message: err.message };
+  return { code: 'internal', message: err instanceof Error ? err.message : String(err) };
 }

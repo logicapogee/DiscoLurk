@@ -1,8 +1,9 @@
-import { browse, toFailure } from './browse';
+import { browse } from './browse';
 import {
-  RunError,
   emptyStats,
+  RunError,
   stopRequestOf,
+  toFailure,
   type RunEvent,
   type RunFailure,
   type RunOutcome,
@@ -10,15 +11,18 @@ import {
   type RunState,
   type RunStats,
   type StopCause,
+  type StopRequest,
 } from './events';
 import type { LevelSnapshot, MetricKey } from './metrics';
 import { mergeDiscoveredCategories } from './plan';
 import type { AuthMode, AuthResult, AuthSession, ForumPort, RunCoordinator } from './ports';
-import { isAbortError, seededRandom, type RuntimeDeps } from './runtime';
+import { isAbortError, seededRandom, throwIfAborted, type RuntimeDeps } from './runtime';
 import type { BrowserMode, Category, Profile, ProfileHealth, ProfileId, RunPlanSnapshot, Site, SiteId } from './terms';
 
 export interface ForumSession {
   forum: ForumPort;
+  /** Aborts with `stopRequest('browser-closed')` once the browser goes away from outside. */
+  closed: AbortSignal;
   /** Closes the browser and releases the Profile lock. */
   close(): Promise<void>;
 }
@@ -55,15 +59,24 @@ export interface CoordinatorEnv {
 export const VERIFY_TIMEOUT_MS = 60_000;
 const INSPECT_TIMEOUT_MS = 60_000;
 
-/**
- * Adapters report a browser that vanished under them (the user closed the window) as `cancelled`;
- * the run then ends without verification instead of failing on every later step.
- */
-const browserGone = (failure: RunFailure | undefined) => failure?.code === 'cancelled';
+/** What ended a step early: a stop request on its signal, or a failure. */
+type Interruption = { kind: 'stop'; cause: StopRequest } | { kind: 'failure'; failure: RunFailure };
+
+/** The one place an error becomes a stop or a failure: whatever is thrown after `signal` aborted is the stop's echo. */
+function classify(err: unknown, signal: AbortSignal): Interruption {
+  if (signal.aborted || isAbortError(err)) return { kind: 'stop', cause: stopRequestOf(signal) };
+  return { kind: 'failure', failure: toFailure(err) };
+}
 
 /** One sign-in check that never waits for a person: credentials on password sites, otherwise a look at the page. */
 function checkMode(site: Site, browserMode: BrowserMode): AuthMode {
   return site.login === 'password' && browserMode === 'headless' ? 'credentials' : 'headless-check';
+}
+
+/** S09: a site with a progress page either read its baseline before browsing or runs without one. */
+function baselineOf(site: Site | null, initial: LevelSnapshot | null): RunResult['baseline'] {
+  if (!site || site.progressSource === 'none') return 'not-applicable';
+  return initial ? 'present' : 'missing';
 }
 
 /**
@@ -88,21 +101,24 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     // §9.1: the snapshot's seed fixes this run's choices, so the same snapshot replays the same picks.
     const deps: RuntimeDeps = { ...this.env.deps, random: seededRandom(plan.seed) };
     const at = () => new Date(deps.clock.now()).toISOString();
-    const state = (s: RunState) => emit({ type: 'state', at: at(), state: s });
+    let current: RunState = 'queued';
+    const state = (s: RunState) => {
+      current = s;
+      emit({ type: 'state', at: at(), state: s });
+    };
     const warn = (code: string, message: string) => emit({ type: 'warning', at: at(), code, message });
+    let site: Site | null = null;
     let stats: RunStats = emptyStats();
     const levels: RunResult['levels'] = { initial: null, final: null };
-    let baseline: RunResult['baseline'] = 'not-applicable';
 
     const end = (outcome: RunOutcome, stopCause: StopCause, failure?: RunFailure): RunResult => {
       if (failure) emit({ type: 'error', at: at(), error: failure });
       state(outcome);
-      return { outcome, stopCause, stats, baseline, levels, ...(failure ? { failure } : {}) };
+      return { outcome, stopCause, stats, baseline: baselineOf(site, levels.initial), levels, ...(failure ? { failure } : {}) };
     };
 
     state('queued');
     state('launching');
-    let site: Site;
     let session: ForumSession;
     try {
       const resolved = await this.env.resolveProfile(plan.profileId);
@@ -114,92 +130,20 @@ export class DiscoLurkCoordinator implements RunCoordinator {
       return end('failed', 'error', toFailure(err));
     }
     const { forum } = session;
+    const runSite: Site = site;
+    // A browser closed from outside reaches every step as one more stop request.
+    const live = AbortSignal.any([signal, session.closed]);
 
-    try {
-      if (signal.aborted) return end('cancelled', stopRequestOf(signal));
-
-      try {
-        const first = await forum.ensureAuthenticated(checkMode(site, plan.browserMode), signal);
-        let auth: AuthResult = first;
-        if (first.status === 'failed') return end(browserGone(first.failure) ? 'cancelled' : 'failed', 'error', first.failure);
-        if (first.status !== 'authenticated') {
-          state('awaiting_login');
-          // B04/B05: only a headed window has a person who can finish signing in.
-          if (plan.browserMode === 'headed') auth = await forum.ensureAuthenticated('headed-wait', signal);
-          if (auth.status === 'challenge-detected') {
-            state('challenge_detected');
-            return end('failed', 'error', { code: 'challenge-detected', message: 'The site shows a challenge page; it is reported, never solved' });
-          }
-          if (auth.status === 'needs-auth') {
-            state('needs_auth');
-            return end('cancelled', 'error', { code: 'needs-auth', message: `Not signed in to ${site.displayName}; run \`lurk login --site ${site.id}\`` });
-          }
-          if (auth.status === 'failed') return end(browserGone(auth.failure) ? 'cancelled' : 'failed', 'error', auth.failure);
-        }
-      } catch (err) {
-        if (isAbortError(err)) return end('cancelled', stopRequestOf(signal));
-        const f = toFailure(err);
-        return end(browserGone(f) ? 'cancelled' : 'failed', 'error', f);
-      }
-
-      state('reading_initial_progress');
-      try {
-        if (site.progressSource !== 'none') {
-          try {
-            levels.initial = await forum.readProgress('initial', signal);
-            baseline = 'present';
-          } catch (err) {
-            if (isAbortError(err) || browserGone(toFailure(err))) throw err;
-            baseline = 'missing';
-            const f = toFailure(err);
-            warn('baseline-missing', `Initial progress read failed (${f.code}: ${f.message}); continuing without a baseline`);
-          }
-        }
-        if (site.categorySource === 'discovered') await this.refreshCategories(site, forum, signal, warn);
-      } catch (err) {
-        state('stopping');
-        if (isAbortError(err)) return end('cancelled', stopRequestOf(signal));
-        return end('cancelled', 'error', toFailure(err));
-      }
-
-      state('browsing');
-      const out = await browse({ plan, forum, deps, signal, emit });
-      stats = out.stats;
-
-      let stopCause: StopCause;
-      let failure: RunFailure | undefined;
-      switch (out.end) {
-        case 'target-reached':
-          stopCause = 'target';
-          break;
-        case 'no-progress':
-          state('no_progress');
-          stopCause = 'no-progress';
-          failure = { code: 'no-progress', message: 'A whole round entered no topic' };
-          break;
-        case 'cancelled':
-          state('stopping');
-          stopCause = stopRequestOf(signal);
-          // The application is closing every browser (§10.4), so there is nothing left to verify with.
-          if (stopCause === 'app-exit') return end('cancelled', stopCause);
-          break;
-        case 'error':
-          state('stopping');
-          stopCause = 'error';
-          failure = out.failure;
-          // §6.2 stopping → cancelled: with the browser gone nothing can be verified.
-          if (browserGone(failure)) return end('cancelled', stopCause, failure);
-          break;
-      }
-
+    const verify = async (stopCause: StopCause, failure?: RunFailure): Promise<RunResult> => {
       state('verifying');
-      if (site.progressSource !== 'none') {
-        const verifySignal = AbortSignal.any([AbortSignal.timeout(VERIFY_TIMEOUT_MS), ...(this.env.exitSignal ? [this.env.exitSignal] : [])]);
+      if (runSite.progressSource !== 'none') {
+        const verifySignal = AbortSignal.any([AbortSignal.timeout(VERIFY_TIMEOUT_MS), session.closed, ...(this.env.exitSignal ? [this.env.exitSignal] : [])]);
         try {
           levels.final = await forum.readProgress('final', verifySignal);
           if (levels.final) stats.reported = reportedMetrics(levels.initial, levels.final);
         } catch (err) {
           if (this.env.exitSignal?.aborted) return end('cancelled', 'app-exit', failure);
+          if (session.closed.aborted) return end('cancelled', 'browser-closed', failure);
           const f = toFailure(err);
           if (failure) warn('final-progress-failed', `${f.code}: ${f.message}`);
           else failure = isAbortError(err) ? { code: 'page-timeout', message: 'Final progress read timed out' } : f;
@@ -207,6 +151,65 @@ export class DiscoLurkCoordinator implements RunCoordinator {
       }
       emit({ type: 'stats', at: at(), stats: structuredClone(stats) });
       return end(failure ? 'failed' : 'completed', stopCause, failure);
+    };
+
+    /**
+     * §6.2: where an interrupted phase goes. Every stop passes through `stopping`; only browsing has
+     * progress worth verifying, and only a user stop or a failure leaves a browser to verify with.
+     */
+    const interrupt = (from: RunState, why: Interruption): RunResult | Promise<RunResult> => {
+      if (why.kind === 'failure' && from !== 'browsing') return end('failed', 'error', why.failure);
+      state('stopping');
+      if (why.kind === 'failure') return verify('error', why.failure);
+      if (from === 'browsing' && why.cause === 'user') return verify('user');
+      return end('cancelled', why.cause);
+    };
+
+    try {
+      throwIfAborted(live);
+      let auth = await forum.ensureAuthenticated(checkMode(runSite, plan.browserMode), live);
+      if (auth.status !== 'authenticated') {
+        state('awaiting_login');
+        // B04/B05: only a headed window has a person who can finish signing in.
+        if (plan.browserMode === 'headed') auth = await forum.ensureAuthenticated('headed-wait', live);
+        if (auth.status === 'challenge-detected') {
+          state('challenge_detected');
+          return end('failed', 'error', { code: 'challenge-detected', message: 'The site shows a challenge page; it is reported, never solved' });
+        }
+        if (auth.status === 'needs-auth') {
+          state('needs_auth');
+          return end('cancelled', 'error', { code: 'needs-auth', message: `Not signed in to ${runSite.displayName}; run \`lurk login --site ${runSite.id}\`` });
+        }
+      }
+
+      state('reading_initial_progress');
+      if (runSite.progressSource !== 'none') {
+        try {
+          levels.initial = await forum.readProgress('initial', live);
+        } catch (err) {
+          const why = classify(err, live);
+          if (why.kind === 'stop') throw err;
+          warn('baseline-missing', `Initial progress read failed (${why.failure.code}: ${why.failure.message}); continuing without a baseline`);
+        }
+      }
+      if (runSite.categorySource === 'discovered') await this.refreshCategories(runSite, forum, live, warn);
+
+      state('browsing');
+      const out = await browse({ plan, forum, deps, signal: live, emit });
+      stats = out.stats;
+      switch (out.end) {
+        case 'target-reached':
+          return await verify('target');
+        case 'no-progress':
+          state('no_progress');
+          return await verify('no-progress', { code: 'no-progress', message: 'A whole round entered no topic' });
+        case 'cancelled':
+          return await interrupt('browsing', { kind: 'stop', cause: stopRequestOf(live) });
+        case 'error':
+          return await interrupt('browsing', { kind: 'failure', failure: out.failure });
+      }
+    } catch (err) {
+      return await interrupt(current, classify(err, live));
     } finally {
       await session.close();
     }
@@ -224,10 +227,14 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     }
     try {
       const signal = AbortSignal.timeout(INSPECT_TIMEOUT_MS);
-      const auth = await session.forum.ensureAuthenticated(checkMode(site, 'headless'), signal);
-      if (auth.status !== 'authenticated') {
-        return { profileId, status: auth.status === 'failed' ? 'broken' : 'needs-auth', checkedAt: checkedAt() };
+      let auth: AuthResult;
+      try {
+        auth = await session.forum.ensureAuthenticated(checkMode(site, 'headless'), signal);
+      } catch (err) {
+        if (err instanceof RunError) return { profileId, status: 'broken', checkedAt: checkedAt() };
+        throw err;
       }
+      if (auth.status !== 'authenticated') return { profileId, status: 'needs-auth', checkedAt: checkedAt() };
       // §8.2 step 7: the health check is where a discovered site reads its categories.
       if (site.categorySource === 'discovered') await this.refreshCategories(site, session.forum, signal, () => {});
       return { profileId, status: 'ready', ...(auth.username ? { username: auth.username } : {}), checkedAt: checkedAt() };
@@ -240,8 +247,8 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     const { profile, site } = await this.env.resolveProfile(profileId);
     const session = await this.env.open({ site, profile, browserMode: 'headed', runId: `auth-${this.env.deps.clock.now()}`, warn: () => {} });
     return {
-      recheck: () => session.forum.ensureAuthenticated('headless-check', AbortSignal.timeout(INSPECT_TIMEOUT_MS)),
-      continueWaiting: (signal) => session.forum.ensureAuthenticated('headed-wait', signal),
+      recheck: () => session.forum.ensureAuthenticated('headless-check', AbortSignal.any([AbortSignal.timeout(INSPECT_TIMEOUT_MS), session.closed])),
+      continueWaiting: (signal) => session.forum.ensureAuthenticated('headed-wait', AbortSignal.any([signal, session.closed])),
       close: () => session.close(),
     };
   }
@@ -257,9 +264,9 @@ export class DiscoLurkCoordinator implements RunCoordinator {
       const known = await this.env.categories.load(site.id);
       await this.env.categories.save(site.id, mergeDiscoveredCategories(known, found));
     } catch (err) {
-      if (isAbortError(err) || browserGone(toFailure(err))) throw err;
-      const f = toFailure(err);
-      warn('category-discovery-failed', `${f.code}: ${f.message}`);
+      const why = classify(err, signal);
+      if (why.kind === 'stop') throw err;
+      warn('category-discovery-failed', `${why.failure.code}: ${why.failure.message}`);
     }
   }
 }

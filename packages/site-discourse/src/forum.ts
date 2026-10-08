@@ -1,6 +1,7 @@
 import type { Locator, Page } from 'playwright-core';
 import {
   abortError,
+  isAbortError,
   randomBetween,
   RunError,
   throwIfAborted,
@@ -25,6 +26,7 @@ import {
   type TopicVisit,
 } from '@disco-lurk/core';
 import { waitForCurrentUser } from './auth';
+import { expectedMiss } from './page';
 import { categoryLinks, parseDocument, parseFloorCounter, parseTopicList, type CategoryLink } from './parse';
 import { parseConnect } from './progress/connect-linuxdo';
 import { progressModuleFor } from './progress/index';
@@ -96,51 +98,22 @@ export function discoveredCategories(links: readonly CategoryLink[]): Category[]
     .map((l) => ({ name: l.name, path: l.path, id: l.id, enabledByDefault: false }));
 }
 
-const CLOSED = /Target page, context or browser has been closed|Browser has been closed|Target closed/;
-
-/** Playwright's error once the browser window or process is gone, e.g. the user closed the window. */
-export function browserClosed(err: unknown): boolean {
-  return err instanceof Error && CLOSED.test(err.message);
-}
-
 /** Playwright navigation errors carry Chrome's net error code in the message. */
 export function navigationFailure(err: unknown): RunFailure {
   const message = (err instanceof Error ? err.message : String(err)).split('\n')[0]!;
   let code: ErrorCode = 'internal';
-  if (browserClosed(err)) code = 'cancelled';
-  else if (err instanceof Error && err.name === 'TimeoutError') code = 'page-timeout';
+  if (err instanceof Error && err.name === 'TimeoutError') code = 'page-timeout';
   else if (/net::ERR_(PROXY|TUNNEL)/.test(message)) code = 'proxy-failed';
   else if (/net::ERR_/.test(message)) code = 'network-failed';
   return { code, message };
 }
 
-/**
- * Reports a vanished browser as `cancelled` from every port method: whoever closed the window
- * ended the run, and nothing on the site can be checked any more.
- */
-export function closedAsCancelled(forum: ForumPort): ForumPort {
-  const guard =
-    <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
-    async (...args: A): Promise<R> => {
-      try {
-        return await fn(...args);
-      } catch (err) {
-        if (browserClosed(err)) throw new RunError('cancelled', 'The browser was closed');
-        throw err;
-      }
-    };
-  return {
-    site: forum.site,
-    ensureAuthenticated: guard(forum.ensureAuthenticated.bind(forum)),
-    discoverCategories: guard(forum.discoverCategories.bind(forum)),
-    readProgress: guard(forum.readProgress.bind(forum)),
-    collectTopics: guard(forum.collectTopics.bind(forum)),
-    enterFromList: guard(forum.enterFromList.bind(forum)),
-    readTopic: guard(forum.readTopic.bind(forum)),
-    performActions: guard(forum.performActions.bind(forum)),
-    returnAndVerify: guard(forum.returnAndVerify.bind(forum)),
+const missAs =
+  <T>(value: T) =>
+  (err: unknown): T => {
+    if (expectedMiss(err)) return value;
+    throw err;
   };
-}
 
 /** Resolves with `promise`, or rejects as soon as `signal` aborts, so long page waits honour a stop (S05). */
 function untilAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -200,39 +173,20 @@ export class DiscourseForum implements ForumPort {
 
   private appears(locator: Locator, timeout: number, signal: AbortSignal, state: 'attached' | 'visible' = 'attached'): Promise<boolean> {
     return untilAbort(
-      locator.first().waitFor({ state, timeout }).then(
-        () => true,
-        (err: unknown) => {
-          if (browserClosed(err)) throw err;
-          return false;
-        },
-      ),
+      locator.first().waitFor({ state, timeout }).then(() => true, missAs(false)),
       signal,
     );
   }
 
   private async count(selector: string): Promise<number> {
     // A navigation in progress destroys the execution context; that moment simply shows nothing.
-    return this.page.locator(selector).count().catch((err: unknown) => {
-      if (browserClosed(err)) throw err;
-      return 0;
-    });
+    return this.page.locator(selector).count().catch(missAs(0));
   }
 
   private async challenged(): Promise<boolean> {
     if ((await this.count(CHALLENGE_SELECTOR)) > 0) return true;
-    return CHALLENGE_TITLE.test(
-      await this.page.title().catch((err: unknown) => {
-        if (browserClosed(err)) throw err;
-        return '';
-      }),
-    );
+    return CHALLENGE_TITLE.test(await this.page.title().catch(missAs('')));
   }
-
-  private readonly unlessClosed = (err: unknown): null => {
-    if (browserClosed(err)) throw err;
-    return null;
-  };
 
   private onSite(): boolean {
     try {
@@ -243,18 +197,12 @@ export class DiscourseForum implements ForumPort {
   }
 
   async ensureAuthenticated(mode: AuthMode, signal: AbortSignal): Promise<AuthResult> {
-    try {
-      if (mode === 'headed-wait') return await this.waitForUser(signal);
-      const checked = await this.check(signal);
-      if (mode === 'credentials' && checked.status === 'needs-auth' && this.opts.credentials) {
-        return await this.passwordLogin(this.opts.credentials, signal);
-      }
-      return checked;
-    } catch (err) {
-      if (signal.aborted) throw err;
-      if (err instanceof RunError) return { status: 'failed', failure: { code: err.code, message: err.message } };
-      throw err;
+    if (mode === 'headed-wait') return this.waitForUser(signal);
+    const checked = await this.check(signal);
+    if (mode === 'credentials' && checked.status === 'needs-auth' && this.opts.credentials) {
+      return this.passwordLogin(this.opts.credentials, signal);
     }
+    return checked;
   }
 
   /**
@@ -346,13 +294,7 @@ export class DiscourseForum implements ForumPort {
     await untilAbort(link.click(), signal);
 
     const onTopic = await untilAbort(
-      this.page.waitForURL(topicUrlPattern(topic.id), { timeout: ENTER_URL_MS }).then(
-        () => true,
-        (err: unknown) => {
-          if (browserClosed(err)) throw err;
-          return false;
-        },
-      ),
+      this.page.waitForURL(topicUrlPattern(topic.id), { timeout: ENTER_URL_MS }).then(() => true, missAs(false)),
       signal,
     );
     const rendered =
@@ -367,7 +309,7 @@ export class DiscourseForum implements ForumPort {
   /** After a failed entry the next candidate is clicked on the same list, so the list is restored first. */
   private async backToList(signal: AbortSignal): Promise<void> {
     if (!this.listUrl || this.page.url() === this.listUrl) return;
-    await untilAbort(this.page.goBack({ waitUntil: 'commit' }).catch(this.unlessClosed), signal);
+    await untilAbort(this.page.goBack({ waitUntil: 'commit' }).catch(missAs(null)), signal);
     if (await this.appears(this.page.locator(SELECTORS.topicRow), RETURN_ROW_MS, signal)) return;
     await this.goto(this.listUrl, signal);
     await this.appears(this.page.locator(SELECTORS.topicRow), LIST_WAIT_MS, signal);
@@ -397,7 +339,7 @@ export class DiscourseForum implements ForumPort {
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {
     if (!visit.entered) return 'indeterminate';
     const id = visit.topic.id;
-    await untilAbort(this.page.goBack({ waitUntil: 'commit' }).catch(this.unlessClosed), signal);
+    await untilAbort(this.page.goBack({ waitUntil: 'commit' }).catch(missAs(null)), signal);
     const row = this.page.locator(rowSelector(id));
     let found = await this.appears(row, RETURN_ROW_MS, signal, 'visible');
     if (!found && this.listUrl) {

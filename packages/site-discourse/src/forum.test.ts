@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { browserClosed, classifyReturn, closedAsCancelled, discoveredCategories, listUrlFor, navigationFailure, sortKept } from './forum';
+import { classifyReturn, discoveredCategories, listUrlFor, navigationFailure, sortKept } from './forum';
+import { expectedMiss } from './page';
 
 const site = { baseUrl: 'https://forum.docofcard.com' };
 
@@ -55,30 +56,13 @@ describe('navigation error classification (§6.4)', () => {
   });
 });
 
-describe('browser closed from outside', () => {
-  const closedError = () => new Error('page.content: Target page, context or browser has been closed');
+describe('page reads that may come up empty', () => {
+  const named = (name: string, message: string) => Object.assign(new Error(message), { name });
 
-  it('classifies a vanished browser as cancelled', () => {
-    expect(browserClosed(closedError())).toBe(true);
-    expect(navigationFailure(new Error('page.goto: Target page, context or browser has been closed')).code).toBe('cancelled');
-  });
-
-  it('every port method reports it as RunError cancelled', async () => {
-    const fail = async () => {
-      throw closedError();
-    };
-    const port = closedAsCancelled({
-      site: {} as never,
-      ensureAuthenticated: fail,
-      discoverCategories: fail,
-      readProgress: fail,
-      collectTopics: fail,
-      enterFromList: fail,
-      readTopic: fail,
-      performActions: fail,
-      returnAndVerify: fail,
-    });
-    await expect(port.collectTopics({} as never, { browseMode: 'quick' }, new AbortController().signal)).rejects.toMatchObject({ code: 'cancelled' });
-    await expect(port.readProgress('final', new AbortController().signal)).rejects.toMatchObject({ code: 'cancelled' });
+  it('treats only a timeout or a lost execution context as an expected miss', () => {
+    expect(expectedMiss(named('TimeoutError', 'locator.waitFor: Timeout 20000ms exceeded.'))).toBe(true);
+    expect(expectedMiss(new Error('locator.count: Execution context was destroyed, most likely because of a navigation'))).toBe(true);
+    expect(expectedMiss(named('TargetClosedError', 'locator.count: Target page, context or browser has been closed'))).toBe(false);
+    expect(expectedMiss(new Error('page.goBack: net::ERR_ABORTED'))).toBe(false);
   });
 });

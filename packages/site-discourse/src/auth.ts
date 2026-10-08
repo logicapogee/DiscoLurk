@@ -1,5 +1,6 @@
 import type { Page } from 'playwright-core';
 import { systemClock, systemSleeper, type Clock, type InterruptibleSleeper } from '@disco-lurk/core';
+import { expectedMiss } from './page';
 import { SELECTORS } from './selectors';
 
 export interface LoginWaitOptions {
@@ -27,9 +28,13 @@ export async function waitForCurrentUser(page: Page, opts: LoginWaitOptions): Pr
   const start = clock.monotonic();
   for (;;) {
     // A navigation in progress destroys the execution context; that poll simply counts as "not yet".
-    // A closed window ends the wait at once instead of polling a page nobody can sign in on.
-    if (page.isClosed()) throw new Error('Target page, context or browser has been closed');
-    const present = await page.locator(SELECTORS.currentUser).count().then((n) => n > 0, () => false);
+    const present = await page.locator(SELECTORS.currentUser).count().then(
+      (n) => n > 0,
+      (err: unknown) => {
+        if (expectedMiss(err)) return false;
+        throw err;
+      },
+    );
     if (present) return true;
     const elapsed = clock.monotonic() - start;
     if (elapsed >= ceiling) return false;

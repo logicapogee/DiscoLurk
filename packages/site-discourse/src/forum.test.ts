@@ -4,9 +4,10 @@ import { DiscoLurkCoordinator, type RunEvent, type RunPlanSnapshot } from '@disc
 import { fixtureSite, VirtualTime } from '@disco-lurk/core/testing';
 import { classifyReturn, discoveredCategories, DiscourseForum, listUrlFor, navigationFailure, sortKept } from './forum';
 import { expectedMiss, type ReadOnlyPage } from './page';
+import { StaticPage, timeoutError } from './testing';
 import { usernameFromUrl } from './auth';
-import { loginForm } from './session';
-import { parseDocument } from './parse';
+import { loginForm, timingsReceipt } from './session';
+import { parseDocument, parseTimingsBody } from './parse';
 
 const site = { baseUrl: 'https://forum.docofcard.com' };
 
@@ -88,73 +89,6 @@ describe('username from the /my redirect (B04)', () => {
   });
 });
 
-/**
- * A page whose address and DOM are set by the test; waits answer at once from the current DOM.
- * Navigations are recorded but change nothing by themselves; `onNavigate` decides what the next page shows.
- */
-class StaticPage implements ReadOnlyPage {
-  readonly navigations: string[] = [];
-  onNavigate: (kind: 'goto' | 'reload' | 'goBack', url?: string) => void = () => {};
-  scrollError: Error | null = null;
-
-  constructor(
-    public address: string,
-    public html: string,
-  ) {}
-  private all(selector: string) {
-    return Array.from(parseDocument(this.html).querySelectorAll(selector));
-  }
-  async goto(url: string) {
-    this.navigations.push(`goto ${url}`);
-    this.onNavigate('goto', url);
-  }
-  async reload() {
-    this.navigations.push('reload');
-    this.onNavigate('reload');
-  }
-  async goBack() {
-    this.navigations.push('goBack');
-    this.onNavigate('goBack');
-  }
-  url() {
-    return this.address;
-  }
-  async title() {
-    return '';
-  }
-  isClosed() {
-    return false;
-  }
-  async viewportSize() {
-    return { width: 1280, height: 800 };
-  }
-  async setViewportSize() {}
-  async content() {
-    return this.html;
-  }
-  async count(selector: string) {
-    return this.all(selector).length;
-  }
-  async text(selector: string) {
-    return (await this.texts(selector))[0] ?? null;
-  }
-  async texts(selector: string) {
-    return this.all(selector).map((e) => (e.textContent ?? '').trim());
-  }
-  async waitFor(selector: string) {
-    if (this.all(selector).length === 0) throw timeoutError(`waitFor ${selector}`);
-  }
-  async waitForURL(url: RegExp) {
-    if (!url.test(this.address)) throw timeoutError(`waitForURL ${url}`);
-  }
-  async scrollIntoView() {
-    if (this.scrollError) throw this.scrollError;
-  }
-  async moveMouse() {}
-  async wheel() {}
-}
-
-const timeoutError = (message: string) => Object.assign(new Error(message), { name: 'TimeoutError' });
 
 function forumWith(page: ReadOnlyPage, over: Partial<ConstructorParameters<typeof DiscourseForum>[0]> = {}) {
   const time = new VirtualTime();
@@ -403,5 +337,143 @@ describe('B10 password login keeps the credentials out of every report', () => {
     const report = JSON.stringify({ result, events });
     expect(report).not.toContain(SECRET);
     expect(report).not.toContain('alice');
+  });
+});
+
+describe('VIS-001 a hidden headed window pauses reading (I6)', () => {
+  const LIST = 'https://linux.do/c/develop/4';
+  const listHtml =
+    '<header><a id="current-user"></a></header><table><tbody>' +
+    '<tr class="topic-list-item" data-topic-id="7"><td><a class="title raw-link raw-topic-link" href="/t/seven/7">Seven</a></td></tr></tbody></table>';
+  const topic = { id: '7', title: 'Seven', unread: false, pinned: false };
+
+  async function onList(headless: boolean) {
+    const page = new StaticPage(LIST, listHtml);
+    let clickedAt = -1;
+    const t = forumWith(page, {
+      headless,
+      titleLinks: {
+        click: async () => {
+          clickedAt = t.time.clock.monotonic();
+          page.address = 'https://linux.do/t/seven/7';
+          page.html = '<div class="topic-post"></div>';
+        },
+      },
+    });
+    const signal = new AbortController().signal;
+    await t.time.drive(t.forum.collectTopics({ name: 'develop', path: '/c/develop/4', id: 4, enabledByDefault: true }, { browseMode: 'quick' }, signal));
+    return { ...t, page, clickedAt: () => clickedAt, signal };
+  }
+
+  it('raises the window once, waits until it is visible, and only then clicks', async () => {
+    const t = await onList(false);
+    t.page.visibility = 'hidden';
+    const start = t.time.clock.monotonic();
+    t.time.at(start + 7_000, () => (t.page.visibility = 'visible'));
+    await expect(t.time.drive(t.forum.enterFromList(topic, t.signal))).resolves.toMatchObject({ entered: true });
+    expect(t.page.fronted).toBe(1);
+    expect(t.clickedAt()).toBeGreaterThanOrEqual(start + 7_000);
+    expect(t.warnings).toEqual(['page-hidden', 'page-visible']);
+  });
+
+  it('a stop while hidden ends the wait at once', async () => {
+    const t = await onList(false);
+    t.page.visibility = 'hidden';
+    const controller = new AbortController();
+    t.time.at(t.time.clock.monotonic() + 3_000, () => controller.abort());
+    await expect(t.time.drive(t.forum.enterFromList(topic, controller.signal))).rejects.toMatchObject({ name: 'AbortError' });
+    expect(t.clickedAt()).toBe(-1);
+  });
+
+  it('never checks a headless page, which is always visible', async () => {
+    const t = await onList(true);
+    t.page.visibility = 'hidden';
+    await expect(t.time.drive(t.forum.enterFromList(topic, t.signal))).resolves.toMatchObject({ entered: true });
+    expect(t.page.fronted).toBe(0);
+    expect(t.warnings).toEqual([]);
+  });
+});
+
+describe('filtered candidate lists (§7.2 useNewList / useUnreadList)', () => {
+  const cat = { name: 'develop', path: '/c/develop/4', id: 4, enabledByDefault: true };
+  const rows = (ids: string[], badge = '') =>
+    '<header><a id="current-user"></a></header><table><tbody>' +
+    ids.map((id) => `<tr class="topic-list-item" data-topic-id="${id}"><td><a class="title raw-link raw-topic-link" href="/t/t/${id}">T${id}</a>${badge}</td></tr>`).join('') +
+    '</tbody></table><footer class="topic-list-bottom"></footer>';
+
+  it('builds /l/new and /l/unread under the category, sorted in deep mode', () => {
+    expect(listUrlFor({ baseUrl: 'https://linux.do' }, cat, 'quick', 'new')).toBe('https://linux.do/c/develop/4/l/new');
+    expect(listUrlFor({ baseUrl: 'https://linux.do' }, cat, 'deep', 'unread')).toBe('https://linux.do/c/develop/4/l/unread?order=posts');
+  });
+
+  it('uses the first filtered list that shows topics and reports where they came from', async () => {
+    const page = new StaticPage('https://linux.do/', '');
+    page.onNavigate = (_kind, url) => {
+      page.address = url ?? page.address;
+      page.html = url?.endsWith('/l/new') ? rows([]) : rows(['8', '9'], '<span class="badge-notification unread-posts"></span>');
+    };
+    const t = forumWith(page);
+    const batch = await t.time.drive(t.forum.collectTopics(cat, { browseMode: 'quick', lists: ['new', 'unread'] }, new AbortController().signal));
+    expect(page.navigations).toEqual(['goto https://linux.do/c/develop/4/l/new', 'goto https://linux.do/c/develop/4/l/unread']);
+    expect(batch.source).toBe('unread');
+    expect(batch.topics.map((r) => [r.id, r.unreadPosts])).toEqual([
+      ['8', true],
+      ['9', true],
+    ]);
+  });
+
+  it('falls back to the category list when every filtered list is empty', async () => {
+    const page = new StaticPage('https://linux.do/', '');
+    page.onNavigate = (_kind, url) => {
+      page.address = url ?? page.address;
+      page.html = url?.includes('/l/') ? rows([]) : rows(['3']);
+    };
+    const t = forumWith(page);
+    const batch = await t.time.drive(t.forum.collectTopics(cat, { browseMode: 'quick', lists: ['new'] }, new AbortController().signal));
+    expect(batch).toMatchObject({ source: 'category', topics: [{ id: '3' }] });
+  });
+
+  it('asks only for the category list when no filtered list is requested', async () => {
+    const page = new StaticPage('https://linux.do/', '');
+    page.onNavigate = (_kind, url) => {
+      page.address = url ?? page.address;
+      page.html = rows(['3']);
+    };
+    const t = forumWith(page);
+    await t.time.drive(t.forum.collectTopics(cat, { browseMode: 'deep' }, new AbortController().signal));
+    expect(page.navigations).toEqual(['goto https://linux.do/c/develop/4?order=posts']);
+  });
+});
+
+describe('TIMINGS-001 read receipts from the page (I7)', () => {
+  it('parses the form-encoded body Discourse posts', () => {
+    expect(parseTimingsBody('timings%5B1%5D=4000&timings%5B2%5D=4000&timings%5B12%5D=1000&topic_time=4000&topic_id=2996592')).toEqual({
+      topicId: '2996592',
+      postNumbers: [1, 2, 12],
+      topicMs: 4000,
+    });
+  });
+
+  it('parses a JSON body of the same shape and rejects bodies without a topic', () => {
+    expect(parseTimingsBody(JSON.stringify({ timings: { '3': 1000 }, topic_time: 1500, topic_id: 7 }))).toEqual({ topicId: '7', postNumbers: [3], topicMs: 1500 });
+    expect(parseTimingsBody('timings%5B1%5D=1000')).toBeNull();
+    expect(parseTimingsBody(null)).toBeNull();
+    expect(parseTimingsBody('{not json')).toBeNull();
+  });
+
+  const response = (url: string, opts: { method?: string; ok?: boolean; body?: string } = {}) => ({
+    url: () => url,
+    ok: () => opts.ok ?? true,
+    request: () => ({ method: () => opts.method ?? 'POST', postData: () => opts.body ?? 'timings%5B1%5D=1000&topic_time=1000&topic_id=5' }),
+  });
+
+  it('accepts only a successful POST to the site’s own /topics/timings', () => {
+    const site = { baseUrl: 'https://linux.do' };
+    const r = (u: string, o?: Parameters<typeof response>[1]) => timingsReceipt(site, response(u, o) as unknown as Parameters<typeof timingsReceipt>[1]);
+    expect(r('https://linux.do/topics/timings')).toEqual({ topicId: '5', postNumbers: [1], topicMs: 1000 });
+    expect(r('https://linux.do/topics/timings', { ok: false })).toBeNull();
+    expect(r('https://linux.do/topics/timings', { method: 'GET' })).toBeNull();
+    expect(r('https://connect.linux.do/topics/timings')).toBeNull();
+    expect(r('https://linux.do/t/x/5.json')).toBeNull();
   });
 });

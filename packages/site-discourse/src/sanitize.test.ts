@@ -32,7 +32,7 @@ describe('fixture sanitizing (§11.2)', () => {
 
   it('keeps the structure selectors and parsers rely on', () => {
     const rows = parseTopicList(parseDocument(html));
-    expect(rows).toEqual([{ id: '7', title: 'Notes by user1', pinned: true, unread: true, unreadPosts: false, hasTitleLink: true }]);
+    expect(rows).toEqual([{ id: '7', title: 'Notes by user1', pinned: true, unread: true, unreadPosts: false, hasTitleLink: true, replies: null }]);
     expect(html).toContain('href="/t/user1-notes/7"');
     expect(html).toContain('id="current-user"');
   });

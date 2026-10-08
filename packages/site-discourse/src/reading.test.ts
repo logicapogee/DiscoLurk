@@ -15,6 +15,7 @@ function topic(
   let offset = 0;
   const scrolls: number[] = [];
   const surface: FloorSurface = {
+    async whenVisible() {},
     async readCounter(): Promise<FloorReading | null> {
       if (opts.counter === false || time.clock.monotonic() < (opts.renderAfterMs ?? 0)) return null;
       const climbed = opts.floorEvery ? Math.floor(scrolls.length / opts.floorEvery) : Math.floor(offset / (opts.pxPerFloor ?? 300));
@@ -107,6 +108,7 @@ describe('FLOOR-003 stuck counter (F04)', () => {
       async readCounter() {
         return { layout: 'wide' as const, current: scrolled >= 4 ? 2 : 1, total: 100 };
       },
+      async whenVisible() {},
       async countPosts() {
         return 0;
       },
@@ -211,5 +213,28 @@ describe('QUICK-002 quick without a counter (Q04)', () => {
     time.at(7_000, () => controller.abort());
     await expect(read(time, surface, strategy('quick').s, controller.signal)).rejects.toThrow(/abort/i);
     expect(scrolls.length).toBeLessThan(QUICK.blindScrolls);
+  });
+});
+
+describe('VIS-001 reading waits for a visible page before every dwell (I6)', () => {
+  it.each(['deep', 'quick'] as const)('%s: no scroll happens while the page is hidden', async (mode) => {
+    const time = new VirtualTime();
+    const { surface, scrolls } = topic(time, { total: 40 });
+    const visibleAt = 20_000;
+    let checks = 0;
+    surface.whenVisible = async (signal) => {
+      checks++;
+      while (time.clock.monotonic() < visibleAt) await time.sleeper.sleep(2_000, signal);
+    };
+    const scrolledAt: number[] = [];
+    const scroll = surface.scroll.bind(surface);
+    surface.scroll = async (dy) => {
+      scrolledAt.push(time.clock.monotonic());
+      await scroll(dy);
+    };
+    await read(time, surface, strategy(mode, 3).s);
+    expect(scrolls.length).toBeGreaterThan(0);
+    expect(Math.min(...scrolledAt)).toBeGreaterThanOrEqual(visibleAt);
+    expect(checks).toBe(scrolls.length);
   });
 });

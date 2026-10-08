@@ -1,8 +1,9 @@
-import type { Page } from 'playwright-core';
-import { pauseBetween, RunError, untilAbort, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site } from '@disco-lurk/core';
+import type { Page, Response } from 'playwright-core';
+import { pauseBetween, RunError, untilAbort, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site, type TimingsReceipt } from '@disco-lurk/core';
 import { launchProfile, type BrowserSession } from './browser';
 import { DiscourseForum, titleLinkSelector, type Credentials, type LoginForm, type TitleLinks } from './forum';
 import { PAGE_TIMEOUTS, PageView, TargetWatch, targetClosed } from './page';
+import { parseTimingsBody } from './parse';
 import { SELECTORS } from './selectors';
 
 export interface OpenForumOptions {
@@ -16,7 +17,10 @@ export interface OpenForumOptions {
   proxy?: string;
   credentials?: Credentials;
   warn?: (code: string, message: string) => void;
+  /** Each `/topics/timings` flush the site answered with success. */
+  onTimings?: (receipt: TimingsReceipt) => void;
 }
+
 
 const LAUNCH_ATTEMPTS = 3;
 
@@ -34,6 +38,20 @@ type PageCall = TargetWatch['call'];
 
 function titleLinks(page: Page, call: PageCall): TitleLinks {
   return { click: (topicId) => call(() => page.locator(titleLinkSelector(topicId)).first().click({ timeout: PAGE_TIMEOUTS.actionMs })) };
+}
+
+/** The read receipt of an acknowledged `POST /topics/timings` on the site; null for any other response. */
+export function timingsReceipt(site: Pick<Site, 'baseUrl'>, response: Pick<Response, 'url' | 'ok' | 'request'>): TimingsReceipt | null {
+  let url: URL;
+  try {
+    url = new URL(response.url());
+  } catch {
+    return null;
+  }
+  if (url.origin !== new URL(site.baseUrl).origin || url.pathname !== '/topics/timings') return null;
+  const request = response.request();
+  if (request.method() !== 'POST' || !response.ok()) return null;
+  return parseTimingsBody(request.postData());
 }
 
 /**
@@ -88,6 +106,13 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
   browser.context.on('close', () => watch.markClosed());
   browser.page.on('close', () => watch.markClosed());
   browser.page.on('crash', () => watch.markCrashed());
+  if (opts.onTimings) {
+    const deliver = opts.onTimings;
+    browser.page.on('response', (response) => {
+      const receipt = timingsReceipt(opts.site, response);
+      if (receipt) deliver(receipt);
+    });
+  }
   const call = watch.call;
   const forum = new DiscourseForum({
     site: opts.site,

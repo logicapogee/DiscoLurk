@@ -6,6 +6,7 @@ import type {
   Category,
   InteractionPolicy,
   ProfileHealth,
+  WaitRange,
   ProfileId,
   RunId,
   RunPlanSnapshot,
@@ -22,14 +23,24 @@ export type AuthResult =
   | { status: 'needs-auth' }
   | { status: 'challenge-detected' };
 
+/** A category's own topic list, or one of its filtered lists. */
+export type TopicListSource = 'category' | 'new' | 'unread';
+
 export interface TopicStrategy {
   /** Deep mode sorts the list by reply count. */
   browseMode: BrowseMode;
+  /**
+   * Filtered lists to try first, in order; the first that shows a clickable topic is used and the
+   * category's own list is the fallback. Empty or absent means the category's own list only.
+   */
+  lists?: ReadonlyArray<Exclude<TopicListSource, 'category'>>;
 }
 
 /** No topics means the list had nothing to click; the category is skipped as `empty-category`. */
 export interface TopicBatch {
   category: Category;
+  /** The list the topics were read from, which is the page their title links are clicked on. */
+  source: TopicListSource;
   topics: TopicCandidate[];
 }
 
@@ -62,12 +73,24 @@ export interface ReadResult {
   layout: 'wide' | 'narrow' | null;
 }
 
-export interface ActionPolicy extends InteractionPolicy {}
+export interface ActionReport {
+  action: 'like' | 'reply';
+  /** `rejected` is an action that was sent but never confirmed by the page. */
+  result: 'attempted' | 'confirmed' | 'rejected';
+  postNumber?: number;
+}
+
+/** The interaction switches and rates, the extra-wait setting that paces them, and where each action is reported. */
+export interface ActionPolicy extends InteractionPolicy {
+  extraWait: WaitRange & { enabled: boolean };
+  onAction(report: ActionReport): void;
+}
 
 export interface ActionResult {
   likes: { attempted: number; confirmed: number };
   replyLikes: { attempted: number; confirmed: number };
   replies: { attempted: number; confirmed: number };
+  /** Set once likes went unconfirmed twice in a row, the sign of the site's daily like limit. */
   likeLimitHit: boolean;
 }
 

@@ -1,5 +1,5 @@
 import { parseHTML } from 'linkedom';
-import { CATEGORY_NAME_SELECTORS, CATEGORY_PATH, SELECTORS } from './selectors';
+import { CATEGORY_NAME_SELECTORS, CATEGORY_PATH, EDITOR_SELECTORS, REPLIES_CELL, SELECTORS } from './selectors';
 
 /** Parsers take any DOM root so the same code reads a live page snapshot and a stored fixture. */
 export type DomRoot = ParentNode;
@@ -24,6 +24,18 @@ export interface ListRow {
   unread: boolean;
   unreadPosts: boolean;
   hasTitleLink: boolean;
+  /** Null when the row shows no readable reply count. */
+  replies: number | null;
+}
+
+/** A list count such as `57`, `1,234`, `1.2k` or `3.4万`. */
+export function abbreviatedCount(raw: string): number | null {
+  const m = /(\d[\d.,]*)\s*([kKmM万])?/.exec(raw.trim());
+  if (!m) return null;
+  const base = Number(m[1]!.replace(/,/g, ''));
+  if (!Number.isFinite(base)) return null;
+  const unit = m[2]?.toLowerCase();
+  return Math.round(base * (unit === 'k' ? 1_000 : unit === 'm' ? 1_000_000 : unit === '万' ? 10_000 : 1));
 }
 
 /** Rows of a topic list with what candidate picking needs from each. */
@@ -37,6 +49,7 @@ export function parseTopicList(root: DomRoot): ListRow[] {
       unread: row.querySelector(SELECTORS.newTopicBadge) !== null,
       unreadPosts: row.querySelector(SELECTORS.unreadPostsBadge) !== null,
       hasTitleLink: link !== null,
+      replies: abbreviatedCount(text(row.querySelector(REPLIES_CELL))),
     };
   });
 }
@@ -80,12 +93,54 @@ export function isLiked(post: DomRoot): boolean {
   return m.reacted > 0 || m.likedIcon > 0;
 }
 
-/** Which of the editor selector sets the open composer exposes. */
-export function editorKind(root: DomRoot): 'textarea' | 'd-editor-input' | 'prosemirror' | null {
-  if (root.querySelector(SELECTORS.replyTextarea)) return 'textarea';
-  if (root.querySelector(SELECTORS.replyEditor)) return 'd-editor-input';
-  if (root.querySelector('#reply-control .ProseMirror, #reply-control [contenteditable="true"]')) return 'prosemirror';
+export type EditorKind = keyof typeof EDITOR_SELECTORS;
+
+/** Which of the editor selector sets the open composer exposes, from counts per set. */
+export function editorKindFromCounts(counts: Readonly<Record<EditorKind, number>>): EditorKind | null {
+  for (const kind of Object.keys(EDITOR_SELECTORS) as EditorKind[]) if (counts[kind] > 0) return kind;
   return null;
+}
+
+export function editorKind(root: DomRoot): EditorKind | null {
+  const count = (kind: EditorKind) => root.querySelectorAll(EDITOR_SELECTORS[kind]).length;
+  return editorKindFromCounts({ textarea: count('textarea'), 'd-editor-input': count('d-editor-input'), prosemirror: count('prosemirror') });
+}
+
+/**
+ * The floors and topic time of one `/topics/timings` request body. Discourse posts it form-encoded
+ * (`timings[<post>]=<ms>&topic_time=<ms>&topic_id=<id>`); a JSON body of the same shape is read too.
+ */
+export function parseTimingsBody(body: string | null): { topicId: string; postNumbers: number[]; topicMs: number } | null {
+  if (!body) return null;
+  let timings: Record<string, unknown> = {};
+  let topicId: unknown;
+  let topicTime: unknown;
+  if (body.trimStart().startsWith('{')) {
+    try {
+      const json = JSON.parse(body) as { timings?: Record<string, unknown>; topic_id?: unknown; topic_time?: unknown };
+      timings = json.timings ?? {};
+      topicId = json.topic_id;
+      topicTime = json.topic_time;
+    } catch {
+      return null;
+    }
+  } else {
+    const form = new URLSearchParams(body);
+    for (const [key, value] of form) {
+      const m = /^timings\[(\d+)\]$/.exec(key);
+      if (m) timings[m[1]!] = value;
+    }
+    topicId = form.get('topic_id');
+    topicTime = form.get('topic_time');
+  }
+  const id = topicId === null || topicId === undefined ? '' : String(topicId);
+  if (!/^\d+$/.test(id)) return null;
+  const postNumbers = Object.keys(timings)
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .sort((a, b) => a - b);
+  const ms = Number(topicTime);
+  return { topicId: id, postNumbers, topicMs: Number.isFinite(ms) && ms > 0 ? ms : 0 };
 }
 
 export interface CategoryLink {

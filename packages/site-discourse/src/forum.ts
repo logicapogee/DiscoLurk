@@ -21,6 +21,7 @@ import {
   type Site,
   type TopicBatch,
   type TopicCandidate,
+  type TopicListSource,
   type TopicStrategy,
   type TopicVisit,
 } from '@disco-lurk/core';
@@ -40,6 +41,7 @@ import {
   CONNECT_AUTHORIZE_FORM,
   CONNECT_AUTHORIZE_PATH,
   CONNECT_READY,
+  LIST_END,
   rowSelector,
   SELECTORS,
   SORTED_BY_POSTS_QUERY,
@@ -56,6 +58,7 @@ const TIMEOUTS = {
   signInCheckMs: 20_000,
   signInPollMs: 1_000,
   connectSettleMs: 2_000,
+  visibilityPollMs: 2_000,
 } as const;
 const TITLE_LOG_CHARS = 50;
 
@@ -89,9 +92,12 @@ export interface DiscourseForumOptions {
 /** The selector of a topic's title link in its list row. */
 export const titleLinkSelector = (topicId: string) => `${rowSelector(topicId)} ${SELECTORS.topicLink}`;
 
-/** Deep mode enters the category sorted by reply count through the URL; quick mode uses the plain list. */
-export function listUrlFor(site: Pick<Site, 'baseUrl'>, category: Pick<Category, 'path'>, browseMode: BrowseMode): string {
-  const url = new URL(category.path, site.baseUrl);
+/**
+ * Deep mode enters the category sorted by reply count through the URL; quick mode uses the plain
+ * list. A filtered list (`new`, `unread`) is the category path plus `/l/<filter>`.
+ */
+export function listUrlFor(site: Pick<Site, 'baseUrl'>, category: Pick<Category, 'path'>, browseMode: BrowseMode, source: TopicListSource = 'category'): string {
+  const url = new URL(source === 'category' ? category.path : `${category.path.replace(/\/$/, '')}/l/${source}`, site.baseUrl);
   if (browseMode === 'deep') url.search = SORTED_BY_POSTS_QUERY;
   return url.href;
 }
@@ -148,7 +154,12 @@ class PageFloorSurface implements FloorSurface {
   constructor(
     private readonly page: ReadOnlyPage,
     private readonly center: { x: number; y: number },
+    private readonly visible: (signal: AbortSignal) => Promise<void>,
   ) {}
+
+  async whenVisible(signal: AbortSignal): Promise<void> {
+    await this.visible(signal);
+  }
 
   async readCounter(): Promise<FloorReading | null> {
     const texts = await Promise.all([this.page.text(SELECTORS.floorWide), this.page.texts(SELECTORS.floorNarrow)]).catch(fallbackUnlessUnexpected(null));
@@ -298,21 +309,57 @@ export class DiscourseForum implements ForumPort {
   }
 
   async collectTopics(category: Category, strategy: TopicStrategy, signal: AbortSignal): Promise<TopicBatch> {
-    const listUrl = listUrlFor(this.site, category, strategy.browseMode);
+    for (const source of strategy.lists ?? []) {
+      const batch = await this.openList(category, source, strategy.browseMode, signal);
+      if (batch.topics.length > 0) return batch;
+    }
+    return this.openList(category, 'category', strategy.browseMode, signal);
+  }
+
+  /**
+   * A category's own list must show topic rows; a filtered list may legitimately be empty, so its
+   * end-of-list footer also counts as rendered.
+   */
+  private async openList(category: Category, source: TopicListSource, browseMode: BrowseMode, signal: AbortSignal): Promise<TopicBatch> {
+    const listUrl = listUrlFor(this.site, category, browseMode, source);
     await this.goto(listUrl, signal);
     this.listUrl = listUrl;
-    if (!(await this.appears(SELECTORS.topicRow, TIMEOUTS.listMs, signal))) {
+    const rendered = source === 'category' ? SELECTORS.topicRow : `${SELECTORS.topicRow}, ${LIST_END}`;
+    if (!(await this.appears(rendered, TIMEOUTS.listMs, signal)) || (await this.count(SELECTORS.topicRow)) === 0) {
       await this.explainMissingPage();
-      return { category, topics: [] };
+      return { category, source, topics: [] };
     }
     // A person glances over the list for 1–2 s once it appears.
     await this.pause(1, 2, signal);
     const topics: TopicCandidate[] = parseTopicList(await this.content())
       .filter((r) => r.id && r.hasTitleLink)
-      .map((r) => ({ id: r.id, title: r.title.slice(0, TITLE_LOG_CHARS), unread: r.unread, pinned: r.pinned }));
+      .map((r) => ({
+        id: r.id,
+        title: r.title.slice(0, TITLE_LOG_CHARS),
+        unread: r.unread,
+        pinned: r.pinned,
+        unreadPosts: r.unreadPosts,
+        ...(r.replies !== null ? { replies: r.replies } : {}),
+      }));
     // docofcard's Feed category renders news cards as topic rows without a title link:
     // nothing on such a page can be clicked, so it is as empty as a page without rows.
-    return { category, topics };
+    return { category, source, topics };
+  }
+
+  /**
+   * The site's screen tracker counts nothing while the page is hidden, so a hidden headed window
+   * is raised once and reading waits until it is visible again. A headless page is always visible.
+   */
+  private async whenVisible(signal: AbortSignal): Promise<void> {
+    if (this.opts.headless) return;
+    const state = () => untilAbort(this.opts.page.visibilityState().catch(fallbackUnlessUnexpected<DocumentVisibilityState>('visible')), signal);
+    if ((await state()) === 'visible') return;
+    const since = this.opts.deps.clock.monotonic();
+    this.opts.warn('page-hidden', 'The browser window is hidden; the site counts no reading while it is. Bringing it to the front and waiting');
+    await untilAbort(this.opts.page.bringToFront(), signal);
+    while ((await state()) !== 'visible') await this.opts.deps.sleeper.sleep(TIMEOUTS.visibilityPollMs, signal);
+    const seconds = Math.round((this.opts.deps.clock.monotonic() - since) / 1000);
+    this.opts.warn('page-visible', `The browser window is visible again after ${seconds} s; reading continues`);
   }
 
   async enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit> {
@@ -320,6 +367,7 @@ export class DiscourseForum implements ForumPort {
     // The title link on the current list page is the only way into a candidate; there is no URL fallback.
     const link = titleLinkSelector(topic.id);
     if ((await this.opts.page.count(link)) === 0) return { topic, entered: false, reason: 'row-not-on-list' };
+    await this.whenVisible(signal);
     try {
       await untilAbort(this.opts.page.scrollIntoView(link), signal);
       await untilAbort(this.opts.titleLinks.click(topic.id), signal);
@@ -370,7 +418,7 @@ export class DiscourseForum implements ForumPort {
   async readTopic(visit: TopicVisit, strategy: ReadStrategy, signal: AbortSignal): Promise<ReadResult> {
     if (!visit.entered) return { startFloor: null, endFloor: null, scrolls: 0, stoppedByTarget: false, layout: null };
     const { width, height } = await this.opts.page.viewportSize();
-    const surface = new PageFloorSurface(this.opts.page, { x: Math.round(width / 2), y: Math.round(height / 2) });
+    const surface = new PageFloorSurface(this.opts.page, { x: Math.round(width / 2), y: Math.round(height / 2) }, (s) => this.whenVisible(s));
     return readFloors(surface, strategy, this.opts.deps, signal);
   }
 

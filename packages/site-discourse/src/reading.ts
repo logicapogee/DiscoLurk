@@ -3,6 +3,8 @@ import type { FloorReading } from './parse';
 
 /** The two things reading needs from a topic page; tests drive the strategies through a scripted one. */
 export interface FloorSurface {
+  /** Resolves once the page is visible; the site counts no reading time while it is hidden. */
+  whenVisible(signal: AbortSignal): Promise<void>;
   readCounter(): Promise<FloorReading | null>;
   /** Rendered posts on the page; 0 when none can be counted. */
   countPosts(): Promise<number>;
@@ -75,6 +77,11 @@ function tracker(start: FloorReading | null, strategy: ReadStrategy): Tracker {
 export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, deps: RuntimeDeps, signal: AbortSignal): Promise<ReadResult> {
   const sleep = (ms: number) => deps.sleeper.sleep(ms, signal);
   const pause = (range: readonly [number, number]) => pauseBetween(deps, range[0], range[1], signal);
+  // Every dwell is reading time the site only counts on a visible page.
+  const dwell = async (range: readonly [number, number]) => {
+    await surface.whenVisible(signal);
+    await pause(range);
+  };
   const px = (range: readonly [number, number]) => Math.round(randomBetween(deps.random, range[0], range[1]));
 
   // A counter that has not rendered yet reads as null, which would wrongly fall back to blind scrolling.
@@ -100,7 +107,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
   if (strategy.browseMode === 'quick') {
     if (!first) {
       for (let i = 0; i < QUICK.blindScrolls; i++) {
-        await pause(QUICK.dwellSec);
+        await dwell(QUICK.dwellSec);
         await scroll(px(QUICK.stepPx));
       }
       await estimateFromPosts();
@@ -108,7 +115,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
     }
     const goal = randomInt(deps.random, QUICK.floors[0], QUICK.floors[1]);
     while (t.result.scrolls < QUICK.maxScrolls) {
-      await pause(QUICK.dwellSec);
+      await dwell(QUICK.dwellSec);
       await scroll(px(QUICK.stepPx));
       await sleep(QUICK.settleMs);
       const r = await surface.readCounter();
@@ -124,7 +131,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
     const until = deps.clock.monotonic() + randomBetween(deps.random, TRADITIONAL.durationSec[0], TRADITIONAL.durationSec[1]) * 1000;
     while (deps.clock.monotonic() < until && t.result.scrolls < DEEP.maxScrolls) {
       await scroll(px(TRADITIONAL.stepPx));
-      await pause(TRADITIONAL.intervalSec);
+      await dwell(TRADITIONAL.intervalSec);
       const r = first ? await surface.readCounter() : null;
       if (r !== null && t.advance(r)) break;
     }
@@ -137,7 +144,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
   let escalated = false;
   while (t.result.scrolls < DEEP.maxScrolls) {
     // Read first, then scroll, then let the counter catch up.
-    await pause(DEEP.dwellSec);
+    await dwell(DEEP.dwellSec);
     await scroll(px(DEEP.stepPx));
     await sleep(DEEP.settleMs);
     let before = t.last;

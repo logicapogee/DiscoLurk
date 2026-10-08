@@ -14,10 +14,12 @@ import {
   type StopRequest,
 } from './events';
 import type { LevelSnapshot, MetricKey } from './metrics';
+import type { LedgerStore, VisitLedger } from './ledger';
 import { mergeDiscoveredCategories } from './plan';
+import { TimingsTally, type TimingsReceipt } from './timings';
 import type { AuthMode, AuthResult, AuthSession, ForumPort, RunCoordinator } from './ports';
 import { isAbortError, seededRandom, throwIfAborted, type RuntimeDeps } from './runtime';
-import type { BrowserMode, Category, Profile, ProfileHealth, ProfileId, RunPlanSnapshot, Site, SiteId } from './terms';
+import { EXPERIMENTS_OFF, type BrowserMode, type Category, type Profile, type ProfileHealth, type ProfileId, type RunPlanSnapshot, type Site, type SiteId } from './terms';
 
 export interface ForumSession {
   forum: ForumPort;
@@ -34,6 +36,8 @@ export interface OpenRequest {
   runId: string;
   /** Adapter-side observations that belong in the run's event stream. */
   warn(code: string, message: string): void;
+  /** Each `/topics/timings` flush the site acknowledged. */
+  timings(receipt: TimingsReceipt): void;
 }
 
 /** Where a discovered site's category list is kept between runs. */
@@ -48,6 +52,8 @@ export interface CoordinatorEnv {
   /** Launches the Profile's browser; throws `RunError` (`browser-missing`, `profile-locked`, …) when it cannot. */
   open(request: OpenRequest): Promise<ForumSession>;
   categories: CategoryStore;
+  /** Where each Profile's visit ledger is kept; without one, visits are not remembered. */
+  ledgers?: LedgerStore;
   /**
    * Aborts when the application exits. A user stop still verifies against the progress page;
    * this signal also cuts that verification short.
@@ -125,6 +131,12 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     let site: Site | null = null;
     let stats: RunStats = emptyStats();
     const levels: RunResult['levels'] = { initial: null, final: null };
+    const tally = new TimingsTally();
+    const visits: { ledger: VisitLedger | null } = { ledger: null };
+    const onTimings = (receipt: TimingsReceipt) => {
+      tally.add(receipt);
+      emit({ type: 'timings', at: at(), postsReported: receipt.postNumbers.length, topicSeconds: Math.round(receipt.topicMs / 100) / 10 });
+    };
 
     const end = (outcome: RunOutcome, stopCause: StopCause, failure?: RunFailure): RunResult => ({
       outcome,
@@ -150,7 +162,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
       site = resolved.site;
       if (site.id !== plan.siteId) throw new RunError('internal', `Profile ${plan.profileId} belongs to ${site.id}, not ${plan.siteId}`);
       if (plan.preset.categories.length === 0) throw new RunError('no-candidates', 'No category is enabled for this run');
-      session = await this.env.open({ site, profile: resolved.profile, browserMode: plan.browserMode, runId: plan.id, warn });
+      session = await this.env.open({ site, profile: resolved.profile, browserMode: plan.browserMode, runId: plan.id, warn, timings: onTimings });
     } catch (err) {
       return finish(end('failed', 'error', toFailure(err)));
     }
@@ -186,6 +198,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
           if (exited) return end('cancelled', 'app-exit', failure);
         }
       }
+      stats.timings = tally.snapshot();
       emit({ type: 'stats', at: at(), stats: structuredClone(stats) });
       return end(failure ? 'failed' : 'completed', stopCause, failure);
     };
@@ -236,9 +249,14 @@ export class DiscoLurkCoordinator implements RunCoordinator {
           }
         }
         if (runSite.categorySource === 'discovered') await this.refreshCategories(runSite, forum, live, warn);
+        const categories =
+          runSite.categorySource === 'builtin' && (plan.preset.experiments ?? EXPERIMENTS_OFF).refreshCategories
+            ? await this.refreshBuiltinPaths(plan.preset.categories, forum, live, warn)
+            : plan.preset.categories;
+        visits.ledger = await this.openLedger(plan.profileId, warn);
 
         state('browsing');
-        const out = await browse({ plan, forum, deps, signal: live, emit });
+        const out = await browse({ plan, forum, deps, signal: live, emit, categories, timings: tally, ...(visits.ledger ? { ledger: visits.ledger } : {}) });
         stats = out.stats;
         switch (out.end) {
           case 'target-reached':
@@ -262,6 +280,13 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     } finally {
       await session.close();
     }
+    if (visits.ledger) {
+      try {
+        await visits.ledger.save();
+      } catch (err) {
+        warn('ledger-save-failed', toFailure(err).message);
+      }
+    }
     return finish(result);
   }
 
@@ -270,7 +295,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     const { profile, site } = await this.env.resolveProfile(profileId);
     let session: ForumSession;
     try {
-      session = await this.env.open({ site, profile, browserMode: 'headless', runId: `inspect-${this.env.deps.clock.now()}`, warn: () => {} });
+      session = await this.env.open({ site, profile, browserMode: 'headless', runId: `inspect-${this.env.deps.clock.now()}`, warn: () => {}, timings: () => {} });
     } catch (err) {
       const locked = err instanceof RunError && err.code === 'profile-locked';
       return { profileId, status: locked ? 'locked' : 'broken', checkedAt: checkedAt() };
@@ -293,7 +318,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
 
   async beginAuth(profileId: ProfileId): Promise<AuthSession> {
     const { profile, site } = await this.env.resolveProfile(profileId);
-    const session = await this.env.open({ site, profile, browserMode: 'headed', runId: `auth-${this.env.deps.clock.now()}`, warn: () => {} });
+    const session = await this.env.open({ site, profile, browserMode: 'headed', runId: `auth-${this.env.deps.clock.now()}`, warn: () => {}, timings: () => {} });
     return {
       recheck: () => session.forum.ensureAuthenticated('headless-check', AbortSignal.any([AbortSignal.timeout(TIMEOUTS.inspectMs), session.closed])),
       continueWaiting: (signal) => session.forum.ensureAuthenticated('headed-wait', AbortSignal.any([signal, session.closed])),
@@ -336,6 +361,39 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     }
     if (reportedTopicsShortfall(stats) !== null) warn('site-lag', `Site statistics are still missing ${missing()} after the re-read`);
     return false;
+  }
+
+  private async openLedger(profileId: ProfileId, warn: (code: string, message: string) => void): Promise<VisitLedger | null> {
+    if (!this.env.ledgers) return null;
+    try {
+      return await this.env.ledgers.open(profileId);
+    } catch (err) {
+      warn('ledger-unavailable', `${toFailure(err).message}; this run's visits are not remembered`);
+      return null;
+    }
+  }
+
+  /**
+   * A builtin site's table is checked against the categories page before browsing. Only a
+   * category whose id the page also lists is trusted to have moved, and only its path changes:
+   * nothing is added and no enable choice changes. A failed read keeps the table as it is.
+   */
+  private async refreshBuiltinPaths(planned: readonly Category[], forum: ForumPort, signal: AbortSignal, warn: (code: string, message: string) => void): Promise<Category[]> {
+    let found: Category[];
+    try {
+      found = await forum.discoverCategories(signal);
+    } catch (err) {
+      const why = classify(err, signal);
+      if (why.kind === 'stop') throw err;
+      warn('category-discovery-failed', `${why.failure.code}: ${why.failure.message}`);
+      return [...planned];
+    }
+    return planned.map((c) => {
+      const live = found.find((f) => f.id === c.id);
+      if (!live || live.path === c.path) return c;
+      warn('category-path-updated', `${c.name} moved from ${c.path} to ${live.path}`);
+      return { ...c, path: live.path };
+    });
   }
 
   /** A discovered site re-reads its categories after every sign-in; a failed read keeps the stored list. */

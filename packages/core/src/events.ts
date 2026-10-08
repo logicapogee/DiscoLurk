@@ -1,4 +1,5 @@
 import type { LevelSnapshot, MetricKey } from './metrics';
+import type { ReadVerification } from './ports';
 
 /** The states a run moves through, ending in `completed`, `failed` or `cancelled`. */
 export type RunState =
@@ -54,6 +55,13 @@ export interface RunStats {
   /** `repliedTopics` counts topics with at least one confirmed reply, matching connect's 回复话题. */
   confirmed: StatCounters & { repliedTopics: number };
   estimatedFloors: number;
+  /** How each entered topic's list row looked on the way back. */
+  returns: Record<ReadVerification, number>;
+  /**
+   * What the site's own `/topics/timings` flushes acknowledged: distinct floors and the summed
+   * topic time. It is the browser's read receipt, so it sits between confirmed and reported.
+   */
+  timings: { posts: number; topicSeconds: number };
   reported?: Partial<Record<MetricKey, { initial?: number; final: number }>>;
   /** Measured on the monotonic clock. */
   elapsedMs: number;
@@ -113,7 +121,14 @@ export function emptyCounters(): StatCounters {
 }
 
 export function emptyStats(): RunStats {
-  return { attempted: emptyCounters(), confirmed: { ...emptyCounters(), repliedTopics: 0 }, estimatedFloors: 0, elapsedMs: 0 };
+  return {
+    attempted: emptyCounters(),
+    confirmed: { ...emptyCounters(), repliedTopics: 0 },
+    estimatedFloors: 0,
+    returns: { confirmed: 0, 'still-unread': 0, indeterminate: 0, 'not-applicable': 0 },
+    timings: { posts: 0, topicSeconds: 0 },
+    elapsedMs: 0,
+  };
 }
 
 export class RunError extends Error {

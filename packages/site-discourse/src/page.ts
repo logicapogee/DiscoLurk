@@ -34,6 +34,12 @@ export interface ReadOnlyPage {
   scrollIntoView(selector: string): Promise<void>;
   moveMouse(x: number, y: number): Promise<void>;
   wheel(dx: number, dy: number): Promise<void>;
+  /** `document.visibilityState`: the site's screen tracker counts nothing while it is `hidden`. */
+  visibilityState(): Promise<DocumentVisibilityState>;
+  /** Raises the window and its tab, as a click on the window would. */
+  bringToFront(): Promise<void>;
+  /** Floor numbers of the posts at least partly inside the viewport, top to bottom. */
+  postsInViewport(): Promise<number[]>;
 }
 
 /**
@@ -195,5 +201,26 @@ export class PageView implements ReadOnlyPage {
 
   wheel(dx: number, dy: number): Promise<void> {
     return this.call(() => this.page.mouse.wheel(dx, dy));
+  }
+
+  visibilityState(): Promise<DocumentVisibilityState> {
+    return this.call(() => this.page.evaluate(() => document.visibilityState));
+  }
+
+  bringToFront(): Promise<void> {
+    return this.call(() => this.page.bringToFront());
+  }
+
+  postsInViewport(): Promise<number[]> {
+    return this.call(() =>
+      this.page.locator('.topic-post[data-post-number]').evaluateAll((posts) =>
+        posts
+          .filter((p) => {
+            const r = p.getBoundingClientRect();
+            return r.height > 0 && r.bottom > 0 && r.top < window.innerHeight;
+          })
+          .map((p) => Number(p.getAttribute('data-post-number'))),
+      ),
+    );
   }
 }

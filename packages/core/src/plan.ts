@@ -17,6 +17,7 @@ export function resolvePreset(preset: RunPreset, categories: readonly Category[]
     interaction: preset.interaction,
     extraWait: preset.extraWait,
     samplePerCategory: preset.samplePerCategory,
+    ...(preset.experiments ? { experiments: preset.experiments } : {}),
   });
 }
 

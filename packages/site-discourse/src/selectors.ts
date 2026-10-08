@@ -50,8 +50,35 @@ export const CATEGORY_LINK = 'a[href*="/c/"]';
 /** List URLs: `/c/<slug>/<id>` with optional parent slugs, plus the new/unread lists. */
 export const CATEGORY_PATH = /^\/c\/((?:[^/?#]+\/)*[^/?#]+)\/(\d+)\/?$/;
 
+/** Not from the selector table: the footer Discourse renders under every topic list, empty or not. */
+export const LIST_END = 'footer.topic-list-bottom';
+
 /** Any rendered post of a topic; it marks entry when a one-floor topic shows no floor counter. */
 export const TOPIC_POST = '.topic-post';
+
+/** A post's like button, addressed by floor so cloaking or DOM order cannot point it at another post. */
+export const likeButtonOf = (postNumber: number) => `.topic-post[data-post-number="${postNumber}"] ${SELECTORS.likeButton}`;
+
+/** A floor's container; liked markers and the like button are looked up inside it. */
+export const postOf = (postNumber: number) => `.topic-post[data-post-number="${postNumber}"]`;
+
+/** Not from the selector table: the reply count a list row shows (linuxdo's posts cell, docofcard's `gf-*` stat box). */
+export const REPLIES_CELL = 'td.posts .number, .gf-stat-posts .gf-stat-number';
+
+/**
+ * Not from the selector table: the open composer, its discard button, and the confirmation Discourse
+ * asks for before throwing a draft away. Only used to close a reply that could not be confirmed.
+ */
+export const COMPOSER_OPEN = '#reply-control.open';
+export const COMPOSER_DISCARD = '#reply-control .discard-button';
+export const COMPOSER_DISCARD_CONFIRM = '.discard-draft-modal .btn-danger';
+
+/** The editors the composer may show, in the order they are tried; a ProseMirror editor also carries `.d-editor-input` on docofcard. */
+export const EDITOR_SELECTORS = {
+  textarea: SELECTORS.replyTextarea,
+  'd-editor-input': `#reply-control ${SELECTORS.replyEditor}`,
+  prosemirror: '#reply-control .ProseMirror, #reply-control [contenteditable="true"]',
+} as const;
 
 export const rowSelector = (topicId: string) => `tr.topic-list-item[data-topic-id="${topicId}"]`;
 

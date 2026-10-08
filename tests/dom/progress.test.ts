@@ -133,6 +133,8 @@ describe('CONNECT-002 metric keys and estimation (§5.2)', () => {
     attempted: { topics: 9, floors: 90, likes: 9, replyLikes: 9, replies: 9 },
     confirmed: { topics: 5, floors: 40, likes: 2, replyLikes: 3, replies: 4, repliedTopics: 1 },
     estimatedFloors: 7,
+    returns: { confirmed: 3, 'still-unread': 1, indeterminate: 1, 'not-applicable': 0 },
+    timings: { posts: 38, topicSeconds: 120 },
     elapsedMs: 1000,
   };
 

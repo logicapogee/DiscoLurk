@@ -60,6 +60,10 @@ export interface TopicCandidate {
   title: string;
   unread: boolean;
   pinned: boolean;
+  /** The row's `unread-posts` badge: visited before, with posts added since. */
+  unreadPosts?: boolean;
+  /** The reply count the row shows, when it could be read. */
+  replies?: number;
 }
 
 export type RunModeSpec =
@@ -83,6 +87,26 @@ export interface InteractionPolicy {
   reply: { enabled: boolean; rate: number };
 }
 
+/**
+ * Switches that stay off until live checks show they leave the site's counting intact.
+ * `useNewList` / `useUnreadList` pick candidates from a category's `/l/new` or `/l/unread` list
+ * first; `refreshCategories` re-reads a builtin site's category paths before browsing;
+ * `smartRanked` orders candidates by the visit ledger instead of drawing them at random.
+ */
+export interface ExperimentFlags {
+  useNewList: boolean;
+  useUnreadList: boolean;
+  refreshCategories: boolean;
+  smartRanked: boolean;
+}
+
+export const EXPERIMENTS_OFF: Readonly<ExperimentFlags> = Object.freeze({
+  useNewList: false,
+  useUnreadList: false,
+  refreshCategories: false,
+  smartRanked: false,
+});
+
 /** What a run does: browse mode, target, categories, interactions and waits. */
 export interface RunPreset {
   id: PresetId;
@@ -93,6 +117,8 @@ export interface RunPreset {
   interaction: InteractionPolicy;
   extraWait: WaitRange & { enabled: boolean };
   samplePerCategory: { min: number; max: number };
+  /** Absent means every experiment is off. */
+  experiments?: ExperimentFlags;
 }
 
 export interface ResolvedPreset {
@@ -103,6 +129,8 @@ export interface ResolvedPreset {
   interaction: InteractionPolicy;
   extraWait: WaitRange & { enabled: boolean };
   samplePerCategory: { min: number; max: number };
+  /** Absent means every experiment is off. */
+  experiments?: ExperimentFlags;
 }
 
 /** One run fixed in advance: every random choice is drawn from `seed`, so the snapshot replays exactly. */

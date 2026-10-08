@@ -1,4 +1,4 @@
-import { SELECTORS, parseTopicList } from '@disco-lurk/site-discourse';
+import { SELECTORS, abbreviatedCount, parseTopicList } from '@disco-lurk/site-discourse';
 import { describe, expect, it } from 'vitest';
 import { SITE_IDS, count, fixture, type SiteId } from './fixtures';
 
@@ -67,7 +67,27 @@ describe.each(SITE_IDS)('LIST-001 topic list parsing (T03–T05) — %s', (site)
     });
   });
 
+  it('reads a reply count on every row of the sorted list, in descending order', () => {
+    const replies = parseTopicList(fixture(site, 'list-sorted.html')).map((r) => r.replies);
+    expect(replies.every((n) => typeof n === 'number')).toBe(true);
+    const counts = replies as number[];
+    expect(counts.slice(0, 5)).toEqual([...counts.slice(0, 5)].sort((a, b) => b - a));
+  });
+
   it('carries a pinned row on the default list', () => {
     expect(parseTopicList(fixture(site, 'list.html')).some((r) => r.pinned)).toBe(true);
+  });
+});
+
+describe('reply counts as lists print them', () => {
+  it.each([
+    ['57', 57],
+    ['1,234', 1234],
+    ['1.2k', 1200],
+    ['6.5K', 6500],
+    ['3.4万', 34000],
+    ['', null],
+  ] as const)('%s → %s', (raw, n) => {
+    expect(abbreviatedCount(raw)).toBe(n);
   });
 });

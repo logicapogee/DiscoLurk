@@ -13,6 +13,7 @@ import type {
   TopicVisit,
 } from './ports';
 import { seededRandom, untilAbort, type Clock, type InterruptibleSleeper, type RuntimeDeps } from './runtime';
+import type { TimingsReceipt } from './timings';
 import type { Category, Site, TopicCandidate } from './terms';
 
 /** A minimal valid Site: discovered categories, no progress page. */
@@ -139,7 +140,18 @@ export interface FixtureForumOptions {
   discovered?: Category[];
   /** Answers `returnAndVerify`; defaults to the badge gone for unread topics and not-applicable for the rest. */
   verify?: (topic: TopicCandidate) => ReadVerification;
+  /** Answers `performActions`; defaults to doing nothing. */
+  actions?: (policy: ActionPolicy, signal: AbortSignal) => Promise<ActionResult>;
+  /** Receipts the site acknowledges when a topic is left, delivered through `onTimings`. */
+  timings?: (topic: TopicCandidate) => TimingsReceipt[];
 }
+
+export const NO_ACTIONS: ActionResult = Object.freeze({
+  likes: { attempted: 0, confirmed: 0 },
+  replyLikes: { attempted: 0, confirmed: 0 },
+  replies: { attempted: 0, confirmed: 0 },
+  likeLimitHit: false,
+});
 
 export type FixtureCall =
   | { op: 'ensureAuthenticated'; mode: AuthMode }
@@ -155,6 +167,10 @@ export type FixtureCall =
 export class FixtureForum implements ForumPort {
   readonly site: Site;
   readonly calls: FixtureCall[] = [];
+  /** Where `/topics/timings` receipts go; a session wires it to the coordinator. */
+  onTimings: (receipt: TimingsReceipt) => void = () => {};
+  /** The strategies `collectTopics` was asked for, in call order. */
+  readonly strategies: TopicStrategy[] = [];
   private collectCount = new Map<string, number>();
 
   constructor(private readonly opts: FixtureForumOptions) {
@@ -180,12 +196,13 @@ export class FixtureForum implements ForumPort {
     return this.opts.progress ? this.opts.progress(kind, signal) : null;
   }
 
-  async collectTopics(category: Category, _strategy: TopicStrategy, signal: AbortSignal): Promise<TopicBatch> {
+  async collectTopics(category: Category, strategy: TopicStrategy, signal: AbortSignal): Promise<TopicBatch> {
     this.calls.push({ op: 'collectTopics', category: category.path });
+    this.strategies.push(strategy);
     const n = this.collectCount.get(category.path) ?? 0;
     this.collectCount.set(category.path, n + 1);
     await this.wait(this.opts.latency?.collect ?? 1000, signal);
-    return { category, topics: this.opts.topics(category.path, n) };
+    return { category, source: 'category', topics: this.opts.topics(category.path, n) };
   }
 
   async enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit> {
@@ -213,15 +230,15 @@ export class FixtureForum implements ForumPort {
     return { startFloor: readings[0] ?? null, endFloor: last, scrolls, stoppedByTarget: false, layout: 'wide' };
   }
 
-  async performActions(_policy: ActionPolicy, _signal: AbortSignal): Promise<ActionResult> {
+  async performActions(policy: ActionPolicy, signal: AbortSignal): Promise<ActionResult> {
     this.calls.push({ op: 'performActions' });
-    const none = { attempted: 0, confirmed: 0 };
-    return { likes: none, replyLikes: none, replies: none, likeLimitHit: false };
+    return this.opts.actions ? this.opts.actions(policy, signal) : structuredClone(NO_ACTIONS);
   }
 
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {
     this.calls.push({ op: 'returnAndVerify', topicId: visit.topic.id });
     await this.wait(this.opts.latency?.back ?? 2500, signal);
+    for (const receipt of this.opts.timings?.(visit.topic) ?? []) this.onTimings(receipt);
     return this.opts.verify?.(visit.topic) ?? (visit.topic.unread ? 'confirmed' : 'not-applicable');
   }
 }

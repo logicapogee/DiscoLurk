@@ -3,6 +3,7 @@ import { DiscoLurkCoordinator, reportedMetrics, type CategoryStore, type Coordin
 import { RunError, stopRequest, type RunEvent, type RunState } from './events';
 import type { LevelSnapshot } from './metrics';
 import type { AuthMode, AuthResult } from './ports';
+import { MemoryLedger } from './ledger';
 import { FixtureForum, fixtureSite, VirtualTime, type FixtureForumOptions } from './testing';
 import type { BrowserMode, Category, RunMode, RunPlanSnapshot, Site, TopicCandidate } from './terms';
 
@@ -71,6 +72,7 @@ interface Setup {
   forum?: Partial<Omit<FixtureForumOptions, 'site' | 'sleeper'>>;
   open?: () => never;
   exit?: AbortController;
+  ledgers?: CoordinatorEnv['ledgers'];
 }
 
 function setup(opts: Setup = {}) {
@@ -92,8 +94,9 @@ function setup(opts: Setup = {}) {
   const env: CoordinatorEnv = {
     deps: time.deps(1),
     resolveProfile: async (profileId) => ({ profile: { id: profileId, siteId: s.id, channel: 'chrome' }, site: s }),
-    open: async () => {
+    open: async (req) => {
       if (opts.open) opts.open();
+      forum.onTimings = req.timings;
       return {
         forum,
         closed: browser.signal,
@@ -105,6 +108,7 @@ function setup(opts: Setup = {}) {
     },
     categories: categoryStore,
     ...(opts.exit ? { exitSignal: opts.exit.signal } : {}),
+    ...(opts.ledgers ? { ledgers: opts.ledgers } : {}),
   };
   const coordinator = new DiscoLurkCoordinator(env);
   const controller = new AbortController();
@@ -642,5 +646,76 @@ describe('inspect never rejects on a stopped check', () => {
     });
     t.time.at(10_000, () => t.browser.abort(stopRequest('browser-closed')));
     expect((await t.time.drive(t.coordinator.inspect('fixture/main'))).status).toBe('broken');
+  });
+});
+
+describe('TIMINGS-001 read receipts from /topics/timings (I7)', () => {
+  it('emits one timings event per acknowledged flush and reports distinct floors in the final stats', async () => {
+    const t = setup({
+      forum: {
+        timings: (topic) => [
+          { topicId: topic.id, postNumbers: [1, 2, 3], topicMs: 6_000 },
+          { topicId: topic.id, postNumbers: [3, 4], topicMs: 2_500 },
+        ],
+      },
+    });
+    const out = await t.run(plan({ kind: 'topics', count: 2 }));
+    const receipts = t.events.filter((e) => e.type === 'timings');
+    expect(receipts).toHaveLength(4);
+    expect(receipts[0]).toMatchObject({ postsReported: 3, topicSeconds: 6 });
+    expect(receipts[1]).toMatchObject({ postsReported: 2, topicSeconds: 2.5 });
+    expect(out.stats.timings).toEqual({ posts: 8, topicSeconds: 17 });
+  });
+});
+
+describe('visit ledger through the coordinator (§7.2)', () => {
+  it('opens the Profile ledger before browsing and saves it after the browser closed', async () => {
+    const ledger = new MemoryLedger();
+    const opened: string[] = [];
+    const t = setup({ ledgers: { open: async (id) => (opened.push(id), ledger) } });
+    await t.run(plan({ kind: 'topics', count: 2 }));
+    expect(opened).toEqual(['fixture/main']);
+    expect(ledger.records.size).toBeGreaterThanOrEqual(2);
+    expect(ledger.saves).toBe(1);
+  });
+
+  it('runs without remembering visits when the ledger cannot be opened', async () => {
+    const t = setup({
+      ledgers: {
+        open: async () => {
+          throw new Error('ledger.json is not valid JSON');
+        },
+      },
+    });
+    const out = await t.run(plan({ kind: 'topics', count: 2 }));
+    expect(out.outcome).toBe('completed');
+    expect(t.events.some((e) => e.type === 'warning' && e.code === 'ledger-unavailable')).toBe(true);
+  });
+});
+
+describe('refreshCategories experiment (§7.2, builtin sites only)', () => {
+  const builtin = (cats: Category[]) => plan({ kind: 'topics', count: 12 }, 'headless', cats);
+
+  it('is off by default: a builtin site never reads the categories page', async () => {
+    const t = setup({ forum: { discovered: [{ name: 'a', path: '/c/a-new/1', id: 1, enabledByDefault: false }] } });
+    await t.run(builtin(categories));
+    expect(t.forum.calls.some((c) => c.op === 'discoverCategories')).toBe(false);
+  });
+
+  it('moves a category whose id the page lists under a new path; adds and enables nothing', async () => {
+    const t = setup({
+      forum: {
+        discovered: [
+          { name: 'a', path: '/c/a-new/1', id: 1, enabledByDefault: false },
+          { name: 'z', path: '/c/z/99', id: 99, enabledByDefault: false },
+        ],
+      },
+    });
+    const p = builtin(categories);
+    p.preset.experiments = { useNewList: false, useUnreadList: false, refreshCategories: true, smartRanked: false };
+    await t.run(p);
+    const visited = new Set(t.forum.calls.filter((c) => c.op === 'collectTopics').map((c) => (c as { category: string }).category));
+    expect([...visited].sort()).toEqual(['/c/a-new/1', '/c/b/2']);
+    expect(t.events.some((e) => e.type === 'warning' && e.code === 'category-path-updated')).toBe(true);
   });
 });

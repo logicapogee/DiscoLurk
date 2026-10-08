@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { classifyReturn, discoveredCategories, listUrlFor, navigationFailure, sortKept } from './forum';
-import { expectedMiss } from './page';
+import { fixtureSite, VirtualTime } from '@disco-lurk/core/testing';
+import { classifyReturn, discoveredCategories, DiscourseForum, listUrlFor, navigationFailure, sortKept } from './forum';
+import { expectedMiss, type ReadOnlyPage } from './page';
 import { usernameFromUrl } from './auth';
+import { parseDocument } from './parse';
 
 const site = { baseUrl: 'https://forum.docofcard.com' };
 
@@ -73,5 +75,110 @@ describe('username from the /my redirect (B04)', () => {
     expect(usernameFromUrl('https://forum.docofcard.com/u/alice/summary')).toBe('alice');
     expect(usernameFromUrl('https://linux.do/u/%E5%BC%A0%E4%B8%89/activity')).toBe('张三');
     expect(usernameFromUrl('https://linux.do/my/activity')).toBeNull();
+  });
+});
+
+describe('connect OAuth authorization page (§5.1)', () => {
+  const CONNECT = 'https://connect.linux.do/';
+  const AUTHORIZE_URL = 'https://connect.linux.do/oauth2/authorize?client_id=x';
+  const authorizeHtml = '<html><body><h1>授权</h1><form action="/oauth2/authorize" method="post"><button type="submit">允许</button></form></body></html>';
+  const progressHtml =
+    '<html><body><div class="card-subtitle">@alice · 用户</div>' +
+    '<div class="tl3-bar-item"><span class="tl3-bar-label">浏览话题</span><span class="tl3-bar-nums">120/500</span></div></body></html>';
+
+  /** A page whose address and DOM are set by the test; waits answer at once from the current DOM. */
+  class StaticPage implements ReadOnlyPage {
+    constructor(
+      public address: string,
+      public html: string,
+    ) {}
+    private all(selector: string) {
+      return Array.from(parseDocument(this.html).querySelectorAll(selector));
+    }
+    async goto() {}
+    async reload() {}
+    async goBack() {}
+    url() {
+      return this.address;
+    }
+    async title() {
+      return '';
+    }
+    isClosed() {
+      return false;
+    }
+    async viewportSize() {
+      return { width: 1280, height: 800 };
+    }
+    async setViewportSize() {}
+    async content() {
+      return this.html;
+    }
+    async count(selector: string) {
+      return this.all(selector).length;
+    }
+    async text(selector: string) {
+      return (await this.texts(selector))[0] ?? null;
+    }
+    async texts(selector: string) {
+      return this.all(selector).map((e) => (e.textContent ?? '').trim());
+    }
+    async waitFor(selector: string) {
+      if (this.all(selector).length === 0) throw Object.assign(new Error(`waitFor ${selector}`), { name: 'TimeoutError' });
+    }
+    async waitForURL() {}
+    async scrollIntoView() {}
+    async moveMouse() {}
+    async wheel() {}
+  }
+
+  function forumOn(page: StaticPage, headless: boolean) {
+    const time = new VirtualTime();
+    const warnings: string[] = [];
+    const forum = new DiscourseForum({
+      site: fixtureSite({ baseUrl: 'https://linux.do', progressSource: 'connect-linuxdo', progressUrl: CONNECT }),
+      page,
+      titleLinks: { click: async () => {} },
+      deps: time.deps(),
+      headless,
+      warn: (code) => warnings.push(code),
+    });
+    return { time, forum, warnings, read: () => time.drive(forum.readProgress('final', new AbortController().signal)) };
+  }
+
+  it('headed: waits for the user to authorize, then reads the progress page', async () => {
+    const page = new StaticPage(AUTHORIZE_URL, authorizeHtml);
+    const t = forumOn(page, false);
+    t.time.at(60_000, () => {
+      page.address = CONNECT;
+      page.html = progressHtml;
+    });
+    const snapshot = await t.read();
+    expect(t.warnings).toEqual(['awaiting-authorization']);
+    expect(snapshot?.metrics).toEqual([{ label: '浏览话题', key: 'topicsViewed', current: 120, required: 500 }]);
+    expect(t.time.clock.monotonic()).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it('headed: ends as needs-auth after 5 minutes without authorization, never selector-contract-broken', async () => {
+    const t = forumOn(new StaticPage(AUTHORIZE_URL, authorizeHtml), false);
+    await expect(t.read()).rejects.toMatchObject({ code: 'needs-auth' });
+    expect(t.time.clock.monotonic()).toBe(300_000);
+  });
+
+  it('headless: needs-auth at once, asking for one headed run', async () => {
+    const t = forumOn(new StaticPage(AUTHORIZE_URL, authorizeHtml), true);
+    await expect(t.read()).rejects.toMatchObject({ code: 'needs-auth', message: expect.stringMatching(/headed/) });
+    expect(t.warnings).toEqual([]);
+    expect(t.time.clock.monotonic()).toBe(0);
+  });
+
+  it('recognises the page by its authorize form alone, and by an OAuth address alone', async () => {
+    await expect(forumOn(new StaticPage(CONNECT, authorizeHtml), true).read()).rejects.toMatchObject({ code: 'needs-auth' });
+    await expect(forumOn(new StaticPage(AUTHORIZE_URL, '<html><body>授权</body></html>'), true).read()).rejects.toMatchObject({ code: 'needs-auth' });
+  });
+
+  it('a connect page that is neither progress nor authorization still breaks the contract', async () => {
+    const t = forumOn(new StaticPage(CONNECT, '<html><body><a href="/oauth2/log">授权日志</a></body></html>'), true);
+    await expect(t.read()).rejects.toMatchObject({ code: 'selector-contract-broken' });
   });
 });

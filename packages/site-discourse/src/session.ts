@@ -74,6 +74,7 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
     page: new PageView(browser.page, closed),
     titleLinks: titleLinks(browser.page, call),
     deps: opts.deps,
+    headless: opts.headless,
     ...(opts.credentials ? { login: { credentials: opts.credentials, form: loginForm(browser.page, opts.deps, call) } } : {}),
     ...(opts.warn ? { warn: opts.warn } : {}),
   });

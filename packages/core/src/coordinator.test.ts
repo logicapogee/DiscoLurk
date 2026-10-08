@@ -516,3 +516,20 @@ describe('S07 connect lag: one interruptible re-read of the final progress', () 
     expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'app-exit' });
   });
 });
+
+describe('§5.1 progress page waiting on an authorization the run cannot get', () => {
+  it('an initial read that ends in needs-auth stops the run as needs_auth instead of running without a baseline', async () => {
+    const t = setup({
+      forum: {
+        progress: async () => {
+          throw new RunError('needs-auth', 'connect.invalid asks to authorize access');
+        },
+      },
+    });
+    const out = await t.run(plan({ kind: 'topics', count: 3 }));
+    expect(t.states()).toEqual(['queued', 'launching', 'reading_initial_progress', 'needs_auth', 'cancelled']);
+    expect(out).toMatchObject({ outcome: 'cancelled', failure: { code: 'needs-auth' } });
+    expect(t.forum.calls.some((c) => c.op === 'collectTopics')).toBe(false);
+    expect(t.closed()).toBe(1);
+  });
+});

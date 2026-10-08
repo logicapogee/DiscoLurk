@@ -24,7 +24,7 @@ import {
   type TopicStrategy,
   type TopicVisit,
 } from '@disco-lurk/core';
-import { pollUntil, usernameFromUrl, waitForCurrentUser } from './auth';
+import { LOGIN_POLL_MS, LOGIN_TIMEOUT_MS, pollUntil, usernameFromUrl, waitForCurrentUser } from './auth';
 import { expectedMiss, type LoadState, type ReadOnlyPage } from './page';
 import { categoryLinks, floorCounterFromText, parseDocument, parseTopicList, type CategoryLink, type FloorReading } from './parse';
 import { parseConnect } from './progress/connect-linuxdo';
@@ -36,6 +36,8 @@ import {
   CATEGORY_LINK,
   CHALLENGE_SELECTOR,
   CHALLENGE_TITLE,
+  CONNECT_AUTHORIZE_FORM,
+  CONNECT_AUTHORIZE_PATH,
   CONNECT_READY,
   rowSelector,
   SELECTORS,
@@ -73,6 +75,8 @@ export interface DiscourseForumOptions {
   page: ReadOnlyPage;
   titleLinks: TitleLinks;
   deps: RuntimeDeps;
+  /** Whether a person can act in the window, e.g. approve connect's authorization page (§5.1). */
+  headless: boolean;
   /** B10: only CLI/Docker pass credentials, from the environment or stdin. */
   login?: { credentials: Credentials; form: LoginForm };
   warn?: (code: string, message: string) => void;
@@ -388,12 +392,44 @@ export class DiscourseForum implements ForumPort {
   private async readConnect(url: string, signal: AbortSignal): Promise<LevelSnapshot> {
     const ready = () => this.appears(CONNECT_READY, PROGRESS_READY_MS, signal);
     await this.goto(url, signal);
-    // Without any tl3 group the parser raises selector-contract-broken, which is exactly the report §5.1 asks for.
-    if (!(await ready())) return parseConnect(await this.content());
+    await this.appears(`${CONNECT_READY}, ${CONNECT_AUTHORIZE_FORM}`, PROGRESS_READY_MS, signal);
+    if ((await this.count(CONNECT_READY)) === 0) {
+      // Without any tl3 group the parser raises selector-contract-broken, which is exactly the report §5.1 asks for.
+      if (!(await this.onConnectAuthorizePage())) return parseConnect(await this.content());
+      await this.awaitConnectAuthorization(url, signal);
+    }
     await this.opts.deps.sleeper.sleep(CONNECT_SETTLE_MS, signal);
     await untilAbort(this.opts.page.reload('domcontentloaded'), signal);
     await ready();
     return parseConnect(await this.content());
+  }
+
+  private async onConnectAuthorizePage(): Promise<boolean> {
+    let path = '';
+    try {
+      path = new URL(this.opts.page.url()).pathname;
+    } catch {
+      // An unparsable address leaves the form as the only sign.
+    }
+    return CONNECT_AUTHORIZE_PATH.test(path) || (await this.count(CONNECT_AUTHORIZE_FORM)) > 0;
+  }
+
+  /**
+   * §5.1: authorization is the user's to give. A headed window waits for it like a login (B04), never
+   * reloading; a headless run cannot get it and ends as needs-auth.
+   */
+  private async awaitConnectAuthorization(url: string, signal: AbortSignal): Promise<void> {
+    const host = new URL(url).host;
+    if (this.opts.headless) {
+      throw new RunError('needs-auth', `${host} asks to authorize access; run once with a headed window (--headed) and approve it there`);
+    }
+    this.opts.warn('awaiting-authorization', `${host} asks to authorize access; approve it in the browser window (waiting up to ${LOGIN_TIMEOUT_MS / 60_000} minutes)`);
+    const authorized = await pollUntil(
+      { intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_TIMEOUT_MS, clock: this.opts.deps.clock, sleeper: this.opts.deps.sleeper },
+      async () => ((await this.count(CONNECT_READY)) > 0 ? true : null),
+      signal,
+    );
+    if (!authorized) throw new RunError('needs-auth', `${host} authorization was not given within ${LOGIN_TIMEOUT_MS / 60_000} minutes`);
   }
 
   /** S07 for docofcard: the table's rows mark readiness; the loader stays in the DOM after they render (§5.1b). */

@@ -67,3 +67,12 @@ export const ANONYMOUS_HEADER = '.d-header .login-button';
 
 /** §5.1: connect's progress page is ready once any of its four metric groups renders. */
 export const CONNECT_READY = '.tl3-ring, .tl3-bar-item, .tl3-quota-card, .tl3-veto-item';
+
+/**
+ * §5.1: signs that connect shows its OAuth authorization page instead of the progress page. No
+ * authorization page has been seen live (Phase 0 capture recorded `authorizePage: false`), so this
+ * is a conservative guess: an authorize/OAuth address, or a form posting to an authorize endpoint.
+ * The address is matched on its path only, because the progress page itself links to `/oauth2/log`.
+ */
+export const CONNECT_AUTHORIZE_FORM = 'form[action*="authorize"]';
+export const CONNECT_AUTHORIZE_PATH = /\/(oauth|authorize)/i;

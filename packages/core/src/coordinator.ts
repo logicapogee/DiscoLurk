@@ -208,6 +208,11 @@ export class DiscoLurkCoordinator implements RunCoordinator {
         } catch (err) {
           const why = classify(err, live);
           if (why.kind === 'stop') throw err;
+          // §5.1: a progress page that wants an authorization the run cannot get ends it as a sign-in would.
+          if (why.failure.code === 'needs-auth') {
+            state('needs_auth');
+            return end('cancelled', 'error', why.failure);
+          }
           warn('baseline-missing', `Initial progress read failed (${why.failure.code}: ${why.failure.message}); continuing without a baseline`);
         }
       }

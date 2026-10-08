@@ -1,10 +1,11 @@
 import type { Page, Response } from 'playwright-core';
 import { pauseBetween, RunError, untilAbort, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site, type TimingsReceipt } from '@disco-lurk/core';
+import type { Composer, LikeButton } from './actions';
 import { launchProfile, type BrowserSession } from './browser';
 import { DiscourseForum, titleLinkSelector, type Credentials, type LoginForm, type TitleLinks } from './forum';
 import { PAGE_TIMEOUTS, PageView, TargetWatch, targetClosed } from './page';
 import { parseTimingsBody } from './parse';
-import { SELECTORS } from './selectors';
+import { COMPOSER_DISCARD, COMPOSER_DISCARD_CONFIRM, EDITOR_SELECTORS, likeButtonOf, SELECTORS } from './selectors';
 
 export interface OpenForumOptions {
   site: Site;
@@ -16,11 +17,14 @@ export interface OpenForumOptions {
   executablePath?: string;
   proxy?: string;
   credentials?: Credentials;
+  replyTemplates?: readonly string[];
   warn?: (code: string, message: string) => void;
   /** Each `/topics/timings` flush the site answered with success. */
   onTimings?: (receipt: TimingsReceipt) => void;
 }
 
+/** How long the discard confirmation may take to appear before the composer is assumed closed. */
+const DISCARD_CONFIRM_MS = 3_000;
 
 const LAUNCH_ATTEMPTS = 3;
 
@@ -38,6 +42,30 @@ type PageCall = TargetWatch['call'];
 
 function titleLinks(page: Page, call: PageCall): TitleLinks {
   return { click: (topicId) => call(() => page.locator(titleLinkSelector(topicId)).first().click({ timeout: PAGE_TIMEOUTS.actionMs })) };
+}
+
+function likeButton(page: Page, call: PageCall): LikeButton {
+  return { click: (postNumber) => call(() => page.locator(likeButtonOf(postNumber)).first().click({ timeout: PAGE_TIMEOUTS.actionMs })) };
+}
+
+/** Typing goes through `fill`, which works on a textarea and a contenteditable ProseMirror editor alike. */
+function composer(page: Page, call: PageCall): Composer {
+  const timeout = PAGE_TIMEOUTS.actionMs;
+  return {
+    open: () => call(() => page.locator(SELECTORS.replyOpen).first().click({ timeout })),
+    fill: (kind, text) => call(() => page.locator(EDITOR_SELECTORS[kind]).first().fill(text, { timeout })),
+    submit: () => call(() => page.locator(SELECTORS.replySubmit).first().click({ timeout })),
+    discard: () =>
+      call(async () => {
+        await page.locator(COMPOSER_DISCARD).first().click({ timeout });
+        const confirm = page.locator(COMPOSER_DISCARD_CONFIRM).first();
+        const asked = await confirm.waitFor({ state: 'visible', timeout: DISCARD_CONFIRM_MS }).then(
+          () => true,
+          () => false,
+        );
+        if (asked) await confirm.click({ timeout });
+      }),
+  };
 }
 
 /** The read receipt of an acknowledged `POST /topics/timings` on the site; null for any other response. */
@@ -118,6 +146,9 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
     site: opts.site,
     page: new PageView(browser.page, watch),
     titleLinks: titleLinks(browser.page, call),
+    likeButton: likeButton(browser.page, call),
+    composer: composer(browser.page, call),
+    replyTemplates: opts.replyTemplates ?? [],
     deps: opts.deps,
     headless: opts.headless,
     ...(opts.credentials ? { login: { credentials: opts.credentials, form: loginForm(browser.page, opts.deps, call) } } : {}),

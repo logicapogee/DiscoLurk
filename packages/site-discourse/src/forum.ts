@@ -25,6 +25,7 @@ import {
   type TopicStrategy,
   type TopicVisit,
 } from '@disco-lurk/core';
+import { LikeStreak, PageActionSurface, performActions, templatePicker, type Composer, type LikeButton } from './actions';
 import { LOGIN_POLL_MS, LOGIN_TIMEOUT_MS, pollUntil, usernameFromUrl, waitForCurrentUser } from './auth';
 import { expectedMiss, type LoadState, type ReadOnlyPage } from './page';
 import { categoryLinks, floorCounterFromText, parseDocument, parseTopicList, type CategoryLink, type FloorReading } from './parse';
@@ -81,6 +82,10 @@ export interface DiscourseForumOptions {
   site: Site;
   page: ReadOnlyPage;
   titleLinks: TitleLinks;
+  likeButton: LikeButton;
+  composer: Composer;
+  /** Reply texts; each is used at most once per run. */
+  replyTemplates: readonly string[];
   deps: RuntimeDeps;
   /** Whether a person can act in the window, e.g. approve connect's authorization page. */
   headless: boolean;
@@ -188,9 +193,12 @@ export class DiscourseForum implements ForumPort {
   private readonly opts: DiscourseForumOptions & Required<Pick<DiscourseForumOptions, 'warn'>>;
   /** The list page the current topic was entered from; returns and failed entries come back to it. */
   private listUrl: string | null = null;
+  private readonly likeStreak = new LikeStreak();
+  private readonly nextTemplate: () => string | null;
 
   constructor(opts: DiscourseForumOptions) {
     this.opts = { warn: () => {}, ...opts };
+    this.nextTemplate = templatePicker(opts.replyTemplates, opts.deps.random);
   }
 
   get site(): Site {
@@ -422,10 +430,13 @@ export class DiscourseForum implements ForumPort {
     return readFloors(surface, strategy, this.opts.deps, signal);
   }
 
-  /** Interactions are not part of this build: nothing is liked or replied to. */
-  async performActions(_policy: ActionPolicy, _signal: AbortSignal): Promise<ActionResult> {
-    const none = { attempted: 0, confirmed: 0 };
-    return { likes: none, replyLikes: { ...none }, replies: { ...none }, likeLimitHit: false };
+  /**
+   * Not wrapped in `untilAbort`: a stop lands at the next wait inside, and a reply stopped after
+   * typing must finish discarding its draft before the run moves on.
+   */
+  async performActions(policy: ActionPolicy, signal: AbortSignal): Promise<ActionResult> {
+    const surface = new PageActionSurface(this.opts.page, this.opts.likeButton, this.opts.composer, this.opts.deps, this.opts.warn);
+    return performActions(surface, policy, this.opts.deps, { streak: this.likeStreak, nextTemplate: this.nextTemplate, warn: this.opts.warn }, signal);
   }
 
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {

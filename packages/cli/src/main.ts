@@ -20,6 +20,7 @@ import {
   credentialsFromEnv,
   EXIT,
   exitCodeFor,
+  interactionLine,
   newSeed,
   parseLoginArgs,
   parseRunArgs,
@@ -39,6 +40,9 @@ Usage:
   lurk login --site <id> [--profile <name>] [--channel chrome|msedge]
   lurk run --site <id> [--profile <name>] [--browse-mode deep|quick] [--run-mode endless|topics:<n>[-<max>]|time:<min>]
            [--categories <slug|path,...>] [--headed|--headless] [--channel chrome|msedge] [--json]
+           [--like [--like-rate <%>] [--reply-like-rate <%>] [--max-reply-likes <n>]]
+           [--reply --i-understand-auto-reply-risk [--reply-rate <%>]]
+           [--extra-wait <min>-<max>|off] [--experiments useNewList,useUnreadList,refreshCategories,smartRanked]
   lurk doctor [--json] [--port <n>] [--network]
   lurk sidecar   (started by the desktop shell: prints a ready line, exits when stdin closes)
   lurk capture --site <id> [--profile <id>] [--channel chrome|msedge] [--out <dir>] [--steps <a,b>]   (development: Phase 0 fixtures; steps: ${CAPTURE_STEPS.join(',')})
@@ -218,7 +222,8 @@ async function run(argv: string[]): Promise<number> {
   // Profile, browser form and channel are stated before anything starts.
   reporter.plan(
     plan,
-    `${args.site.displayName} · Profile ${plan.profileId} · ${plan.browserMode} ${args.channel} · ${plan.preset.browseMode} · ${JSON.stringify(plan.preset.runMode)} · ${categories.map((c) => c.path).join(', ') || 'no categories'}`,
+    `${args.site.displayName} · Profile ${plan.profileId} · ${plan.browserMode} ${args.channel} · ${plan.preset.browseMode} · ${JSON.stringify(plan.preset.runMode)} · ${categories.map((c) => c.path).join(', ') || 'no categories'}\n` +
+      `likes ${interactionLine(plan.preset.interaction)} · extra wait ${plan.preset.extraWait.enabled ? `${plan.preset.extraWait.minSec}–${plan.preset.extraWait.maxSec} s` : 'off'}`,
   );
   const result = await coordinator.run(plan, signal, reporter.event);
   reporter.result(result);

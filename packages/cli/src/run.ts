@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto';
 import { join } from 'node:path';
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
-import { FileCategoryStore } from '@disco-lurk/config';
+import { FileCategoryStore, FileLedgerStore, validateReplyTemplates } from '@disco-lurk/config';
 import {
   isAbortError,
   reportedTopicsShortfall,
@@ -15,15 +15,19 @@ import {
   type Category,
   type CategoryStore,
   type CoordinatorEnv,
+  type ExperimentFlags,
+  type InteractionPolicy,
   type LevelSnapshot,
   type RunEvent,
   type RunModeSpec,
   type RunPlanSnapshot,
   type RunResult,
   type Site,
+  type WaitRange,
 } from '@disco-lurk/core';
 import { CATEGORY_PATH, openDiscourseForum, type Credentials } from '@disco-lurk/site-discourse';
-import { profilesDir, sitesDir } from './paths';
+import templatesFile from '../../../data/reply-templates.json';
+import { ledgersDir, profilesDir, sitesDir } from './paths';
 import { BUILTIN_SITES, findSite } from './sites';
 
 /** CLI exit codes. */
@@ -105,6 +109,58 @@ export interface RunArgs extends LoginArgs {
   categories: string[] | null;
   browserMode: BrowserMode;
   json: boolean;
+  interaction: InteractionPolicy;
+  extraWait: WaitRange & { enabled: boolean };
+  experiments: ExperimentFlags;
+}
+
+/** The default RunPreset's interaction settings: likes and replies off, at the field-tested rates. */
+export const DEFAULT_INTERACTION: InteractionPolicy = {
+  like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 },
+  reply: { enabled: false, rate: 5 },
+};
+
+export const DEFAULT_EXTRA_WAIT: WaitRange & { enabled: boolean } = { enabled: true, minSec: 1, maxSec: 3 };
+
+/** The flag a command line must carry to turn on automatic replies; there is no other way to turn them on. */
+export const REPLY_RISK_FLAG = 'i-understand-auto-reply-risk';
+
+export const REPLY_RISK_NOTICE =
+  'Automatic replies post real messages under your account. Sites may detect and penalise automated replies. ' +
+  `Add --${REPLY_RISK_FLAG} to confirm that you accept this risk.`;
+
+function parsePercent(raw: string | undefined, flag: string, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!/^\d+(\.\d+)?$/.test(raw) || n < 0 || n > 100) throw new UsageError(`--${flag} must be a percentage from 0 to 100`);
+  return n;
+}
+
+function parseCount(raw: string | undefined, flag: string, fallback: number): number {
+  if (raw === undefined) return fallback;
+  if (!/^\d+$/.test(raw)) throw new UsageError(`--${flag} must be a whole number`);
+  return Number(raw);
+}
+
+/** `--extra-wait <min>-<max>` in seconds, or `off`. */
+export function parseExtraWait(raw: string | undefined): WaitRange & { enabled: boolean } {
+  if (raw === undefined) return { ...DEFAULT_EXTRA_WAIT };
+  if (raw === 'off') return { ...DEFAULT_EXTRA_WAIT, enabled: false };
+  const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(raw);
+  if (!m || Number(m[1]) > Number(m[2])) throw new UsageError('--extra-wait must be <min>-<max> in seconds, or off');
+  return { enabled: true, minSec: Number(m[1]), maxSec: Number(m[2]) };
+}
+
+const EXPERIMENT_NAMES = ['useNewList', 'useUnreadList', 'refreshCategories', 'smartRanked'] as const satisfies ReadonlyArray<keyof ExperimentFlags>;
+
+export function parseExperiments(raw: string | undefined): ExperimentFlags {
+  const flags: ExperimentFlags = { useNewList: false, useUnreadList: false, refreshCategories: false, smartRanked: false };
+  for (const name of (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const known = EXPERIMENT_NAMES.find((n) => n === name);
+    if (!known) throw new UsageError(`Unknown experiment ${name}; known: ${EXPERIMENT_NAMES.join(', ')}`);
+    flags[known] = true;
+  }
+  return flags;
 }
 
 export function parseRunArgs(argv: string[]): RunArgs {
@@ -116,9 +172,20 @@ export function parseRunArgs(argv: string[]): RunArgs {
     headed: { type: 'boolean' },
     headless: { type: 'boolean' },
     json: { type: 'boolean', default: false },
+    like: { type: 'boolean', default: false },
+    'like-rate': { type: 'string' },
+    'reply-like-rate': { type: 'string' },
+    'max-reply-likes': { type: 'string' },
+    reply: { type: 'boolean', default: false },
+    'reply-rate': { type: 'string' },
+    [REPLY_RISK_FLAG]: { type: 'boolean', default: false },
+    'extra-wait': { type: 'string' },
+    experiments: { type: 'string' },
   });
   if (v.headed && v.headless) throw new UsageError('--headed and --headless exclude each other');
   if (v['browse-mode'] !== 'deep' && v['browse-mode'] !== 'quick') throw new UsageError('--browse-mode must be deep or quick');
+  if (v.reply && !v[REPLY_RISK_FLAG]) throw new UsageError(REPLY_RISK_NOTICE);
+  const d = DEFAULT_INTERACTION;
   return {
     ...loginArgsFrom(v),
     browseMode: v['browse-mode'],
@@ -126,6 +193,17 @@ export function parseRunArgs(argv: string[]): RunArgs {
     categories: v.categories ? v.categories.split(',').map((s) => s.trim()).filter(Boolean) : null,
     browserMode: v.headless ? 'headless' : 'headed',
     json: v.json,
+    interaction: {
+      like: {
+        enabled: v.like,
+        topicRate: parsePercent(v['like-rate'], 'like-rate', d.like.topicRate),
+        replyRate: parsePercent(v['reply-like-rate'], 'reply-like-rate', d.like.replyRate),
+        maxReplies: parseCount(v['max-reply-likes'], 'max-reply-likes', d.like.maxReplies),
+      },
+      reply: { enabled: v.reply, rate: parsePercent(v['reply-rate'], 'reply-rate', d.reply.rate) },
+    },
+    extraWait: parseExtraWait(v['extra-wait']),
+    experiments: parseExperiments(v.experiments),
   };
 }
 
@@ -165,12 +243,10 @@ export function buildPlan(args: RunArgs, categories: Category[], seed: number, n
       browseMode: args.browseMode,
       runMode: resolveRunMode(args.runMode, seededRandom(seed)),
       categories,
-      interaction: {
-        like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 },
-        reply: { enabled: false, rate: 5 },
-      },
-      extraWait: { enabled: true, minSec: 1, maxSec: 3 },
+      interaction: structuredClone(args.interaction),
+      extraWait: { ...args.extraWait },
       samplePerCategory: { min: 3, max: 8 },
+      experiments: { ...args.experiments },
     },
   };
 }
@@ -224,8 +300,16 @@ export interface CliEnvOptions {
   exitSignal?: AbortSignal;
 }
 
+/** The bundled reply templates, checked before any run may use them. */
+export function replyTemplates(file: { templates: string[] } = templatesFile): string[] {
+  const problems = validateReplyTemplates(file.templates);
+  if (problems.length > 0) throw new Error(`data/reply-templates.json is invalid: ${problems.join('; ')}`);
+  return file.templates.map((t) => t.trim());
+}
+
 export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
   const deps = systemDeps();
+  const templates = replyTemplates();
   return {
     deps,
     async resolveProfile(profileId) {
@@ -244,10 +328,13 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
         headless: req.browserMode === 'headless',
         deps,
         warn: req.warn,
+        onTimings: req.timings,
+        replyTemplates: templates,
         ...(opts.credentials ? { credentials: opts.credentials } : {}),
       });
     },
     categories: new FileCategoryStore(sitesDir()),
+    ledgers: new FileLedgerStore(ledgersDir()),
     ...(opts.exitSignal ? { exitSignal: opts.exitSignal } : {}),
   };
 }
@@ -260,6 +347,13 @@ export function credentialsFromEnv(site: Site, env: NodeJS.ProcessEnv = process.
 
 export function siteCategories(site: Site, store: CategoryStore): Promise<Category[]> {
   return site.categorySource === 'builtin' ? Promise.resolve(site.builtinCategories ?? []) : store.load(site.id);
+}
+
+/** The run summary's interaction part: what is on, at which rates. */
+export function interactionLine(i: InteractionPolicy): string {
+  const likes = i.like.enabled ? `on (floor 1 ${i.like.topicRate}%, replies ${i.like.replyRate}% up to ${i.like.maxReplies})` : 'off';
+  const replies = i.reply.enabled ? `on (${i.reply.rate}%)` : 'off';
+  return `${likes} · replies ${replies}`;
 }
 
 export const newSeed = () => randomInt(0, 2 ** 31);
@@ -281,7 +375,7 @@ export function formatEvent(e: RunEvent, startMs: number): string | null {
     case 'action':
       return `${t} ${e.action} ${e.result}`;
     case 'timings':
-      return `${t} timings ${e.postsReported} posts, ${e.topicSeconds} s`;
+      return `${t}   timings ${e.postsReported} posts, ${e.topicSeconds} s`;
     case 'stats':
       return null;
     case 'warning':
@@ -344,7 +438,10 @@ export function formatSummary(result: RunResult): string {
     `result: ${result.outcome} (${result.stopCause})${result.failure ? ` — ${result.failure.code}: ${result.failure.message}` : ''}`,
     `attempted: topics ${a.topics}, floors ${a.floors}, likes ${a.likes}, reply likes ${a.replyLikes}, replies ${a.replies}`,
     `confirmed: topics ${c.topics}, floors ${c.floors}, likes ${c.likes}, reply likes ${c.replyLikes}, replies ${c.replies}`,
-    `estimated floors: ${result.stats.estimatedFloors} · elapsed ${Math.round(result.stats.elapsedMs / 1000)} s`,
+    `estimated floors: ${result.stats.estimatedFloors} · reported by the browser (/topics/timings): ${result.stats.timings.posts} floors, ${result.stats.timings.topicSeconds} s · elapsed ${Math.round(result.stats.elapsedMs / 1000)} s`,
+    `returns: ${Object.entries(result.stats.returns)
+      .map(([k, n]) => `${k} ${n}`)
+      .join(', ')}`,
     ...levelLines(result.levels, result.baseline),
   ];
   const missing = reportedTopicsShortfall(result.stats);

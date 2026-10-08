@@ -11,6 +11,8 @@ import {
   parseProfileId,
   parseRunArgs,
   parseRunMode,
+  REPLY_RISK_NOTICE,
+  replyTemplates,
   resolveCategories,
   signIn,
   UsageError,
@@ -224,5 +226,64 @@ describe('lurk login (§11.1)', () => {
     const stopped = session(() => Promise.reject(new DOMException('user', 'AbortError')));
     expect(await signIn(stopped.auth, new AbortController().signal, () => {})).toBe(EXIT.cancelled);
     expect(stopped.calls).toEqual(['continueWaiting', 'close']);
+  });
+});
+
+describe('ACTION-000 likes and replies from the command line (A01, A02, §11.1)', () => {
+  it('leaves both off by default at the default rates, with the extra wait on and every experiment off', () => {
+    const args = parseRunArgs([]);
+    expect(args.interaction).toEqual({ like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 }, reply: { enabled: false, rate: 5 } });
+    expect(args.extraWait).toEqual({ enabled: true, minSec: 1, maxSec: 3 });
+    expect(args.experiments).toEqual({ useNewList: false, useUnreadList: false, refreshCategories: false, smartRanked: false });
+  });
+
+  it('turns likes on with their rates', () => {
+    const args = parseRunArgs(['--like', '--like-rate', '50', '--reply-like-rate', '10', '--max-reply-likes', '2']);
+    expect(args.interaction.like).toEqual({ enabled: true, topicRate: 50, replyRate: 10, maxReplies: 2 });
+    expect(args.interaction.reply.enabled).toBe(false);
+  });
+
+  it('refuses --reply without the explicit risk confirmation, naming the risk', () => {
+    expect(() => parseRunArgs(['--reply'])).toThrow(UsageError);
+    expect(() => parseRunArgs(['--reply'])).toThrow(REPLY_RISK_NOTICE);
+    const args = parseRunArgs(['--reply', '--i-understand-auto-reply-risk', '--reply-rate', '20']);
+    expect(args.interaction.reply).toEqual({ enabled: true, rate: 20 });
+  });
+
+  it('the risk flag alone turns nothing on', () => {
+    expect(parseRunArgs(['--i-understand-auto-reply-risk']).interaction.reply.enabled).toBe(false);
+  });
+
+  it.each([[['--like-rate', '101']], [['--reply-like-rate', '-1']], [['--max-reply-likes', '2.5']], [['--extra-wait', '3-1']], [['--experiments', 'turbo']]])(
+    'rejects %j',
+    (argv) => {
+      expect(() => parseRunArgs(argv)).toThrow(UsageError);
+    },
+  );
+
+  it('reads the extra wait and the experiments', () => {
+    expect(parseRunArgs(['--extra-wait', 'off']).extraWait.enabled).toBe(false);
+    expect(parseRunArgs(['--extra-wait', '2-4.5']).extraWait).toEqual({ enabled: true, minSec: 2, maxSec: 4.5 });
+    expect(parseRunArgs(['--experiments', 'useNewList, smartRanked']).experiments).toEqual({
+      useNewList: true,
+      useUnreadList: false,
+      refreshCategories: false,
+      smartRanked: true,
+    });
+  });
+
+  it('carries the choices into the plan', () => {
+    const args = parseRunArgs(['--like', '--extra-wait', 'off', '--experiments', 'useUnreadList']);
+    const plan = buildPlan(args, linuxdo.builtinCategories!.slice(0, 1), 1, new Date('2026-10-08T00:00:00Z'));
+    expect(plan.preset.interaction.like.enabled).toBe(true);
+    expect(plan.preset.extraWait.enabled).toBe(false);
+    expect(plan.preset.experiments?.useUnreadList).toBe(true);
+  });
+});
+
+describe('TPL-001 bundled reply templates', () => {
+  it('loads the bundled templates and refuses an invalid set', () => {
+    expect(replyTemplates().length).toBeGreaterThanOrEqual(6);
+    expect(() => replyTemplates({ templates: ['太短'] })).toThrow(/reply-templates\.json is invalid/);
   });
 });

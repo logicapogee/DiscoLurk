@@ -6,6 +6,7 @@ export * from './selectors';
 export * from './parse';
 export * from './sanitize';
 export * from './browser';
+export * from './page';
 export * from './auth';
 export * from './reading';
 export * from './forum';

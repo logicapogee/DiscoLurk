@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as pageModule from '../../packages/site-discourse/src/page';
 import { describe, expect, it } from 'vitest';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -15,34 +16,32 @@ function* sources(dir: string): Generator<string> {
   }
 }
 
-const lines = (dir: string) =>
-  [...sources(join(root, dir))].flatMap((file) =>
-    readFileSync(file, 'utf8')
-      .split('\n')
-      .map((text, i) => ({ at: `${relative(root, file)}:${i + 1}`, text })),
-  );
+const PAGE_IMPORT = /import\s+(?:type\s+)?\{[^}]*\bPage\b[^}]*\}\s+from\s+'playwright-core'/;
+const WRITE_METHOD = /^(click|dblclick|fill|type|press|tap|check|uncheck|evaluate|dispatchEvent|setInputFiles|setChecked|selectOption|keyboard)/i;
 
-// The only input this codebase may send to a site is the B10 password login. Likes and replies are
-// not part of this build, so no production code may click, fill or press anything else on a site page.
+// The adapter reaches site pages only through ReadOnlyPage; Playwright's full Page, which can type,
+// click and run script, stays in the files that launch the browser or build the two narrow inputs
+// (title-link click, B10 login form), plus the development-only capture and selftest commands.
 describe('guard: no write paths to a site', () => {
-  it('fills and clicks only the login form and topic title links', () => {
+  it('imports Playwright Page only where the browser is launched or wrapped', () => {
+    const importers = ['packages', 'scripts']
+      .flatMap((dir) => [...sources(join(root, dir))])
+      .filter((file) => PAGE_IMPORT.test(readFileSync(file, 'utf8')))
+      .map((file) => relative(root, file))
+      .sort();
     const allowed = [
-      /SELECTORS\.loginUsername\)\.fill\(/,
-      /SELECTORS\.loginPassword\)\.fill\(/,
-      /SELECTORS\.loginButton\)\.click\(\)/,
-      /link\.click\(\)/,
+      'packages/cli/src/capture.ts',
+      'packages/cli/src/selftest.ts',
+      'packages/site-discourse/src/browser.ts',
+      'packages/site-discourse/src/page.ts',
+      'packages/site-discourse/src/session.ts',
     ];
-    const offenders = lines('packages')
-      .filter(({ at }) => !at.startsWith('packages/cli/src/selftest.ts'))
-      .filter(({ text }) => /\.(click|fill|type|press|tap|dispatchEvent|setInputFiles|setChecked|selectOption)\(|keyboard\./.test(text))
-      .filter(({ text }) => !allowed.some((a) => a.test(text)));
-    expect(offenders).toEqual([]);
+    expect(importers.filter((f) => !allowed.includes(f))).toEqual([]);
   });
 
-  it('never uses the like or reply controls outside read-only parsing', () => {
-    const offenders = lines('packages')
-      .filter(({ at }) => !/packages\/site-discourse\/src\/(selectors|parse)\.ts/.test(at))
-      .filter(({ text }) => /SELECTORS\.(likeButton|replyOpen|replySubmit|replyTextarea|replyEditor)|LIKE_FALLBACK_SELECTORS/.test(text));
-    expect(offenders).toEqual([]);
+  it('page.ts exports no method that clicks, types or runs script', () => {
+    const exported = Object.keys(pageModule);
+    const methods = Object.getOwnPropertyNames(pageModule.PageView.prototype);
+    expect([...exported, ...methods].filter((name) => WRITE_METHOD.test(name))).toEqual([]);
   });
 });

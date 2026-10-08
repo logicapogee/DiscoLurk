@@ -16,6 +16,7 @@ import {
   parseDocument,
   parseFloorCounter,
   parseTopicList,
+  PageView,
   parseTrustLevel,
   readUsername,
   rowSelector,
@@ -152,13 +153,14 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     log(`Log in to ${site.displayName} in the Chrome window. Checking #current-user every 5 s for up to 300 s; the page is never reloaded.`);
-    const loggedIn = await waitForCurrentUser(page, {
+    const view = new PageView(page);
+    const loggedIn = await waitForCurrentUser(view, {
       signal,
       onPoll: (ms) => log(`  waiting for login… ${Math.round(ms / 1000)} s`),
     });
     if (!loggedIn) throw new RunError('needs-auth', 'No #current-user within 300 s');
     report.discourseVersion = await page.locator('meta[name="generator"]').getAttribute('content', { timeout: 2_000 }).catch(() => null);
-    const username = await readUsername(page, base);
+    const username = await readUsername(view, base);
     if (!username) throw new RunError('needs-auth', 'Could not read the username from the /my/activity redirect');
     identities = [username];
     log(`Logged in (username read from the /my redirect; it is replaced in every fixture).`);

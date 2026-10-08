@@ -1,6 +1,5 @@
-import type { Page } from 'playwright-core';
 import { systemClock, systemSleeper, type Clock, type InterruptibleSleeper } from '@disco-lurk/core';
-import { expectedMiss } from './page';
+import { expectedMiss, type ReadOnlyPage } from './page';
 import { SELECTORS } from './selectors';
 
 export interface LoginWaitOptions {
@@ -20,7 +19,7 @@ export const LOGIN_TIMEOUT_MS = 300_000;
  * B04: watches for `#current-user` without ever reloading, so a captcha, password entry or
  * redirect in progress is left alone. Resolves false at the ceiling.
  */
-export async function waitForCurrentUser(page: Page, opts: LoginWaitOptions): Promise<boolean> {
+export async function waitForCurrentUser(page: ReadOnlyPage, opts: LoginWaitOptions): Promise<boolean> {
   const clock = opts.clock ?? systemClock;
   const sleeper = opts.sleeper ?? systemSleeper;
   const interval = opts.intervalMs ?? LOGIN_POLL_MS;
@@ -28,7 +27,7 @@ export async function waitForCurrentUser(page: Page, opts: LoginWaitOptions): Pr
   const start = clock.monotonic();
   for (;;) {
     // A navigation in progress destroys the execution context; that poll simply counts as "not yet".
-    const present = await page.locator(SELECTORS.currentUser).count().then(
+    const present = await page.count(SELECTORS.currentUser).then(
       (n) => n > 0,
       (err: unknown) => {
         if (expectedMiss(err)) return false;
@@ -44,8 +43,8 @@ export async function waitForCurrentUser(page: Page, opts: LoginWaitOptions): Pr
 }
 
 /** B04: the username comes from where `/my/...` redirects, never from the avatar's title. */
-export async function readUsername(page: Page, baseUrl: string): Promise<string | null> {
-  await page.goto(new URL('/my/activity', baseUrl).href, { waitUntil: 'domcontentloaded' });
+export async function readUsername(page: ReadOnlyPage, baseUrl: string): Promise<string | null> {
+  await page.goto(new URL('/my/activity', baseUrl).href);
   const userPath = /\/u\/([^/?#]+)/;
   await page.waitForURL(userPath, { timeout: 15_000 }).catch(() => {});
   const m = userPath.exec(new URL(page.url()).pathname);

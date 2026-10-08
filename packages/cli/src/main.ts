@@ -205,14 +205,15 @@ async function login(argv: string[]): Promise<number> {
     console.log('Checking for #current-user every 5 s for up to 300 s; the page is never reloaded.');
     result = await auth.continueWaiting(controller.signal);
   } catch (err) {
-    if (isAbortError(err)) return EXIT.cancelled;
+    if (isAbortError(err) || (err instanceof RunError && err.code === 'cancelled')) return EXIT.cancelled;
     throw err;
   } finally {
     await auth.close();
   }
   if (result.status !== 'authenticated') {
     console.error(result.status === 'failed' ? `${result.failure.code}: ${result.failure.message}` : `Not signed in: ${result.status}`);
-    return result.status === 'failed' ? EXIT.environment : EXIT.needsAuth;
+    if (result.status === 'failed') return result.failure.code === 'cancelled' ? EXIT.cancelled : EXIT.environment;
+    return EXIT.needsAuth;
   }
   // §8.2 steps 5–7: a headless health check with the same Profile, which also discovers categories.
   console.log('Signed in. Running the headless health check…');

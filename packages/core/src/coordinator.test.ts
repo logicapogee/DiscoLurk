@@ -360,3 +360,47 @@ describe('AUTH-001 (kernel side) AuthSession', () => {
     expect(t.closed()).toBe(1);
   });
 });
+
+describe('STATE-001 browser closed from outside', () => {
+  const closed = () => new RunError('cancelled', 'The browser was closed');
+
+  it('mid-browse: stopping → cancelled without verification, stats kept, browser session closed', async () => {
+    let collects = 0;
+    const t = setup({
+      forum: {
+        progress: async () => level(21, 175),
+        topics: (path, call) => {
+          if (++collects > 1) throw closed();
+          return unread(path, call);
+        },
+      },
+    });
+    const out = await t.run(plan({ kind: 'endless' }));
+    expect(t.states().slice(-3)).toEqual(['browsing', 'stopping', 'cancelled']);
+    expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'error', failure: { code: 'cancelled' } });
+    expect(out.stats.confirmed.topics).toBeGreaterThan(0);
+    expect(t.forum.calls.filter((c) => c.op === 'readProgress')).toHaveLength(1);
+    expect(t.closed()).toBe(1);
+  });
+
+  it('during the initial progress read: no degraded run, stopping → cancelled', async () => {
+    const t = setup({
+      forum: {
+        progress: async () => {
+          throw closed();
+        },
+      },
+    });
+    const out = await t.run(plan({ kind: 'endless' }));
+    expect(t.states().slice(-3)).toEqual(['reading_initial_progress', 'stopping', 'cancelled']);
+    expect(out.failure?.code).toBe('cancelled');
+    expect(t.forum.calls.some((c) => c.op === 'collectTopics')).toBe(false);
+  });
+
+  it('during sign-in: cancelled rather than failed', async () => {
+    const t = setup({ forum: { auth: async () => ({ status: 'failed', failure: { code: 'cancelled', message: 'closed' } }) } });
+    const out = await t.run(plan({ kind: 'endless' }, 'headed'));
+    expect(t.states()).toEqual(['queued', 'launching', 'cancelled']);
+    expect(out.failure?.code).toBe('cancelled');
+  });
+});

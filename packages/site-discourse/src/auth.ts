@@ -27,6 +27,8 @@ export async function waitForCurrentUser(page: Page, opts: LoginWaitOptions): Pr
   const start = clock.monotonic();
   for (;;) {
     // A navigation in progress destroys the execution context; that poll simply counts as "not yet".
+    // A closed window ends the wait at once instead of polling a page nobody can sign in on.
+    if (page.isClosed()) throw new Error('Target page, context or browser has been closed');
     const present = await page.locator(SELECTORS.currentUser).count().then((n) => n > 0, () => false);
     if (present) return true;
     const elapsed = clock.monotonic() - start;

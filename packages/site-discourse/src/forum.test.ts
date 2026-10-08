@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyReturn, discoveredCategories, listUrlFor, navigationFailure, sortKept } from './forum';
+import { browserClosed, classifyReturn, closedAsCancelled, discoveredCategories, listUrlFor, navigationFailure, sortKept } from './forum';
 
 const site = { baseUrl: 'https://forum.docofcard.com' };
 
@@ -51,6 +51,34 @@ describe('navigation error classification (§6.4)', () => {
     expect(navigationFailure(timeout).code).toBe('page-timeout');
     expect(navigationFailure(new Error('page.goto: net::ERR_PROXY_CONNECTION_FAILED at https://linux.do/')).code).toBe('proxy-failed');
     expect(navigationFailure(new Error('page.goto: net::ERR_NAME_NOT_RESOLVED at https://linux.do/')).code).toBe('network-failed');
-    expect(navigationFailure(new Error('Target page, context or browser has been closed')).code).toBe('internal');
+    expect(navigationFailure(new Error('page.goto: Protocol error (Page.navigate): Internal')).code).toBe('internal');
+  });
+});
+
+describe('browser closed from outside', () => {
+  const closedError = () => new Error('page.content: Target page, context or browser has been closed');
+
+  it('classifies a vanished browser as cancelled', () => {
+    expect(browserClosed(closedError())).toBe(true);
+    expect(navigationFailure(new Error('page.goto: Target page, context or browser has been closed')).code).toBe('cancelled');
+  });
+
+  it('every port method reports it as RunError cancelled', async () => {
+    const fail = async () => {
+      throw closedError();
+    };
+    const port = closedAsCancelled({
+      site: {} as never,
+      ensureAuthenticated: fail,
+      discoverCategories: fail,
+      readProgress: fail,
+      collectTopics: fail,
+      enterFromList: fail,
+      readTopic: fail,
+      performActions: fail,
+      returnAndVerify: fail,
+    });
+    await expect(port.collectTopics({} as never, { browseMode: 'quick' }, new AbortController().signal)).rejects.toMatchObject({ code: 'cancelled' });
+    await expect(port.readProgress('final', new AbortController().signal)).rejects.toMatchObject({ code: 'cancelled' });
   });
 });

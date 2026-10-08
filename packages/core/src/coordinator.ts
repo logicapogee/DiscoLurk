@@ -55,6 +55,12 @@ export interface CoordinatorEnv {
 export const VERIFY_TIMEOUT_MS = 60_000;
 const INSPECT_TIMEOUT_MS = 60_000;
 
+/**
+ * Adapters report a browser that vanished under them (the user closed the window) as `cancelled`;
+ * the run then ends without verification instead of failing on every later step.
+ */
+const browserGone = (failure: RunFailure | undefined) => failure?.code === 'cancelled';
+
 /** One sign-in check that never waits for a person: credentials on password sites, otherwise a look at the page. */
 function checkMode(site: Site, browserMode: BrowserMode): AuthMode {
   return site.login === 'password' && browserMode === 'headless' ? 'credentials' : 'headless-check';
@@ -115,7 +121,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
       try {
         const first = await forum.ensureAuthenticated(checkMode(site, plan.browserMode), signal);
         let auth: AuthResult = first;
-        if (first.status === 'failed') return end('failed', 'error', first.failure);
+        if (first.status === 'failed') return end(browserGone(first.failure) ? 'cancelled' : 'failed', 'error', first.failure);
         if (first.status !== 'authenticated') {
           state('awaiting_login');
           // B04/B05: only a headed window has a person who can finish signing in.
@@ -128,11 +134,12 @@ export class DiscoLurkCoordinator implements RunCoordinator {
             state('needs_auth');
             return end('cancelled', 'error', { code: 'needs-auth', message: `Not signed in to ${site.displayName}; run \`lurk login --site ${site.id}\`` });
           }
-          if (auth.status === 'failed') return end('failed', 'error', auth.failure);
+          if (auth.status === 'failed') return end(browserGone(auth.failure) ? 'cancelled' : 'failed', 'error', auth.failure);
         }
       } catch (err) {
         if (isAbortError(err)) return end('cancelled', stopRequestOf(signal));
-        return end('failed', 'error', toFailure(err));
+        const f = toFailure(err);
+        return end(browserGone(f) ? 'cancelled' : 'failed', 'error', f);
       }
 
       state('reading_initial_progress');
@@ -142,16 +149,17 @@ export class DiscoLurkCoordinator implements RunCoordinator {
             levels.initial = await forum.readProgress('initial', signal);
             baseline = 'present';
           } catch (err) {
-            if (isAbortError(err)) throw err;
+            if (isAbortError(err) || browserGone(toFailure(err))) throw err;
             baseline = 'missing';
             const f = toFailure(err);
             warn('baseline-missing', `Initial progress read failed (${f.code}: ${f.message}); continuing without a baseline`);
           }
         }
         if (site.categorySource === 'discovered') await this.refreshCategories(site, forum, signal, warn);
-      } catch {
+      } catch (err) {
         state('stopping');
-        return end('cancelled', stopRequestOf(signal));
+        if (isAbortError(err)) return end('cancelled', stopRequestOf(signal));
+        return end('cancelled', 'error', toFailure(err));
       }
 
       state('browsing');
@@ -179,6 +187,8 @@ export class DiscoLurkCoordinator implements RunCoordinator {
           state('stopping');
           stopCause = 'error';
           failure = out.failure;
+          // §6.2 stopping → cancelled: with the browser gone nothing can be verified.
+          if (browserGone(failure)) return end('cancelled', stopCause, failure);
           break;
       }
 
@@ -247,7 +257,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
       const known = await this.env.categories.load(site.id);
       await this.env.categories.save(site.id, mergeDiscoveredCategories(known, found));
     } catch (err) {
-      if (isAbortError(err)) throw err;
+      if (isAbortError(err) || browserGone(toFailure(err))) throw err;
       const f = toFailure(err);
       warn('category-discovery-failed', `${f.code}: ${f.message}`);
     }

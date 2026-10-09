@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunError, stopRequestOf } from '@disco-lurk/core';
-import { PAGE_TIMEOUTS, TargetWatch } from './page';
+import type { Page } from 'playwright-core';
+import { PAGE_TIMEOUTS, PageView, TargetWatch } from './page';
 
 const targetClosedError = () => Object.assign(new Error('page.content: Target page, context or browser has been closed'), { name: 'TargetClosedError' });
 const failing = () => Promise.reject(targetClosedError());
@@ -56,5 +57,31 @@ describe('TargetWatch: a closed window is a stop, a crashed renderer is a failur
     const watch = new TargetWatch();
     watch.markClosed();
     await expect(watch.call(() => Promise.reject(new Error('net::ERR_FAILED')))).rejects.toThrow('net::ERR_FAILED');
+  });
+});
+
+describe('PageView visibility is reported by the page, not asked for', () => {
+  it('reads the state the page last reported, with no round trip per read', async () => {
+    let binding: ((source: unknown, state: DocumentVisibilityState) => void) | undefined;
+    const calls: string[] = [];
+    const fake = {
+      exposeBinding: async (_name: string, fn: typeof binding) => {
+        calls.push('exposeBinding');
+        binding = fn;
+      },
+      addInitScript: async () => void calls.push('addInitScript'),
+      evaluate: async () => {
+        calls.push('evaluate');
+        binding!({}, 'visible');
+      },
+    };
+    const view = new PageView(fake as unknown as Page);
+    expect(view.visibilityState()).toBe('visible');
+    await view.trackVisibility();
+    binding!({}, 'hidden');
+    expect(view.visibilityState()).toBe('hidden');
+    binding!({}, 'visible');
+    expect(view.visibilityState()).toBe('visible');
+    expect(calls).toEqual(['exposeBinding', 'addInitScript', 'evaluate']);
   });
 });

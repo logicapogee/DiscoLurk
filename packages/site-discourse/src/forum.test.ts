@@ -6,7 +6,7 @@ import { classifyReturn, discoveredCategories, DiscourseForum, listUrlFor, navig
 import { expectedMiss, type ReadOnlyPage } from './page';
 import { StaticPage, timeoutError } from './testing';
 import { usernameFromUrl } from './auth';
-import { loginForm, timingsReceipt } from './session';
+import { loginForm, timingsReceipt, timingsUrlOf } from './session';
 import { parseDocument, parseTimingsBody } from './parse';
 
 const site = { baseUrl: 'https://forum.docofcard.com' };
@@ -392,6 +392,24 @@ describe('VIS-001 a hidden headed window pauses reading (I6)', () => {
     expect(t.clickedAt()).toBe(-1);
   });
 
+  it('a window that stays hidden waits only until the signal ends it, while entering and while reading', async () => {
+    const t = await onList(false);
+    t.page.visibility = 'hidden';
+    const entering = new AbortController();
+    t.time.at(t.time.clock.monotonic() + 60_000, () => entering.abort());
+    await expect(t.time.drive(t.forum.enterFromList(topic, entering.signal))).rejects.toMatchObject({ name: 'AbortError' });
+    expect(t.clickedAt()).toBe(-1);
+
+    t.page.visibility = 'visible';
+    const visit = await t.time.drive(t.forum.enterFromList(topic, t.signal));
+    t.page.visibility = 'hidden';
+    const reading = new AbortController();
+    const until = t.time.clock.monotonic() + 90_000;
+    t.time.at(until, () => reading.abort());
+    await expect(t.time.drive(t.forum.readTopic(visit, { browseMode: 'deep', onFloor: () => 'continue' }, reading.signal))).rejects.toMatchObject({ name: 'AbortError' });
+    expect(t.time.clock.monotonic()).toBe(until);
+  });
+
   it('never checks a headless page, which is always visible', async () => {
     const t = await onList(true);
     t.page.visibility = 'hidden';
@@ -468,19 +486,33 @@ describe('TIMINGS-001 read receipts from the page (I7)', () => {
     expect(parseTimingsBody('{not json')).toBeNull();
   });
 
-  const response = (url: string, opts: { method?: string; ok?: boolean; body?: string } = {}) => ({
-    url: () => url,
-    ok: () => opts.ok ?? true,
-    request: () => ({ method: () => opts.method ?? 'POST', postData: () => opts.body ?? 'timings%5B1%5D=1000&topic_time=1000&topic_id=5' }),
-  });
+  const request = (url: string, opts: { method?: string; ok?: boolean; body?: string } = {}) => {
+    let looked = 0;
+    return {
+      lookups: () => looked,
+      url: () => url,
+      method: () => opts.method ?? 'POST',
+      postData: () => opts.body ?? 'timings%5B1%5D=1000&topic_time=1000&topic_id=5',
+      response: async () => {
+        looked++;
+        return { ok: () => opts.ok ?? true };
+      },
+    };
+  };
 
-  it('accepts only a successful POST to the site’s own /topics/timings', () => {
-    const site = { baseUrl: 'https://linux.do' };
-    const r = (u: string, o?: Parameters<typeof response>[1]) => timingsReceipt(site, response(u, o) as unknown as Parameters<typeof timingsReceipt>[1]);
-    expect(r('https://linux.do/topics/timings')).toEqual({ topicId: '5', postNumbers: [1], topicMs: 1000 });
-    expect(r('https://linux.do/topics/timings', { ok: false })).toBeNull();
-    expect(r('https://linux.do/topics/timings', { method: 'GET' })).toBeNull();
-    expect(r('https://connect.linux.do/topics/timings')).toBeNull();
-    expect(r('https://linux.do/t/x/5.json')).toBeNull();
+  it('accepts only a successful POST to the site’s own /topics/timings, looking up no other response', async () => {
+    const timingsUrl = timingsUrlOf({ baseUrl: 'https://linux.do/' });
+    expect(timingsUrl).toBe('https://linux.do/topics/timings');
+    const r = (u: string, o?: Parameters<typeof request>[1]) => {
+      const req = request(u, o);
+      return timingsReceipt(timingsUrl, req as unknown as Parameters<typeof timingsReceipt>[1]).then((receipt) => ({ receipt, looked: req.lookups() }));
+    };
+    await expect(r('https://linux.do/topics/timings')).resolves.toEqual({ receipt: { topicId: '5', postNumbers: [1], topicMs: 1000 }, looked: 1 });
+    await expect(r('https://linux.do/topics/timings?x=1')).resolves.toMatchObject({ looked: 1 });
+    await expect(r('https://linux.do/topics/timings', { ok: false })).resolves.toEqual({ receipt: null, looked: 1 });
+    await expect(r('https://linux.do/topics/timings', { method: 'GET' })).resolves.toEqual({ receipt: null, looked: 0 });
+    await expect(r('https://linux.do/topics/timings-extra')).resolves.toEqual({ receipt: null, looked: 0 });
+    await expect(r('https://connect.linux.do/topics/timings')).resolves.toEqual({ receipt: null, looked: 0 });
+    await expect(r('https://linux.do/t/x/5.json')).resolves.toEqual({ receipt: null, looked: 0 });
   });
 });

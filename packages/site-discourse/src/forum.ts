@@ -151,6 +151,27 @@ const fallbackUnlessUnexpected =
     throw err;
   };
 
+/**
+ * The site's screen tracker counts nothing while the page is hidden, so a hidden headed window
+ * is raised once and the caller waits until it is visible again, or until `signal` ends the wait.
+ * A headless page is always visible.
+ */
+class VisibilityGate {
+  constructor(private readonly opts: Pick<DiscourseForumOptions, 'page' | 'deps' | 'headless'> & { warn: (code: string, message: string) => void }) {}
+
+  async whenVisible(signal: AbortSignal): Promise<void> {
+    const { page, deps, headless, warn } = this.opts;
+    if (headless || page.visibilityState() === 'visible') return;
+    const since = deps.clock.monotonic();
+    warn('page-hidden', 'The browser window is hidden; the site counts no reading while it is. Bringing it to the front and waiting');
+    await untilAbort(page.bringToFront(), signal);
+    const { clock, sleeper } = deps;
+    await pollUntil({ intervalMs: TIMEOUTS.visibilityPollMs, timeoutMs: Number.POSITIVE_INFINITY, clock, sleeper }, async () => (page.visibilityState() === 'visible' ? true : null), signal);
+    const seconds = Math.round((deps.clock.monotonic() - since) / 1000);
+    warn('page-visible', `The browser window is visible again after ${seconds} s; reading continues`);
+  }
+}
+
 /** A topic page as reading sees it: the floor counters' text and wheel input over the post stream. */
 class PageFloorSurface implements FloorSurface {
   private pointed = false;
@@ -158,11 +179,11 @@ class PageFloorSurface implements FloorSurface {
   constructor(
     private readonly page: ReadOnlyPage,
     private readonly center: { x: number; y: number },
-    private readonly visible: (signal: AbortSignal) => Promise<void>,
+    private readonly gate: VisibilityGate,
   ) {}
 
-  async whenVisible(signal: AbortSignal): Promise<void> {
-    await this.visible(signal);
+  whenVisible(signal: AbortSignal): Promise<void> {
+    return this.gate.whenVisible(signal);
   }
 
   async readCounter(): Promise<FloorReading | null> {
@@ -195,11 +216,13 @@ export class DiscourseForum implements ForumPort {
   private readonly nextTemplate: () => string | null;
   /** The only holder of the like button and the composer. */
   private readonly actions: PageActionSurface;
+  private readonly visibility: VisibilityGate;
 
   constructor(opts: DiscourseForumOptions) {
     this.opts = { warn: () => {}, ...opts };
     this.nextTemplate = templatePicker(opts.replyTemplates, opts.deps.random);
     this.actions = new PageActionSurface(opts.page, opts.likeButton, opts.composer, opts.deps, this.opts.warn);
+    this.visibility = new VisibilityGate(this.opts);
   }
 
   get site(): Site {
@@ -354,28 +377,12 @@ export class DiscourseForum implements ForumPort {
     return { category, source, topics };
   }
 
-  /**
-   * The site's screen tracker counts nothing while the page is hidden, so a hidden headed window
-   * is raised once and reading waits until it is visible again. A headless page is always visible.
-   */
-  private async whenVisible(signal: AbortSignal): Promise<void> {
-    if (this.opts.headless) return;
-    const state = () => untilAbort(this.opts.page.visibilityState().catch(fallbackUnlessUnexpected<DocumentVisibilityState>('visible')), signal);
-    if ((await state()) === 'visible') return;
-    const since = this.opts.deps.clock.monotonic();
-    this.opts.warn('page-hidden', 'The browser window is hidden; the site counts no reading while it is. Bringing it to the front and waiting');
-    await untilAbort(this.opts.page.bringToFront(), signal);
-    while ((await state()) !== 'visible') await this.opts.deps.sleeper.sleep(TIMEOUTS.visibilityPollMs, signal);
-    const seconds = Math.round((this.opts.deps.clock.monotonic() - since) / 1000);
-    this.opts.warn('page-visible', `The browser window is visible again after ${seconds} s; reading continues`);
-  }
-
   async enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit> {
     throwIfAborted(signal);
     // The title link on the current list page is the only way into a candidate; there is no URL fallback.
     const link = titleLinkSelector(topic.id);
     if ((await this.opts.page.count(link)) === 0) return { topic, entered: false, reason: 'row-not-on-list' };
-    await this.whenVisible(signal);
+    await this.visibility.whenVisible(signal);
     try {
       await untilAbort(this.opts.page.scrollIntoView(link), signal);
       await untilAbort(this.opts.titleLinks.click(topic.id), signal);
@@ -426,7 +433,7 @@ export class DiscourseForum implements ForumPort {
   async readTopic(visit: TopicVisit, strategy: ReadStrategy, signal: AbortSignal): Promise<ReadResult> {
     if (!visit.entered) return { startFloor: null, endFloor: null, scrolls: 0, stoppedByTarget: false, layout: null };
     const { width, height } = await this.opts.page.viewportSize();
-    const surface = new PageFloorSurface(this.opts.page, { x: Math.round(width / 2), y: Math.round(height / 2) }, (s) => this.whenVisible(s));
+    const surface = new PageFloorSurface(this.opts.page, { x: Math.round(width / 2), y: Math.round(height / 2) }, this.visibility);
     return readFloors(surface, strategy, this.opts.deps, signal);
   }
 

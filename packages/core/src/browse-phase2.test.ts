@@ -81,6 +81,24 @@ describe('TARGET-001 time target ends within the topic (S04)', () => {
     expect(out.stats.elapsedMs).toBeGreaterThanOrEqual(60_000);
   });
 
+  it('ends on time while a hidden window holds entering', async () => {
+    // An entry that would wait 10 minutes for the window to become visible again.
+    const t = run(plan({ kind: 'time', minutes: 1 }), { latency: { collect: 1000, enter: 10 * 60_000 } });
+    const out = await t.go();
+    expect(out.end).toBe('target-reached');
+    expect(t.time.clock.monotonic()).toBe(60_000);
+    expect(ops(t.forum, 'readTopic')).toHaveLength(0);
+    expect(out.stats).toMatchObject({ attempted: { topics: 1 }, confirmed: { topics: 0 } });
+  });
+
+  it('a stop while entering is held still cancels the run', async () => {
+    const t = run(plan({ kind: 'time', minutes: 30 }), { latency: { collect: 1000, enter: 60 * 60_000 } });
+    t.time.at(5_000, () => t.controller.abort());
+    const out = await t.go();
+    expect(out.end).toBe('cancelled');
+    expect(t.time.clock.monotonic()).toBe(5_000);
+  });
+
   it('enters no topic once the time ran out during a pause', async () => {
     const t = run(plan({ kind: 'time', minutes: 1 }), { floors: () => [1, 2], latency: { collect: 1000, enter: 1000, dwell: 1000, back: 1000 } });
     await t.go();

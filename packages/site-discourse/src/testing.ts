@@ -77,7 +77,7 @@ export class StaticPage implements ReadOnlyPage {
   }
   visibility: DocumentVisibilityState = 'visible';
   fronted = 0;
-  async visibilityState() {
+  visibilityState() {
     return this.visibility;
   }
   async bringToFront() {

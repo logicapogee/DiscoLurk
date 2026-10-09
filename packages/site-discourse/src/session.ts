@@ -1,4 +1,4 @@
-import type { Page, Response } from 'playwright-core';
+import type { Page, Request } from 'playwright-core';
 import { pauseBetween, RunError, untilAbort, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site, type TimingsReceipt } from '@disco-lurk/core';
 import type { Composer, LikeButton } from './actions';
 import { launchProfile, type BrowserSession } from './browser';
@@ -68,17 +68,21 @@ function composer(page: Page, call: PageCall): Composer {
   };
 }
 
-/** The read receipt of an acknowledged `POST /topics/timings` on the site; null for any other response. */
-export function timingsReceipt(site: Pick<Site, 'baseUrl'>, response: Pick<Response, 'url' | 'ok' | 'request'>): TimingsReceipt | null {
-  let url: URL;
-  try {
-    url = new URL(response.url());
-  } catch {
-    return null;
-  }
-  if (url.origin !== new URL(site.baseUrl).origin || url.pathname !== '/topics/timings') return null;
-  const request = response.request();
-  if (request.method() !== 'POST' || !response.ok()) return null;
+/** The address the site's screen tracker posts its read receipts to. */
+export const timingsUrlOf = (site: Pick<Site, 'baseUrl'>) => `${new URL(site.baseUrl).origin}/topics/timings`;
+
+/**
+ * The read receipt of a finished request when it was an acknowledged `POST` to `timingsUrl`; null
+ * for any other request. It runs for every request the page makes, so the address is compared as a
+ * string before anything else is looked at.
+ */
+export async function timingsReceipt(timingsUrl: string, request: Pick<Request, 'url' | 'method' | 'postData' | 'response'>): Promise<TimingsReceipt | null> {
+  const url = request.url();
+  if (!url.startsWith(timingsUrl)) return null;
+  const rest = url.slice(timingsUrl.length);
+  if ((rest !== '' && !rest.startsWith('?')) || request.method() !== 'POST') return null;
+  const response = await request.response();
+  if (!response?.ok()) return null;
   return parseTimingsBody(request.postData());
 }
 
@@ -136,15 +140,36 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
   browser.page.on('crash', () => watch.markCrashed());
   if (opts.onTimings) {
     const deliver = opts.onTimings;
-    browser.page.on('response', (response) => {
-      const receipt = timingsReceipt(opts.site, response);
-      if (receipt) deliver(receipt);
+    const timingsUrl = timingsUrlOf(opts.site);
+    browser.page.on('requestfinished', (request) => {
+      timingsReceipt(timingsUrl, request).then(
+        (receipt) => receipt && deliver(receipt),
+        // The page closed before its response could be looked up; an unconfirmed flush is not a receipt.
+        (err: unknown) => {
+          if (!targetClosed(err)) throw err;
+        },
+      );
     });
   }
   const call = watch.call;
+  const session = browser;
+  // Closing a browser the user already closed must still release the Profile lock.
+  const close = () =>
+    session.close().catch((err: unknown) => {
+      if (!targetClosed(err)) throw err;
+    });
+  const page = new PageView(browser.page, watch);
+  if (!opts.headless) {
+    try {
+      await page.trackVisibility();
+    } catch (err) {
+      await close();
+      throw err;
+    }
+  }
   const forum = new DiscourseForum({
     site: opts.site,
-    page: new PageView(browser.page, watch),
+    page,
     titleLinks: titleLinks(browser.page, call),
     likeButton: likeButton(browser.page, call),
     composer: composer(browser.page, call),
@@ -154,14 +179,5 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
     ...(opts.credentials ? { login: { credentials: opts.credentials, form: loginForm(browser.page, opts.deps, call) } } : {}),
     ...(opts.warn ? { warn: opts.warn } : {}),
   });
-  const session = browser;
-  return {
-    forum,
-    closed: watch.closed.signal,
-    // Closing a browser the user already closed must still release the Profile lock.
-    close: () =>
-      session.close().catch((err: unknown) => {
-        if (!targetClosed(err)) throw err;
-      }),
-  };
+  return { forum, closed: watch.closed.signal, close };
 }

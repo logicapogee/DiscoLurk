@@ -1,0 +1,38 @@
+# docker compose --env-file .env up -d   (copy .env.example to .env first)
+services:
+  disco-lurk:
+    image: ghcr.io/logicapogee/discolurk:${LURK_IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: disco-lurk
+    restart: unless-stopped
+    ports:
+      - "${LURK_PORT:-8080}:8080"
+    environment:
+      # Required: serve listens on 0.0.0.0 inside the container and refuses to start without it.
+      LURK_TOKEN: ${LURK_TOKEN:?set LURK_TOKEN in .env (openssl rand -base64 48)}
+      TZ: ${TZ:-Asia/Shanghai}
+      LURK_SITE: ${LURK_SITE:-linuxdo}
+      LURK_BROWSE_MODE: ${LURK_BROWSE_MODE:-deep}
+      LURK_RUN_MODE: ${LURK_RUN_MODE:-topics:15-40}
+      LURK_RUNS_PER_DAY: ${LURK_RUNS_PER_DAY:-2}
+      LURK_WINDOW: ${LURK_WINDOW:-07:00-23:00}
+      LURK_JITTER_MIN: ${LURK_JITTER_MIN:-15}
+      LURK_RUN_ON_START: ${LURK_RUN_ON_START:-true}
+      LURK_LIKE: ${LURK_LIKE:-false}
+      LURK_LIKE_RATE: ${LURK_LIKE_RATE:-30}
+      LURK_CATEGORIES: ${LURK_CATEGORIES:-}
+      LURK_PROXY: ${LURK_PROXY:-}
+      LURK_USERNAME: ${LURK_USERNAME:-}
+      LURK_PASSWORD: ${LURK_PASSWORD:-}
+    volumes:
+      # Profiles, schedules and run history: /data/disco-lurk/{profiles,schedules,...}
+      - ./data:/data
+    # Chrome keeps renderer memory in /dev/shm; Docker's 64 MB default makes pages crash.
+    shm_size: 1gb
+    # A run stops gracefully and reads the progress page once more before exiting.
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1g

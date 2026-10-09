@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+**/target
+apps/desktop/src-tauri
+tests
+docs
+.git
+**/*.test.ts

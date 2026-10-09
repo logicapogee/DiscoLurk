@@ -2,7 +2,7 @@ import { randomInt, type RandomSource } from './runtime';
 import { EXPERIMENTS_OFF, MAX_REPLY_LIKES, type Category, type InteractionPolicy, type ResolvedPreset, type RunMode, type RunModeSpec, type RunPreset } from './terms';
 
 /** Fixes a run mode's random range, so the snapshot states exactly what will run. */
-export function resolveRunMode(spec: RunModeSpec, random: RandomSource): RunMode {
+function resolveRunMode(spec: RunModeSpec, random: RandomSource): RunMode {
   return spec.kind === 'topics' ? { kind: 'topics', count: randomInt(random, spec.min, spec.max) } : spec;
 }
 

@@ -18,15 +18,16 @@ import { BUILTIN_SITES } from './sites';
 
 const execFileAsync = promisify(execFile);
 
-export const RELEASES_API = 'https://api.github.com/repos/logicapogee/DiscoLurk/releases/latest';
-export const RELEASES_PAGE = 'https://github.com/logicapogee/DiscoLurk/releases';
+const REPOSITORY = 'logicapogee/DiscoLurk';
+const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
+const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
 
 /** A Linux session without X11 or Wayland cannot show a headed browser; other desktops always have one. */
-export function hasDisplay(platform = process.platform, env = process.env): boolean {
+function hasDisplay(platform = process.platform, env = process.env): boolean {
   return platform !== 'linux' || Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
 }
 
-export interface SidecarAppOptions {
+interface SidecarAppOptions {
   version: string;
   dataDir: string;
   /** Docker and other displayless hosts: every run is headless and headed sign-in is refused. */
@@ -43,7 +44,7 @@ export interface SidecarAppOptions {
   shutdown(): Promise<void>;
 }
 
-export interface SidecarApp {
+interface SidecarApp {
   app: LurkApp;
   /** Aborted on exit: it cuts a run's final progress read short. */
   exit: AbortController;
@@ -118,7 +119,7 @@ async function latestRelease(): Promise<LatestRelease | null> {
 }
 
 /** The server app over the real kernel: Playwright-backed Profiles under `<dataDir>/profiles`. */
-export function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
+function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
   const profilesDir = join(opts.dataDir, 'profiles');
   const sitesDir = join(opts.dataDir, 'sites');
   const exit = new AbortController();
@@ -187,7 +188,8 @@ export function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
 /** Lines the sidecar writes to its stdout, which only the desktop shell reads. */
 export type SidecarLine =
   | { event: 'starting' }
-  | { event: 'ready'; port: number; token: string; version: string }
+  /** `aliveIntervalMs` lets the shell size its hang detection to the `alive` cadence. */
+  | { event: 'ready'; port: number; token: string; version: string; aliveIntervalMs: number }
   | { event: 'alive' }
   | { event: 'runs'; active: number }
   | { event: 'token'; token: string }
@@ -195,11 +197,11 @@ export type SidecarLine =
   | { event: 'result'; cmd: ShellCommand; ok: boolean; message?: string };
 
 /** Tray actions the shell writes to the sidecar's stdin, one JSON object per line. */
-export type ShellCommand = 'start' | 'stop' | 'shutdown';
+type ShellCommand = 'start' | 'stop' | 'shutdown';
 
-export const ALIVE_INTERVAL_MS = 10_000;
+const ALIVE_INTERVAL_MS = 10_000;
 
-export const stdoutLine = (line: SidecarLine) => process.stdout.write(JSON.stringify(line) + '\n');
+const stdoutLine = (line: SidecarLine) => process.stdout.write(JSON.stringify(line) + '\n');
 
 /**
  * The shell owns the tray and native notifications and keeps working while the window's page is
@@ -208,8 +210,6 @@ export const stdoutLine = (line: SidecarLine) => process.stdout.write(JSON.strin
 export function stdoutShell(write: (line: SidecarLine) => void = stdoutLine): ShellChannel {
   return {
     notify: (title, body) => write({ event: 'notify', title, body }),
-    // Closing the window always hides it to the tray, so the shell has no setting to follow.
-    settings: () => {},
     token: (token) => write({ event: 'token', token }),
     activeRuns: (count) => write({ event: 'runs', active: count }),
   };
@@ -379,7 +379,7 @@ export async function runSidecar(argv: string[], version: string): Promise<numbe
     shellCommands: { input: process.stdin, write: stdoutLine },
     log,
   });
-  stdoutLine({ event: 'ready', port: server.port, token, version });
+  stdoutLine({ event: 'ready', port: server.port, token, version, aliveIntervalMs: ALIVE_INTERVAL_MS });
   log(`sidecar ready on 127.0.0.1:${server.port}`);
   // stdin stays paused until here, so an EOF during start-up is seen once the cleanups exist.
   lifecycle.watchParent(process.stdin);

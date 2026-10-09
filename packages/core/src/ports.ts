@@ -149,7 +149,7 @@ export interface RunCoordinator {
 }
 
 /** When a schedule fires: a cron expression or a number of random runs inside a daily window. */
-export type ScheduleTrigger =
+type ScheduleTrigger =
   | { kind: 'cron'; expression: string }
   | {
       kind: 'daily-window';

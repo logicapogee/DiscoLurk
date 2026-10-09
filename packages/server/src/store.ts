@@ -18,7 +18,7 @@ class Serial {
 }
 
 export const HISTORY_LIMIT = 200;
-export const LEDGER_DAYS = 30;
+const LEDGER_DAYS = 30;
 
 export const DEFAULT_SETTINGS: Settings = {
   notifications: true,
@@ -281,7 +281,7 @@ export function toJsonl(items: readonly unknown[]): string {
 }
 
 /** A run's stored events; a line a crash cut short is skipped and counted. */
-export interface StoredEvents {
+interface StoredEvents {
   events: LoggedEvent[];
   skipped: number;
 }

@@ -1,7 +1,7 @@
 import { localParts, zonedToEpoch } from './tz';
 
 /** A parsed five-field cron expression: minute, hour, day of month, month, day of week. */
-export interface CronExpression {
+interface CronExpression {
   source: string;
   minutes: number[];
   hours: number[];

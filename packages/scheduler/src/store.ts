@@ -6,7 +6,7 @@ export interface PlannedRun {
 }
 
 /** How a started run ended. */
-export interface RunEnding {
+interface RunEnding {
   at: string;
   outcome: RunOutcome;
   stopCause: StopCause;

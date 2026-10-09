@@ -19,8 +19,6 @@ use tokio::sync::{oneshot, watch};
 
 /// Covers reclaiming the Profiles and browsers a dead sidecar left behind, which precedes ready.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
-/// The sidecar writes an `alive` line every 10 s; this much silence means its event loop is stuck.
-const SILENCE_LIMIT: Duration = Duration::from_secs(35);
 const RESTART_WINDOW: Duration = Duration::from_secs(10 * 60);
 const MAX_RESTARTS: usize = 3;
 /// A replacement sidecar that has run this long clears the restart history.
@@ -38,8 +36,8 @@ struct SidecarConnection {
     base_url: String,
     token: String,
     version: String,
-    /// The sidecar's log directory, `<appData>/disco-lurk/logs`.
-    log_path: String,
+    /// `<appData>/disco-lurk/logs`.
+    log_dir: String,
     updater: bool,
 }
 
@@ -48,7 +46,7 @@ struct SidecarConnection {
 struct SidecarFailure {
     message: String,
     output: String,
-    log_path: String,
+    log_dir: String,
 }
 
 type Outcome = Option<Result<SidecarConnection, SidecarFailure>>;
@@ -71,6 +69,8 @@ enum SidecarLine {
         port: u16,
         token: String,
         version: String,
+        #[serde(rename = "aliveIntervalMs")]
+        alive_interval_ms: u64,
     },
     Alive,
     Runs {
@@ -183,7 +183,7 @@ impl Sidecar {
         SidecarFailure {
             message,
             output: self.output.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n"),
-            log_path: self.log_dir(),
+            log_dir: self.log_dir(),
         }
     }
 
@@ -284,14 +284,16 @@ fn drain(app: AppHandle, mut rx: Receiver<CommandEvent>, process: Arc<Process>, 
     tauri::async_runtime::spawn(async move {
         let sidecar = sidecar_of(&app);
         let mut ready = Some(ready);
+        let mut silence_limit = STARTUP_TIMEOUT;
         loop {
-            let event = match tokio::time::timeout(SILENCE_LIMIT, rx.recv()).await {
+            let event = match tokio::time::timeout(silence_limit, rx.recv()).await {
                 Ok(Some(event)) => event,
                 Ok(None) => break,
                 Err(_) => {
                     // Before ready, `start`'s own timeout decides.
                     if process.supervised.load(Ordering::SeqCst) {
-                        sidecar.push_line(b"shell: no alive line from the sidecar for 35 s; killing it");
+                        let note = format!("shell: no alive line from the sidecar for {} s; killing it", silence_limit.as_secs());
+                        sidecar.push_line(note.as_bytes());
                         process.kill();
                     }
                     continue;
@@ -299,7 +301,9 @@ fn drain(app: AppHandle, mut rx: Receiver<CommandEvent>, process: Arc<Process>, 
             };
             match event {
                 CommandEvent::Stdout(line) => match serde_json::from_slice::<SidecarLine>(&line) {
-                    Ok(SidecarLine::Ready { port, token, version }) => {
+                    Ok(SidecarLine::Ready { port, token, version, alive_interval_ms }) => {
+                        // Silence of three and a half intervals tolerates a slow tick without masking a stuck event loop.
+                        silence_limit = Duration::from_millis(alive_interval_ms) * 7 / 2;
                         if let Some(tx) = ready.take() {
                             // The ready line never reaches the kept output: it carries the token.
                             if tx.send(Ready { port, token, version }).is_ok() {
@@ -360,7 +364,7 @@ async fn start(app: &AppHandle, sidecar: &Sidecar) -> Result<SidecarConnection, 
         base_url: format!("http://127.0.0.1:{}", ready.port),
         token: ready.token,
         version: ready.version,
-        log_path: sidecar.log_dir(),
+        log_dir: sidecar.log_dir(),
         updater: cfg!(not(target_os = "macos")),
     })
 }

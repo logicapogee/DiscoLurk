@@ -10,7 +10,7 @@ import { credentialsFromEnv, EXIT, parseOrUsageError, siteCategories, UsageError
 import { envSchedule, systemTimezone } from './schedule';
 import { bootServer } from './sidecar';
 
-export interface ServeArgs {
+interface ServeArgs {
   host: string;
   port: number;
   headless: boolean;
@@ -73,7 +73,7 @@ export function serveToken(host: string, env: NodeJS.ProcessEnv): { token: strin
  * when that list differs from the one it was built from. The variables are checked at once,
  * before any category is known.
  */
-export function envSchedules(env: NodeJS.ProcessEnv, dataDir: string): (() => Promise<ScheduleBook>) | undefined {
+function envSchedules(env: NodeJS.ProcessEnv, dataDir: string): (() => Promise<ScheduleBook>) | undefined {
   const timezone = systemTimezone();
   const { LURK_CATEGORIES: _categories, ...withoutCategories } = env;
   if (!envSchedule(withoutCategories, timezone)) return undefined;

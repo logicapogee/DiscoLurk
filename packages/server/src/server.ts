@@ -16,7 +16,7 @@ export const WS_AUTH_TIMEOUT_MS = 5000;
 /** Client frames are only the auth frame; anything near this size is not one. */
 export const WS_MAX_PAYLOAD = 64 * 1024;
 /** Sockets still waiting for their auth frame; more are refused until some authenticate or time out. */
-export const WS_MAX_UNAUTHENTICATED = 16;
+const WS_MAX_UNAUTHENTICATED = 16;
 /** Failures that are not counted toward lockout (see `TokenGuard.exempt`) cost a fixed pause instead. */
 export const LOOPBACK_FAILURE_DELAY_MS = 250;
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -37,7 +37,7 @@ export interface Reply {
   after?: () => void | Promise<void>;
 }
 
-export interface RouteContext {
+interface RouteContext {
   params: Record<string, string>;
   query: URLSearchParams;
   body: unknown;
@@ -53,7 +53,7 @@ export interface Route {
   handle(ctx: RouteContext): Promise<Reply>;
 }
 
-export interface ServerOptions {
+interface ServerOptions {
   host: string;
   port: number;
   token: string;

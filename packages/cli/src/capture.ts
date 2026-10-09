@@ -35,7 +35,7 @@ import {
   type ListRow,
 } from '@disco-lurk/site-discourse';
 
-export interface CaptureOptions {
+interface CaptureOptions {
   site: Site;
   profileDir: string;
   outDir: string;
@@ -54,7 +54,7 @@ interface StepRecord {
   [detail: string]: unknown;
 }
 
-export interface CaptureReport {
+interface CaptureReport {
   siteId: string;
   capturedAt: string;
   discourseVersion: string | null;
@@ -217,7 +217,7 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
       const file = await save('list-sorted', html);
       return {
         ok: true,
-        note: `opened ?${SORTED_BY_POSTS_QUERY} (T02); ${big ? `topic ${big.id} has ${big.replies} replies` : `no topic with ≥${BIG_TOPIC_REPLIES} replies`}`,
+        note: `opened ?${SORTED_BY_POSTS_QUERY} to sort by replies; ${big ? `topic ${big.id} has ${big.replies} replies` : `no topic with ≥${BIG_TOPIC_REPLIES} replies`}`,
         files: [file],
         url: scrubWith(mapping, page.url()),
       };
@@ -327,7 +327,7 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
         const file = await save('liked', html);
         return {
           ok: true,
-          note: `floor ${floor}; A03 markers on that floor ${JSON.stringify(marks)}`,
+          note: `floor ${floor}; liked-state markers on that floor ${JSON.stringify(marks)}`,
           files: [file],
           likedFloor: floor,
           likedFloorControls: controls,

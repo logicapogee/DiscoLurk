@@ -29,7 +29,7 @@ function cap(ctx: z.RefinementCtx, value: number, max: number, path: (string | n
 }
 
 /** The shared preset shape plus where and how it runs, within the bounds the UI offers. */
-export const storedPresetSchema = runPresetSchema
+const storedPresetSchema = runPresetSchema
   .extend({ id: name, name: label, profileId: z.string().min(1).nullable(), browserMode: z.enum(['headed', 'headless']) })
   .superRefine((p, ctx) => {
     if (p.profileId !== null && !p.profileId.startsWith(`${p.siteId}/`)) ctx.addIssue({ code: 'custom', path: ['profileId'], message: 'the Profile must belong to the preset site' });
@@ -86,7 +86,7 @@ export const limitedScheduleSpecSchema = scheduleSpecSchema.extend({ name: label
  * since whoever holds the token could otherwise point a browser with the user's Profile there.
  * Names are not resolved; literal addresses and local-only names are refused.
  */
-export function publicBaseUrl(raw: string): string | null {
+function publicBaseUrl(raw: string): string | null {
   let url: URL;
   try {
     url = new URL(raw);

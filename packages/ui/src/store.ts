@@ -23,7 +23,7 @@ const MAX_EVENTS = 5000;
 export const FINISHED_EVENTS_TTL_MS = 10 * 60_000;
 
 /** What the run's events said last, kept as they arrive instead of rescanning the log. */
-export interface LiveRun {
+interface LiveRun {
   stats?: RunStats;
   levels: RunResult['levels'];
 }

@@ -10,7 +10,7 @@ import { defaultPreset } from './runs';
 
 /** Sites, Profiles and headed sign-ins. */
 /** A user-added Discourse site: categories are read after sign-in, and it has no progress page. */
-export function customSite(req: { id?: string | undefined; displayName: string; baseUrl: string; login: 'headed' | 'password' }): Site {
+function customSite(req: { id?: string | undefined; displayName: string; baseUrl: string; login: 'headed' | 'password' }): Site {
   const url = new URL(req.baseUrl);
   const id =
     req.id ??

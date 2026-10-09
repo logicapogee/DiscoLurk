@@ -1,6 +1,6 @@
 import { stopRequest } from '@disco-lurk/core';
 
-export interface StopSignals {
+interface StopSignals {
   /** Aborts with a stop request: the first Ctrl+C (`user`) or SIGTERM (`app-exit`). */
   signal: AbortSignal;
   /** Aborts on a second Ctrl+C or on SIGTERM; it cuts short what a graceful stop would still do. */

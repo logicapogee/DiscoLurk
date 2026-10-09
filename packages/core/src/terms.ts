@@ -1,12 +1,12 @@
 export type SiteId = string;
 export type ProfileId = string;
-export type PresetId = string;
+type PresetId = string;
 export type ScheduleId = string;
 export type RunId = string;
 
 export type ProgressSource = 'connect-linuxdo' | 'trust-level-docofcard' | 'none';
-export type LoginMethod = 'headed' | 'password';
-export type CategorySource = 'builtin' | 'discovered';
+type LoginMethod = 'headed' | 'password';
+type CategorySource = 'builtin' | 'discovered';
 export type BrowserChannel = 'chrome' | 'msedge';
 export type BrowserMode = 'headed' | 'headless';
 export type BrowseMode = 'deep' | 'quick';

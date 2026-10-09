@@ -55,16 +55,16 @@ interface Expectation {
 const ABSENT_IN_DATA: Record<string, Partial<Record<SelectorName, string>>> = {
   docofcard: {
     newTopicBadge:
-      '数据上未出现，无法验证：本次 10 个板块均无从未访问的话题；同日首次采集曾在 /c/bank/6 见过 1 次。T11 在该站的有效性并入 Phase 1 T1',
+      '数据上未出现，无法验证：本次 10 个板块均无从未访问的话题；同日首次采集曾在 /c/bank/6 见过 1 次。新话题徽标在该站的有效性留待列表点击计数的在线验证',
   },
 };
 
 /** Site facts found while capturing fixtures that the selector table cannot show. */
 const SITE_NOTES: Record<string, string[]> = {
   docofcard: [
-    '列表由站点主题渲染（`gf-*`），表头没有排序按钮；T02 两站统一用 `?order=posts` 进入，本次 list-sorted 即由该地址打开。',
-    '`/c/uncategorized/1` 有时渲染成新闻流卡片（`docofcard-news-feed`），没有 `tr.topic-list-item`；Phase 1 collectTopics 按空板块跳过并记 `empty-category`。',
-    '信任等级页的 loader 在表格出现后仍留在 DOM 中；就绪只看表格行（S07，上限 10 s）。',
+    '列表由站点主题渲染（`gf-*`），表头没有排序按钮；两站统一用 `?order=posts` 按回复数排序进入，本次 list-sorted 即由该地址打开。',
+    '`/c/uncategorized/1` 有时渲染成新闻流卡片（`docofcard-news-feed`），没有 `tr.topic-list-item`；collectTopics 按空板块跳过并记 `empty-category`。',
+    '信任等级页的 loader 在表格出现后仍留在 DOM 中；就绪只看表格行（上限 10 s）。',
   ],
 };
 
@@ -199,7 +199,7 @@ async function main() {
   const out: string[] = [];
   const failures: string[] = [];
   const connectLabels: string[] = [];
-  out.push('# Phase 0 报告：fixture 与选择器复核', '');
+  out.push('# fixture 与选择器复核报告', '');
   out.push(`> 由 \`pnpm verify:selectors\` 生成于 ${new Date().toISOString()}；计数来源 linkedom${browser ? '，并在无头 Chrome 中离线复核（脚本关闭、请求全部拦截）' : '（未做浏览器复核）'}。`);
   out.push('> 🔴 = 未命中或解析异常（附 fixture 中的替代候选，附录 A 未改动，待确认）。', '');
   out.push(
@@ -244,7 +244,7 @@ async function main() {
       const progress = meta.steps.progress;
       if (progress) {
         const { ok: _ok, note: _note, files: _files, ...detail } = progress;
-        out.push('进度页采集细节（S07 强刷前后、loader 耗时、授权页）：', '', '```json', JSON.stringify(detail, null, 2), '```', '');
+        out.push('进度页采集细节（强刷前后、loader 耗时、授权页）：', '', '```json', JSON.stringify(detail, null, 2), '```', '');
       }
     }
 
@@ -317,11 +317,11 @@ async function main() {
       const post = doc.querySelector(`.topic-post[data-post-number="${floor}"]`);
       const others = Array.from(doc.querySelectorAll('.topic-post[data-post-number]')).filter((p) => p !== post);
       out.push(
-        `已赞判定（A03，以用户指认的第 ${floor} 楼为准）：该楼 ${post ? JSON.stringify(likedMarkers(post)) : '未渲染'}，判定 ${post && isLiked(post) ? '已赞' : '🔴 未识别'}；` +
+        `已赞判定（以用户指认的第 ${floor} 楼为准）：该楼 ${post ? JSON.stringify(likedMarkers(post)) : '未渲染'}，判定 ${post && isLiked(post) ? '已赞' : '🔴 未识别'}；` +
           `同页其余 ${others.length} 个楼层中判为已赞的 ${others.filter((p) => isLiked(p)).length} 个。`,
         '',
       );
-      if (!post || !isLiked(post)) failures.push(`${site.id}: A03 liked floor ${floor} not recognised`);
+      if (!post || !isLiked(post)) failures.push(`${site.id}: liked state of floor ${floor} not recognised`);
     }
     out.push('### 点赞备用选择器（仅诊断用）', '');
     out.push('| 选择器 | 命中数 |', '|---|---|');
@@ -332,7 +332,7 @@ async function main() {
 
     if (progressSelectors.length) {
       const pk = site.progressSource === 'connect-linuxdo' ? ['connect'] : ['trust-level', 'trust-level-loader'];
-      out.push(`### 进度页选择器（§${site.progressSource === 'connect-linuxdo' ? '5.1' : '5.1b'}）`, '');
+      out.push(`### 进度页选择器（${site.progressSource === 'connect-linuxdo' ? 'connect.linux.do' : '信任等级页'}）`, '');
       out.push('| 选择器 | 命中数 |', '|---|---|');
       for (const sel of progressSelectors) {
         const hits = pk.filter((k) => kinds.has(k)).map((k) => `${k}: ${cell(k, sel)}`);

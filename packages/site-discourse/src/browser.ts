@@ -5,7 +5,7 @@ import { acquireProfileLock, type ProfileLock } from './profile-lock';
 
 type LaunchPersistentContextOptions = NonNullable<Parameters<typeof chromium.launchPersistentContext>[1]>;
 
-export interface LaunchOptions {
+interface LaunchOptions {
   profileDir: string;
   runId: string;
   channel: BrowserChannel;
@@ -24,7 +24,7 @@ export interface BrowserSession {
 
 /** Headed windows are 1200 wide and as tall as the screen; headless uses a fixed tall viewport. */
 export const HEADED_WIDTH = 1200;
-export const HEADLESS_VIEWPORT = { width: 1280, height: 1600 } as const;
+const HEADLESS_VIEWPORT = { width: 1280, height: 1600 } as const;
 
 /** Hides the automation flag; the browser's own user agent is kept. */
 export const LAUNCH_ARGS = ['--disable-blink-features=AutomationControlled'];

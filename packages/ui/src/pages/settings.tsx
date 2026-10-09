@@ -11,7 +11,7 @@ import { useStore } from '../store';
 
 const MARK = { ok: '✓', warn: '!', fail: '✗', skipped: '–' } as const;
 
-export function DoctorTable(props: { report: DoctorReport }) {
+function DoctorTable(props: { report: DoctorReport }) {
   return (
     <table class="doctor">
       <tbody>

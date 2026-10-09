@@ -5,13 +5,13 @@ import { z } from 'zod';
 // the server tightens them with the user-facing upper bounds (`LIMITS`) for what it accepts.
 
 export const ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
-export const PROFILE_ID = /^[a-z0-9][a-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_-]*$/;
-export const CATEGORY_PATH_PATTERN = /^\/c\/[^\s]+\/\d+$/;
+const PROFILE_ID = /^[a-z0-9][a-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const CATEGORY_PATH_PATTERN = /^\/c\/[^\s]+\/\d+$/;
 
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'expected HH:MM');
 const percent = z.number().min(0).max(100);
 
-export const triggerSchema = z.discriminatedUnion('kind', [
+const triggerSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('cron'), expression: z.string().min(1) }).strict(),
   z
     .object({
@@ -63,7 +63,7 @@ export const experimentsSchema = z
   .object({ useNewList: z.boolean(), useUnreadList: z.boolean(), refreshCategories: z.boolean(), smartRanked: z.boolean() })
   .strict();
 
-export const runModeSchema = z.discriminatedUnion('kind', [
+const runModeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('endless') }).strict(),
   z
     .object({ kind: z.literal('topics'), min: z.number().int().min(1), max: z.number().int().min(1) })

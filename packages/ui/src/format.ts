@@ -42,7 +42,7 @@ export function runModeText(m: RunMode): string {
 }
 
 /** Deep mode counts topics plus floors toward a number target; quick mode counts topics only. */
-export function targetProgress(stats: RunStats, browseMode: BrowseMode): number {
+function targetProgress(stats: RunStats, browseMode: BrowseMode): number {
   return browseMode === 'deep' ? stats.confirmed.topics + stats.confirmed.floors : stats.confirmed.topics;
 }
 

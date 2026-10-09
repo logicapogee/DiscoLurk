@@ -2,7 +2,7 @@ import type { RunStats } from './events';
 import type { BrowseMode, RunMode } from './terms';
 
 /** Quick mode counts entered topics only; deep mode counts topics plus confirmed floors. */
-export function countedProgress(stats: RunStats, browseMode: BrowseMode): number {
+function countedProgress(stats: RunStats, browseMode: BrowseMode): number {
   return browseMode === 'quick' ? stats.confirmed.topics : stats.confirmed.topics + stats.confirmed.floors;
 }
 

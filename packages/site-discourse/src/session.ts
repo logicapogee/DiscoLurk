@@ -7,7 +7,7 @@ import { PAGE_TIMEOUTS, PageView, TargetWatch, targetClosed } from './page';
 import { parseTimingsBody } from './parse';
 import { COMPOSER_DISCARD, COMPOSER_DISCARD_CONFIRM, EDITOR_SELECTORS, likeButtonOf, SELECTORS } from './selectors';
 
-export interface OpenForumOptions {
+interface OpenForumOptions {
   site: Site;
   profileDir: string;
   runId: string;
@@ -73,7 +73,7 @@ function composer(page: Page, call: PageCall, postsAcknowledged: () => number): 
 export const timingsUrlOf = (site: Pick<Site, 'baseUrl'>) => `${new URL(site.baseUrl).origin}/topics/timings`;
 
 /** The address the composer posts a new reply to. */
-export const postsUrlOf = (site: Pick<Site, 'baseUrl'>) => `${new URL(site.baseUrl).origin}/posts`;
+const postsUrlOf = (site: Pick<Site, 'baseUrl'>) => `${new URL(site.baseUrl).origin}/posts`;
 
 type FinishedRequest = Pick<Request, 'url' | 'method' | 'postData' | 'response'>;
 

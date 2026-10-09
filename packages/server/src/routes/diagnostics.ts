@@ -13,11 +13,11 @@ const RECENT_RUNS = 20;
  * Token-like values a log line may carry (a minted `serve` token, an Authorization header) are
  * replaced before the line leaves the machine.
  */
-export function redact(text: string): string {
+function redact(text: string): string {
   return text.replace(/(token[^:\n]*:\s*)\S+/gi, '$1<redacted>').replace(/(Bearer\s+)\S+/g, '$1<redacted>');
 }
 
-export interface DiagnosticsBundle {
+interface DiagnosticsBundle {
   generatedAt: string;
   doctor: unknown;
   settings: unknown;
@@ -34,7 +34,7 @@ export interface DiagnosticsBundle {
  * What a bug report needs and nothing that signs in: the doctor report, settings, sites, Profile
  * states (never their directories), recent runs with their event logs and the newest log files.
  */
-export async function collectDiagnostics(ctx: AppContext, doctor: () => Promise<unknown>): Promise<DiagnosticsBundle> {
+async function collectDiagnostics(ctx: AppContext, doctor: () => Promise<unknown>): Promise<DiagnosticsBundle> {
   const runs = ctx.history.list(RECENT_RUNS);
   const events: Record<string, string> = {};
   for (const r of runs.slice(0, RUN_LOGS)) events[r.runId] = toJsonl((await ctx.history.readEvents(r.runId)).events);

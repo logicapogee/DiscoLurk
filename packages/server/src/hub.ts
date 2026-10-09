@@ -13,7 +13,7 @@ export class HttpError extends Error {
   }
 }
 
-export type FrameListener = (frame: ServerFrame, encoded: string) => void;
+type FrameListener = (frame: ServerFrame, encoded: string) => void;
 
 /** Frames published here reach every authenticated WebSocket. */
 export class EventHub {

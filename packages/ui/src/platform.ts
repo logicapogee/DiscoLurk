@@ -6,8 +6,8 @@ export interface SidecarConnection {
   baseUrl: string;
   token: string;
   version: string;
-  /** Where the shell writes the sidecar's output. */
-  logPath: string;
+  /** The directory holding the sidecar's daily log files. */
+  logDir: string;
   /** Whether this build can install updates itself (Windows and Linux; never macOS). */
   updater: boolean;
 }
@@ -16,7 +16,7 @@ export class SidecarStartError extends Error {
   constructor(
     message: string,
     readonly output: string,
-    readonly logPath: string,
+    readonly logDir: string,
   ) {
     super(message);
   }
@@ -61,8 +61,8 @@ const desktop: Platform = {
     try {
       return await invoke<SidecarConnection>('connect_sidecar');
     } catch (err) {
-      const f = err as { message?: string; output?: string; logPath?: string };
-      throw new SidecarStartError(f.message ?? String(err), f.output ?? '', f.logPath ?? '');
+      const f = err as { message?: string; output?: string; logDir?: string };
+      throw new SidecarStartError(f.message ?? String(err), f.output ?? '', f.logDir ?? '');
     }
   },
   onRestarted(fn) {

@@ -23,7 +23,7 @@ const fileSchema = z
   })
   .strict();
 
-export const LEDGER_RETENTION_DAYS = 30;
+const LEDGER_RETENTION_DAYS = 30;
 
 /**
  * One visit ledger file per Profile, at the path `pathOf` gives it. Records older than the

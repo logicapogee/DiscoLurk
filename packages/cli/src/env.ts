@@ -132,7 +132,7 @@ export function envWarnings(env: Env): string[] {
     .map((name) => `${name} is not supported: automatic replies need their risk acknowledged in the UI or with lurk run --reply --i-understand-auto-reply-risk, so they stay off`);
 }
 
-export interface ServeEnv {
+interface ServeEnv {
   token: string | undefined;
   proxy: string | undefined;
 }

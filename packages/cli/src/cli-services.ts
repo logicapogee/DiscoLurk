@@ -15,7 +15,7 @@ async function catalogOnly(dataDir: string): Promise<{ catalog: SiteCatalog }> {
   return { catalog };
 }
 
-export interface CliServices {
+interface CliServices {
   hub: EventHub;
   catalog: SiteCatalog;
   runs: RunManager;

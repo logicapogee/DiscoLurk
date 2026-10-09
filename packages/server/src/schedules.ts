@@ -15,7 +15,7 @@ import { HttpError, type EventHub } from './hub';
 import type { Notify, ProfileGate, RunManager, SiteCatalog } from './runs';
 import { splitProfileId, type PresetStore } from './store';
 
-export const SCHEDULE_TICK_MS = 30_000;
+const SCHEDULE_TICK_MS = 30_000;
 
 /** Skips the user hears about; pausing and disabling are their own doing. */
 const SKIP_NOTICES: Partial<Record<SkipReason, string>> = {
@@ -23,7 +23,7 @@ const SKIP_NOTICES: Partial<Record<SkipReason, string>> = {
   'no-display': '当前没有图形界面，无法打开有头浏览器',
 };
 
-export interface ScheduleServiceDeps {
+interface ScheduleServiceDeps {
   clock: Clock;
   sleeper: InterruptibleSleeper;
   random?: RandomSource;
@@ -45,7 +45,7 @@ export interface ScheduleServiceDeps {
 }
 
 /** The run settings a schedule copies out of a UI preset; where and how it runs belong to the schedule. */
-export function runPresetOf(p: StoredPreset): RunPreset {
+function runPresetOf(p: StoredPreset): RunPreset {
   const { name: _n, profileId: _p, browserMode: _b, ...preset } = structuredClone(p);
   return preset;
 }

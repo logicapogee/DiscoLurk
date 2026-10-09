@@ -24,7 +24,7 @@ const DROP = [
   '[data-preloaded]',
 ];
 
-export interface SanitizeResult {
+interface SanitizeResult {
   html: string;
   /** Original → replacement, for scrubbing URLs and logs that accompany the fixture. */
   mapping: Map<string, string>;

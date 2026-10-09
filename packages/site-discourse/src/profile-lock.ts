@@ -6,7 +6,7 @@ import { RunError } from '@disco-lurk/core';
 export const LOCK_FILE = '.lurk-lock';
 
 /** Lock file contents. */
-export interface LockInfo extends LockOwner {
+interface LockInfo extends LockOwner {
   startedAt: string;
   runId: string;
 }
@@ -17,7 +17,7 @@ export interface ProfileLock {
   release(): Promise<void>;
 }
 
-export interface LockOptions {
+interface LockOptions {
   pid?: number;
   now?: () => number;
   probe?: LivenessProbe;

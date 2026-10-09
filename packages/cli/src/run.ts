@@ -1,5 +1,4 @@
 import { randomInt } from 'node:crypto';
-import { join } from 'node:path';
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import { FileCategoryStore, FileLedgerStore, validateReplyTemplates } from '@disco-lurk/config';
 import {
@@ -54,7 +53,7 @@ export function parseProfileId(profileId: string): { siteId: string; name: strin
   return { siteId, name };
 }
 
-export const MAX_RUN_MINUTES = LIMITS.timeModeMax;
+const MAX_RUN_MINUTES = LIMITS.timeModeMax;
 
 /** Run mode syntax: `endless`, `topics:<n>`, `topics:<min>-<max>`, `time:<minutes>`. */
 export function parseRunMode(raw: string): RunModeSpec {
@@ -104,7 +103,7 @@ export function parseOrUsageError<O extends ParseArgsOptionsConfig>(argv: string
   }
 }
 
-export interface LoginArgs {
+interface LoginArgs {
   site: Site;
   profile: string;
   channel: BrowserChannel;
@@ -114,7 +113,7 @@ function loginArgsFrom(v: { site?: string | undefined; profile: string; channel:
   return { site: parseSite(v.site), profile: parseProfileName(v.profile), channel: parseChannel(v.channel) };
 }
 
-export interface RunArgs extends LoginArgs {
+interface RunArgs extends LoginArgs {
   browseMode: BrowseMode;
   runMode: RunModeSpec;
   categories: string[] | null;
@@ -135,7 +134,7 @@ export function runModeArg(m: RunModeSpec): string {
 }
 
 /** The flag that acknowledges the reply risk; `--reply` requires it and it sets `reply.riskAcknowledged`. */
-export const REPLY_RISK_FLAG = 'i-understand-auto-reply-risk';
+const REPLY_RISK_FLAG = 'i-understand-auto-reply-risk';
 
 export const REPLY_RISK_NOTICE =
   'Automatic replies post real messages under your account. Sites may detect and penalise automated replies. ' +
@@ -155,7 +154,7 @@ export function parseCount(raw: string | undefined, flag: string, fallback: numb
 }
 
 /** `--extra-wait <min>-<max>` in seconds, or `off`. */
-export function parseExtraWait(raw: string | undefined): WaitRange & { enabled: boolean } {
+function parseExtraWait(raw: string | undefined): WaitRange & { enabled: boolean } {
   if (raw === undefined) return { ...DEFAULT_EXTRA_WAIT };
   if (raw === 'off') return { ...DEFAULT_EXTRA_WAIT, enabled: false };
   const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(raw);
@@ -165,7 +164,7 @@ export function parseExtraWait(raw: string | undefined): WaitRange & { enabled: 
 
 const EXPERIMENT_NAMES = Object.keys(EXPERIMENTS_OFF) as Array<keyof ExperimentFlags>;
 
-export function parseExperiments(raw: string | undefined): ExperimentFlags {
+function parseExperiments(raw: string | undefined): ExperimentFlags {
   const flags: ExperimentFlags = { ...EXPERIMENTS_OFF };
   for (const name of (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
     const known = EXPERIMENT_NAMES.find((n) => n === name);
@@ -239,7 +238,7 @@ export function presetArg(argv: readonly string[]): string | null {
   return v;
 }
 
-export interface PresetRunArgs {
+interface PresetRunArgs {
   presetId: string;
   /** Overrides the preset's Profile name. */
   profile: string | undefined;
@@ -363,7 +362,7 @@ export async function signIn(auth: AuthSession, signal: AbortSignal, log: (line:
   }
 }
 
-export interface CliEnvOptions {
+interface CliEnvOptions {
   channel: BrowserChannel;
   /** Fixed credentials, or the ones for each site a run opens. */
   credentials?: Credentials | ((site: Site) => Credentials | undefined);
@@ -450,7 +449,7 @@ const clock = (iso: string, start: number) => {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 };
 
-export function formatEvent(e: RunEvent, startMs: number): string | null {
+function formatEvent(e: RunEvent, startMs: number): string | null {
   const t = `[${clock(e.at, startMs)}]`;
   switch (e.type) {
     case 'state':
@@ -498,7 +497,7 @@ function levelLines(levels: RunResult['levels'], baseline: RunResult['baseline']
   return lines;
 }
 
-export interface Reporter {
+interface Reporter {
   /** `intro` is the human line naming site, Profile, browser and mode. */
   plan(plan: RunPlanSnapshot, intro: string): void;
   event(e: RunEvent): void;

@@ -17,7 +17,7 @@ import type { LevelSnapshot, MetricKey } from './metrics';
 import type { LedgerStore, VisitLedger } from './ledger';
 import { mergeDiscoveredCategories } from './plan';
 import { TimingsTally, toTenthsSeconds, type TimingsReceipt } from './timings';
-import type { AuthMode, AuthResult, AuthSession, ForumPort, RunCoordinator } from './ports';
+import type { AuthMode, AuthSession, ForumPort, RunCoordinator } from './ports';
 import { isAbortError, seededRandom, throwIfAborted, type RuntimeDeps } from './runtime';
 import type { BrowserMode, Category, Profile, ProfileHealth, ProfileId, RunPlanSnapshot, Site, SiteId } from './terms';
 
@@ -29,7 +29,7 @@ export interface ForumSession {
   close(): Promise<void>;
 }
 
-export interface OpenRequest {
+interface OpenRequest {
   site: Site;
   profile: Profile;
   browserMode: BrowserMode;

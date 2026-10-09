@@ -28,7 +28,7 @@ export const TRUST_LEVEL_SELECTORS = {
 
 const text = (el: Element | null | undefined) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
 
-export type TrustLevelPage = { state: 'loading' } | { state: 'ready'; snapshot: LevelSnapshot };
+type TrustLevelPage = { state: 'loading' } | { state: 'ready'; snapshot: LevelSnapshot };
 
 /**
  * The page renders a loader before its table; until a table row exists it reports

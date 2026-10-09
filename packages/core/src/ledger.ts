@@ -15,7 +15,7 @@ export interface VisitRecord {
   failures: number;
 }
 
-export type VisitOutcome = Omit<VisitRecord, 'failures'>;
+type VisitOutcome = Omit<VisitRecord, 'failures'>;
 
 /**
  * The visit ledger of one Profile. It is always written, so a skipped topic can be explained;
@@ -32,7 +32,7 @@ export interface LedgerStore {
 }
 
 /** Merges a visit into the topic's previous record. */
-export function mergeVisit(previous: VisitRecord | undefined, outcome: VisitOutcome): VisitRecord {
+function mergeVisit(previous: VisitRecord | undefined, outcome: VisitOutcome): VisitRecord {
   const failed = outcome.failure !== undefined;
   return { ...outcome, failures: (previous?.failures ?? 0) + (failed ? 1 : 0) };
 }

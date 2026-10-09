@@ -43,7 +43,7 @@ export const ESTIMATE: Partial<Record<MetricKey, (s: RunStats) => number>> = {
   repliesPosted: (s) => s.confirmed.repliedTopics,
 };
 
-export interface EstimatedMetric extends LevelMetric {
+interface EstimatedMetric extends LevelMetric {
   estimated: number | null;
 }
 

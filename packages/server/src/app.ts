@@ -21,7 +21,6 @@ export { defaultPreset } from './routes/runs';
 /** Messages to the desktop shell, which owns the tray and native notifications. */
 export interface ShellChannel {
   notify(title: string, body: string): void;
-  settings(settings: Settings): void;
   token(token: string): void;
   activeRuns(count: number): void;
 }
@@ -246,7 +245,6 @@ export function createApp(deps: AppDeps): LurkApp {
       path: '/settings',
       handle: async ({ body }) => {
         const next = await settings.update(parseBody(settingsPatchSchema, body) as Partial<Settings>);
-        deps.shell?.settings(next);
         hub.publish({ type: 'settings', settings: next });
         return ok(next);
       },
@@ -296,7 +294,6 @@ export function createApp(deps: AppDeps): LurkApp {
       const lost = await history.recoverOpen(new Date(deps.clock.now()).toISOString(), deps.processAlive);
       if (lost > 0) log(`history: ${lost} run(s) were in progress when the previous sidecar stopped; recorded as failed`);
       await catalog.refreshAll().catch((err: unknown) => log(`category load failed: ${String(err)}`));
-      deps.shell?.settings(settings.get());
       await schedules.start();
     },
     bindTokenRotation(fn) {

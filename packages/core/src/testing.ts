@@ -148,7 +148,7 @@ export interface FixtureForumOptions {
   timings?: (topic: TopicCandidate) => TimingsReceipt[];
 }
 
-export type FixtureCall =
+type FixtureCall =
   | { op: 'ensureAuthenticated'; mode: AuthMode }
   | { op: 'discoverCategories' }
   | { op: 'readProgress'; kind: 'initial' | 'final' }

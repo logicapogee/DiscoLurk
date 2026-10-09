@@ -7,9 +7,9 @@ import { targetReached } from './target';
 import type { TimingsTally } from './timings';
 import type { Category, ResolvedPreset, RunMode, RunPlanSnapshot, TopicCandidate, WaitRange } from './terms';
 
-export type BrowseEnd = 'target-reached' | 'cancelled' | 'no-progress' | 'error';
+type BrowseEnd = 'target-reached' | 'cancelled' | 'no-progress' | 'error';
 
-export interface BrowseInput {
+interface BrowseInput {
   plan: RunPlanSnapshot;
   forum: ForumPort;
   deps: RuntimeDeps;
@@ -23,7 +23,7 @@ export interface BrowseInput {
   ledger?: VisitLedger;
 }
 
-export type BrowseOutcome = { stats: RunStats } & ({ end: 'error'; failure: RunFailure } | { end: Exclude<BrowseEnd, 'error'> });
+type BrowseOutcome = { stats: RunStats } & ({ end: 'error'; failure: RunFailure } | { end: Exclude<BrowseEnd, 'error'> });
 
 /** Always taken, whatever the extra-wait switch says. */
 const AFTER_READING = { minSec: 1, maxSec: 2 };
@@ -36,7 +36,7 @@ const LIKE_LIMIT_AFTER = 2;
  * A time target's deadline: it aborts once the run's minutes are up, and never for other run
  * modes. `disarm` releases the timer when browsing ends first.
  */
-export function armDeadline(runMode: RunMode, deps: Pick<RuntimeDeps, 'sleeper'>, signal: AbortSignal): { signal: AbortSignal; disarm(): void } {
+function armDeadline(runMode: RunMode, deps: Pick<RuntimeDeps, 'sleeper'>, signal: AbortSignal): { signal: AbortSignal; disarm(): void } {
   const deadline = new AbortController();
   const disarm = new AbortController();
   if (runMode.kind === 'time') {

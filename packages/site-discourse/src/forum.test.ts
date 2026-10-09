@@ -7,7 +7,7 @@ import { expectedMiss, type ReadOnlyPage } from './page';
 import { StaticPage, timeoutError } from './testing';
 import { usernameFromUrl } from './auth';
 import { loginForm, timingsReceipt, timingsUrlOf } from './session';
-import { parseDocument, parseTimingsBody } from './parse';
+import { parseTimingsBody } from './parse';
 
 const site = { baseUrl: 'https://forum.docofcard.com' };
 

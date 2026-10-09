@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const LOG_KEEP_DAYS = 7;
+const LOG_KEEP_DAYS = 7;
 const LOG_NAME = /^sidecar-(\d{4}-\d{2}-\d{2})\.log$/;
 
 /** The local calendar day, so a file holds what the user saw as one day. */

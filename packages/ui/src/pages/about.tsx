@@ -34,8 +34,8 @@ export function AboutPage(props: { conn: SidecarConnection | null }) {
           <span>{!state.settings.updateCheck ? a.checkOff : !u ? copy.common.loading : u.latest === null ? a.checkFailed : u.newer ? a.newer(u.latest) : a.upToDate}</span>
           {props.conn && (
             <>
-              <span>{a.logFile}</span>
-              <code>{props.conn.logPath}</code>
+              <span>{a.logDir}</span>
+              <code>{props.conn.logDir}</code>
             </>
           )}
         </div>

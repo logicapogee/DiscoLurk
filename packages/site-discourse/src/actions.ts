@@ -60,7 +60,7 @@ export const REPLY = {
   confirmMs: 10_000,
   pollMs: 500,
 } as const;
-/** A discarded draft must leave the composer closed within `verifyMs`; after a stop the whole discard gets `afterStopMs` (S05). */
+/** A discarded draft must leave the composer closed within `verifyMs`; after a stop the whole discard gets `afterStopMs`. */
 export const DISCARD = { verifyMs: 3_000, pollMs: 250, afterStopMs: 2_000 } as const;
 export const FIRST_POST = { stepPx: -2500, settleMs: 400, maxSteps: 40 } as const;
 
@@ -73,7 +73,7 @@ export function templatePicker(templates: readonly string[], random: RandomSourc
   };
 }
 
-export interface ActionContext {
+interface ActionContext {
   /** The next reply text; null when no template is left to use. */
   nextTemplate(): string | null;
   warn(code: string, message: string): void;
@@ -145,7 +145,7 @@ async function like(run: ActionRun, postNumber: number, bucket: 'topic' | 'reply
     ctx.warn('like-timeout', `Floor ${postNumber}'s like button could not be scrolled to; it is not liked`);
     return;
   }
-  // Read again right before pressing (A03): only the unliked icon proves the press adds a like rather than taking one back.
+  // Read again right before pressing: only the unliked icon proves the press adds a like rather than taking one back.
   const state = await surface.likeState(postNumber);
   if (state !== 'unliked') {
     if (state === 'unknown') ctx.warn('like-state-unknown', `Floor ${postNumber} shows neither the liked nor the unliked icon; it is not liked`);
@@ -217,7 +217,7 @@ async function reply(run: ActionRun): Promise<void> {
     policy.onAction({ action: 'reply', bucket: 'reply-post', result: 'attempted' });
     try {
       await surface.submitReply();
-      // Posted means the site acknowledged a new post and the composer closed (A07).
+      // Posted means the site acknowledged a new post and the composer closed.
       posted = await holdsWithin(run, async () => surface.postsAcknowledged() > before && !(await surface.composerOpen()), REPLY.confirmMs, REPLY.pollMs);
     } catch (err) {
       if (!timedOut(err)) throw err;

@@ -2,7 +2,7 @@ import { LOGIN_WAIT_MS, systemClock, systemSleeper, type Clock, type Interruptib
 import { expectedMiss, type ReadOnlyPage } from './page';
 import { SELECTORS } from './selectors';
 
-export interface PollOptions {
+interface PollOptions {
   intervalMs: number;
   timeoutMs: number;
   clock?: Clock;
@@ -30,7 +30,7 @@ export async function waitUntil(opts: PollOptions, condition: () => Promise<bool
   return (await pollUntil(opts, async () => ((await condition()) ? true : null), signal)) ?? false;
 }
 
-export interface LoginWaitOptions extends Partial<PollOptions> {
+interface LoginWaitOptions extends Partial<PollOptions> {
   signal: AbortSignal;
 }
 

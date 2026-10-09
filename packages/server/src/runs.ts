@@ -100,10 +100,10 @@ export class SiteCatalog {
 }
 
 /** The shell side of notifications; absent outside the desktop sidecar. */
-export type NotifyKind = 'run-started' | 'run-completed' | 'run-failed' | 'needs-login' | 'run-skipped';
+type NotifyKind = 'run-started' | 'run-completed' | 'run-failed' | 'needs-login' | 'run-skipped';
 export type Notify = (kind: NotifyKind, title: string, body: string) => void;
 
-export interface RunManagerDeps {
+interface RunManagerDeps {
   coordinator: RunCoordinator;
   catalog: SiteCatalog;
   history: RunHistory;

@@ -1,6 +1,6 @@
 import type { Readable } from 'node:stream';
 
-export type Cleanup = () => Promise<void>;
+type Cleanup = () => Promise<void>;
 
 /** The shell allows 15 s for shutdown before it kills the sidecar. */
 export const SHUTDOWN_BUDGET_MS = 15_000;
@@ -68,7 +68,7 @@ export class SidecarLifecycle {
   }
 }
 
-export interface CrashWatch {
+interface CrashWatch {
   readonly crashed: boolean;
   dispose(): void;
 }

@@ -83,7 +83,7 @@ export interface LoginForm {
   submit(credentials: Credentials, signal: AbortSignal): Promise<void>;
 }
 
-export interface DiscourseForumOptions {
+interface DiscourseForumOptions {
   site: Site;
   page: ReadOnlyPage;
   titleLinks: TitleLinks;

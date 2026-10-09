@@ -194,7 +194,7 @@ export class FileScheduleStore implements ScheduleStore {
   }
 }
 
-export interface SchedulerLock {
+interface SchedulerLock {
   release(): Promise<void>;
 }
 
@@ -237,7 +237,7 @@ export async function acquireSchedulerLock(dir: string, probe: LivenessProbe = {
   throw new SchedulerLockedError(dir, -1);
 }
 
-export interface OpenSchedulerOptions {
+interface OpenSchedulerOptions {
   /** `<appData>/disco-lurk`; definitions, state and the lock live in its `schedules` directory. */
   dataDir: string;
   deps: Omit<SchedulerDeps, 'store'>;

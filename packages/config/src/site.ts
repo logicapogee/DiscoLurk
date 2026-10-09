@@ -35,7 +35,7 @@ export const siteSchema = z
     }
   });
 
-export type SiteValidation = { ok: true; site: Site } | { ok: false; issues: string[] };
+type SiteValidation = { ok: true; site: Site } | { ok: false; issues: string[] };
 
 export function validateSite(input: unknown): SiteValidation {
   const parsed = siteSchema.safeParse(input);

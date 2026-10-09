@@ -4,7 +4,7 @@ import { POST_WITH_NUMBER } from './selectors';
 
 export type LoadState = 'domcontentloaded' | 'commit';
 
-export interface WaitOptions {
+interface WaitOptions {
   timeout: number;
   state?: 'attached' | 'visible';
 }

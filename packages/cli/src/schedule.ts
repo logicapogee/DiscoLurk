@@ -8,7 +8,7 @@ import { EnvError, envScheduleArgv } from './env';
 import { appDataDir } from './paths';
 import { createReporter, EXIT, exitCodeFor, parseRunArgs, resolveCategories, UsageError } from './run';
 
-export const schedulesDir = (base = appDataDir()) => schedulesDirOf(base);
+const schedulesDir = (base = appDataDir()) => schedulesDirOf(base);
 
 export const SCHEDULE_USAGE = `  lurk schedule list [--json]
   lurk schedule add --name <name> [--id <id>] --site <id> [--profile <name>]
@@ -135,7 +135,7 @@ function historyLine(e: HistoryEntry, timeZone: string): string {
   return `${localTime(e.at, timeZone)} ${e.cause} ${e.outcome}${e.reason ? ` (${e.reason})` : ''}${ended}`;
 }
 
-export interface ListedSchedule {
+interface ListedSchedule {
   spec: ScheduleSpec;
   paused: boolean;
   next: RunPlanSnapshot | null;

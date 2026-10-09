@@ -71,7 +71,7 @@ export const LIKED_MARKERS = [
   { name: 'likedIcon', selector: SELECTORS.likedIcon },
 ] as const;
 
-/** The unliked icon (A03): the only positive evidence that a press adds a like instead of taking one back. */
+/** The unliked icon: the only positive evidence that a press adds a like instead of taking one back. */
 export const UNLIKED_ICON = `${SELECTORS.likeButton} .d-icon-d-unliked`;
 
 /** Not from the selector table: the reply count a list row shows (linuxdo's posts cell, docofcard's `gf-*` stat box). */

@@ -3,7 +3,7 @@ import type { LoginView } from './contract';
 import type { ProfileGate } from './runs';
 import { EventHub, HttpError } from './hub';
 
-export interface LoginManagerDeps {
+interface LoginManagerDeps {
   coordinator: RunCoordinator;
   gate: ProfileGate;
   hub: EventHub;

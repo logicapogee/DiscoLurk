@@ -17,7 +17,7 @@ const PAGES: Page[] = ['dashboard', 'run', 'profiles', 'schedules', 'history', '
 
 type Boot =
   | { phase: 'starting' }
-  | { phase: 'failed'; message: string; output: string; logPath: string }
+  | { phase: 'failed'; message: string; output: string; logDir: string }
   | { phase: 'token'; error?: string }
   | { phase: 'ready'; store: Store; conn: SidecarConnection | null; notice?: string };
 
@@ -123,8 +123,8 @@ export function App(props: { platform?: Platform; origin?: string }) {
       const conn = await platform.connect();
       ready(await open(new Api(conn.baseUrl, conn.token)), conn, notice);
     } catch (err) {
-      if (err instanceof SidecarStartError) setBoot({ phase: 'failed', message: err.message, output: err.output, logPath: err.logPath });
-      else setBoot({ phase: 'failed', message: err instanceof Error ? err.message : String(err), output: '', logPath: '' });
+      if (err instanceof SidecarStartError) setBoot({ phase: 'failed', message: err.message, output: err.output, logDir: err.logDir });
+      else setBoot({ phase: 'failed', message: err instanceof Error ? err.message : String(err), output: '', logDir: '' });
     }
   };
 
@@ -175,9 +175,9 @@ export function App(props: { platform?: Platform; origin?: string }) {
             <div class="status">
               <span class="dot fail" /> {copy.boot.failed}：{boot.message}
             </div>
-            {boot.logPath && (
+            {boot.logDir && (
               <p>
-                {copy.boot.logFile}：<code>{boot.logPath}</code>
+                {copy.boot.logDir}：<code>{boot.logDir}</code>
               </p>
             )}
             {boot.output && (

@@ -13,7 +13,6 @@ import type {
   RunPreset,
   RunResult,
   RunState,
-  ScheduleSpec,
   ScheduleView,
   Site,
   SiteId,
@@ -146,18 +145,11 @@ export interface ScheduleHistoryEntry {
   ended?: { at: string; outcome: RunResult['outcome']; stopCause: RunResult['stopCause']; failure?: string };
 }
 
-export type ScheduleSave = ScheduleSpec;
-
 export interface ServerInfo {
   version: string;
   /** No display: runs are forced headless and headed sign-in is refused. */
   headlessOnly: boolean;
   platform: string;
-}
-
-export interface ErrorBody {
-  error: string;
-  message?: string;
 }
 
 /** Frames the server pushes on `/events` after the first-frame auth. */

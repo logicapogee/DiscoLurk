@@ -42,7 +42,7 @@ export interface RunFailure {
   message: string;
 }
 
-export interface StatCounters {
+interface StatCounters {
   topics: number;
   floors: number;
   likes: number;
@@ -118,7 +118,7 @@ export function stopRequestOf(signal: AbortSignal): StopRequest {
   return named ?? 'user';
 }
 
-export function emptyCounters(): StatCounters {
+function emptyCounters(): StatCounters {
   return { topics: 0, floors: 0, likes: 0, replyLikes: 0, replies: 0 };
 }
 

@@ -1,7 +1,7 @@
 import { isAbortError, type InterruptibleSleeper, type ScheduleSpec } from '@disco-lurk/core';
 import type { PlanScheduler } from './scheduler';
 
-export interface DriveOptions {
+interface DriveOptions {
   scheduler: PlanScheduler;
   /** Re-read every step, so definitions edited by another process take effect without a restart. */
   loadSpecs(): Promise<ScheduleSpec[]>;

@@ -8,7 +8,7 @@ import { LOCK_FILE, profileLockLive, readLock } from '@disco-lurk/site-discourse
 
 const run = promisify(execFile);
 
-export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skipped';
+type CheckStatus = 'ok' | 'warn' | 'fail' | 'skipped';
 
 export interface DoctorCheck {
   id: string;
@@ -26,7 +26,7 @@ export interface DoctorReport {
   checks: DoctorCheck[];
 }
 
-export interface DoctorOptions {
+interface DoctorOptions {
   version: string;
   profilesDir: string;
   /** Checked for availability; ignored when `listeningPort` says the server already owns it. */
@@ -42,7 +42,7 @@ export interface DoctorOptions {
 }
 
 /** Playwright's own install locations for `channel: 'chrome' | 'msedge'`. */
-export function browserCandidates(channel: BrowserChannel, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+function browserCandidates(channel: BrowserChannel, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
   const home = env.HOME ?? '';
   if (platform === 'darwin') {
     const app = channel === 'chrome' ? 'Google Chrome.app/Contents/MacOS/Google Chrome' : 'Microsoft Edge.app/Contents/MacOS/Microsoft Edge';

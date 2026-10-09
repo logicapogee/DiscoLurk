@@ -55,7 +55,7 @@ async function windowsStartTime(pid: number): Promise<number | null> {
 }
 
 /** When a process started, in epoch ms; null when the platform cannot say or the process is gone. */
-export async function processStartTime(pid: number, platform = process.platform): Promise<number | null> {
+async function processStartTime(pid: number, platform = process.platform): Promise<number | null> {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
     if (platform === 'linux') return await linuxStartTime(pid);

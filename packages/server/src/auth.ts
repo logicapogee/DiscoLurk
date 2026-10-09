@@ -15,7 +15,7 @@ export function isLoopback(ip: string): boolean {
 }
 
 /** A crude entropy floor: a long token built from a handful of characters (`aaaa…`, `1212…`) is still guessable. */
-export const MIN_TOKEN_DISTINCT_CHARS = 16;
+const MIN_TOKEN_DISTINCT_CHARS = 16;
 
 export function tokenStrongEnough(token: string): boolean {
   return Buffer.byteLength(token, 'utf8') >= MIN_TOKEN_BYTES && new Set(token).size >= MIN_TOKEN_DISTINCT_CHARS;

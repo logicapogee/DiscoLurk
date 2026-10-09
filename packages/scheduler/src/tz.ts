@@ -18,7 +18,7 @@ function formatter(timeZone: string): Intl.DateTimeFormat {
   return f;
 }
 
-export interface LocalParts {
+interface LocalParts {
   date: string;
   minutes: number;
 }

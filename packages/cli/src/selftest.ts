@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 import type { BrowserChannel } from '@disco-lurk/core';
 
-export interface BrowserSelftestOptions {
+interface BrowserSelftestOptions {
   url: string;
   profileDir: string;
   screenshot: string;
@@ -10,7 +10,7 @@ export interface BrowserSelftestOptions {
   headed: boolean;
 }
 
-export interface BrowserSelftestResult {
+interface BrowserSelftestResult {
   ok: boolean;
   browserVersion: string;
   userAgent: string;

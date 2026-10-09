@@ -47,7 +47,7 @@ interface Harness {
   token: string;
   app: LurkApp;
   server: LurkServer;
-  shell: { notices: Array<[string, string]>; settings: Settings[]; tokens: string[]; active: number[] };
+  shell: { notices: Array<[string, string]>; tokens: string[]; active: number[] };
   locks: Map<string, number>;
   /** How the next sign-in check answers, per mode. */
   auth: { next: (mode: AuthMode, signal?: AbortSignal) => Promise<AuthResult> };
@@ -79,10 +79,9 @@ async function boot(opts: BootOptions = {}): Promise<Harness> {
   const runSite = opts.progress ? { ...site, progressSource: 'trust-level-docofcard' as const } : site;
   const profilesDir = join(dataDir, 'profiles');
   const locks = new Map<string, number>();
-  const shell: Harness['shell'] = { notices: [], settings: [], tokens: [], active: [] };
+  const shell: Harness['shell'] = { notices: [], tokens: [], active: [] };
   const channel: ShellChannel = {
     notify: (t, b) => shell.notices.push([t, b]),
-    settings: (s) => shell.settings.push(s),
     token: (t) => shell.tokens.push(t),
     activeRuns: (n) => shell.active.push(n),
   };
@@ -630,12 +629,11 @@ describe('server API', () => {
     expect(existsSync(join(h.dataDir, 'schedules', '.lurk-lock'))).toBe(true);
   });
 
-  it('saves settings, tells the shell and rotates the token', async () => {
+  it('saves settings and rotates the token', async () => {
     const h = await boot();
     const call = api(h);
     const put = await call<Settings>('PUT', '/settings', { notifyOnStart: false, notifications: false, historyLimit: 50 });
     expect(put.body).toMatchObject({ notifyOnStart: false, notifications: false, updateCheck: true, historyLimit: 50 });
-    expect(h.shell.settings.at(-1)?.notifyOnStart).toBe(false);
     expect((await call('PUT', '/settings', { closeToTray: false })).status).toBe(422);
     expect((await call('PUT', '/settings', { reading: { samplePerCategory: { min: 1, max: 51 }, extraWait: { enabled: true, minSec: 1, maxSec: 3 } } })).status).toBe(422);
     expect((await call('PUT', '/settings', { language: 'en' })).status).toBe(422);

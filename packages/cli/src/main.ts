@@ -56,7 +56,7 @@ ${SITES_USAGE}
   lurk serve [--host 127.0.0.1] [--port 8080] [--headless] [--origin <url>]... [--trusted-proxy <ip>]... [--ui <dir>] [--data <dir>]
              (remote web UI; a non-loopback --host requires LURK_TOKEN)
   lurk sidecar   (started by the desktop shell: prints a ready line, exits when stdin closes)
-  lurk capture --site <id> [--profile <id>] [--channel chrome|msedge] [--out <dir>] [--steps <a,b>]   (development: Phase 0 fixtures; steps: ${CAPTURE_STEPS.join(',')})
+  lurk capture --site <id> [--profile <id>] [--channel chrome|msedge] [--out <dir>] [--steps <a,b>]   (development: capture page fixtures; steps: ${CAPTURE_STEPS.join(',')})
   lurk --version`;
 
 async function doctor(argv: string[]): Promise<number> {

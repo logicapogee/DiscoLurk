@@ -110,6 +110,8 @@ export type ReadVerification = 'confirmed' | 'still-unread' | 'indeterminate' | 
 export interface ForumPort {
   readonly site: Site;
   ensureAuthenticated(mode: AuthMode, signal: AbortSignal): Promise<AuthResult>;
+  /** The signed-in user's name, from the site's own pages; null when none of them shows it. Leaves the current page. */
+  readUsername(signal: AbortSignal): Promise<string | null>;
   discoverCategories(signal: AbortSignal): Promise<Category[]>;
   /**
    * Resolves to null when the site's `progressSource` is `'none'`. `kind` tells the end-of-run

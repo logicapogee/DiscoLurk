@@ -375,6 +375,20 @@ describe('CAT-001 discovered categories (§7.1 step 2, §7.2)', () => {
     expect(t.categoryStore.saved.get('fixture')).toHaveLength(2);
   });
 
+  it('inspect reads the username from the forum once the sign-in check passes (B04)', async () => {
+    const t = setup({ forum: { username: 'alice' } });
+    const health = await t.time.drive(t.coordinator.inspect('fixture/main'));
+    expect(health).toMatchObject({ status: 'ready', username: 'alice' });
+    expect(t.forum.calls.map((c) => c.op)).toEqual(['ensureAuthenticated', 'readUsername']);
+  });
+
+  it('inspect reports ready without a username when no page shows one', async () => {
+    const t = setup();
+    const health = await t.time.drive(t.coordinator.inspect('fixture/main'));
+    expect(health.status).toBe('ready');
+    expect(health).not.toHaveProperty('username');
+  });
+
   it('inspect maps a held lock to locked and a lost session to needs-auth', async () => {
     const locked = setup({
       open: () => {

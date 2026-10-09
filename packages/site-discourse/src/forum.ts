@@ -27,7 +27,7 @@ import {
   type WaitRange,
 } from '@disco-lurk/core';
 import { PageActionSurface, performActions, templatePicker, type Composer, type LikeButton } from './actions';
-import { LOGIN_POLL_MS, pollUntil, usernameFromUrl, waitForCurrentUser, waitUntil } from './auth';
+import { LOGIN_POLL_MS, pollUntil, usernameFromUrl, usernameOnPage, waitForCurrentUser, waitUntil } from './auth';
 import { expectedMiss, type LoadState, type ReadOnlyPage } from './page';
 import { categoryLinks, floorCounterFromText, parseDocument, parseTopicList, type CategoryLink, type FloorReading } from './parse';
 import { parseConnect } from './progress/connect-linuxdo';
@@ -283,6 +283,11 @@ export class DiscourseForum implements ForumPort {
     const checked = await this.check(signal);
     if (mode === 'credentials' && checked.status === 'needs-auth' && this.opts.login) return this.passwordLogin(this.opts.login, signal);
     return checked;
+  }
+
+  async readUsername(signal: AbortSignal): Promise<string | null> {
+    await this.goto(this.url('/my/activity'), signal);
+    return untilAbort(usernameOnPage(this.opts.page), signal);
   }
 
   /**

@@ -318,9 +318,10 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     try {
       const auth = await session.forum.ensureAuthenticated(mode, signal);
       if (auth.status !== 'authenticated') return { profileId, status: 'needs-auth', checkedAt: this.checkedAt() };
+      const username = auth.username ?? (await session.forum.readUsername(signal));
       // The health check is where a discovered site reads its categories.
       if (site.categorySource === 'discovered') await this.refreshCategories(site, session.forum, signal, () => {});
-      return { profileId, status: 'ready', ...(auth.username ? { username: auth.username } : {}), checkedAt: this.checkedAt() };
+      return { profileId, status: 'ready', ...(username ? { username } : {}), checkedAt: this.checkedAt() };
     } catch (err) {
       // A check that ran out of time, lost its browser or met a page failure cannot vouch for the Profile.
       if (err instanceof RunError || signal.aborted || isAbortError(err)) return { profileId, status: 'broken', checkedAt: this.checkedAt() };

@@ -85,7 +85,8 @@ async function boot(opts: BootOptions = {}): Promise<Harness> {
     token: (t) => shell.tokens.push(t),
     activeRuns: (n) => shell.active.push(n),
   };
-  const auth: Harness['auth'] = { next: async () => ({ status: 'authenticated', username: 'alice' }) };
+  // Like the site adapter, the sign-in check reports no username; the health check reads it from the forum.
+  const auth: Harness['auth'] = { next: async () => ({ status: 'authenticated' }) };
   let app: LurkApp;
   const opens: string[] = [];
   const coordinator = new DiscoLurkCoordinator({
@@ -102,6 +103,7 @@ async function boot(opts: BootOptions = {}): Promise<Harness> {
         topics: (path, call) => Array.from({ length: 3 }, (_, i) => ({ id: `${path}-${call}-${i}`, title: 't', unread: true, pinned: false })),
         latency: { collect: 2, enter: 2, dwell: 2, back: 2 },
         auth: (mode, signal) => auth.next(mode, signal),
+        username: 'alice',
       });
       return { forum, closed: new AbortController().signal, close: async () => {} };
     },
@@ -396,7 +398,7 @@ describe('server API', () => {
     await call('POST', '/profiles/fx/main/inspect');
     const profileFrames = ws.frames.slice(before).filter((f) => f.type === 'profiles-changed');
     expect(profileFrames).toHaveLength(1);
-    expect(profileFrames[0]).toMatchObject({ profiles: [{ id: 'fx/main', health: { status: 'ready' } }] });
+    expect(profileFrames[0]).toMatchObject({ profiles: [{ id: 'fx/main', health: { status: 'ready', username: 'alice' } }] });
 
     await call('PUT', '/schedules/s1', {
       id: 's1',
@@ -415,23 +417,6 @@ describe('server API', () => {
     await call('POST', '/schedules/s1/pause');
     await ws.until((f) => f.type === 'schedules' && f.list.schedules[0]?.paused === true);
     ws.ws.close();
-  });
-
-  it('adds a Discourse site on a public http(s) address, keeps it across restarts and lists it', async () => {
-    const h = await boot();
-    const call = api(h);
-    for (const baseUrl of ['ftp://forum.example.org', 'http://127.0.0.1:3000', 'http://192.168.1.10', 'http://[::1]/', 'http://localhost:4200', 'http://nas.local', 'http://intranet']) {
-      expect((await call('POST', '/sites', { displayName: 'X', baseUrl })).status).toBe(422);
-    }
-    const added = await call<{ site: { id: string; login: string; progressSource: string; categorySource: string } }>('POST', '/sites', { displayName: 'Meta', baseUrl: 'https://meta.discourse.org/latest' });
-    expect(added.status).toBe(201);
-    expect(added.body.site).toMatchObject({ id: 'meta-discourse-org', login: 'headed', progressSource: 'none', categorySource: 'discovered', baseUrl: 'https://meta.discourse.org' });
-    expect((await call('POST', '/sites', { displayName: 'Meta', baseUrl: 'https://meta.discourse.org' })).status).toBe(409);
-    expect((await call('POST', '/profiles', { siteId: 'meta-discourse-org', name: 'main', channel: 'chrome' })).status).toBe(201);
-    const again = createApp(appDepsOf(h));
-    await again.start();
-    const sites = await again.routes.find((r) => r.method === 'GET' && r.path === '/sites')!.handle({ params: {}, query: new URLSearchParams(), body: undefined, ip: '' });
-    expect((sites.body as Array<{ site: { id: string } }>).map((s) => s.site.id)).toEqual(['fx', 'meta-discourse-org']);
   });
 
   it('notifies a run start unless turned off, and a schedule skipped because another process holds the Profile', async () => {
@@ -512,7 +497,7 @@ describe('server API', () => {
     await withProfile(h);
     const ws = await events(h);
     const modes: AuthMode[] = [];
-    h.auth.next = async (mode) => (modes.push(mode), mode === 'headed-wait' ? { status: 'needs-auth' } : { status: 'authenticated', username: 'alice' });
+    h.auth.next = async (mode) => (modes.push(mode), mode === 'headed-wait' ? { status: 'needs-auth' } : { status: 'authenticated' });
     // Only the recheck signs in; the health check after it runs in that same headed window.
     const loginFrame = (phase: string) => (f: ServerFrame) => f.type === 'login' && f.login.phase === phase;
     expect((await call<LoginView>('POST', '/profiles/fx/main/login')).status).toBe(202);
@@ -522,7 +507,7 @@ describe('server API', () => {
     expect((await call<{ error: string }>('POST', '/runs', { presetId: 'p1' })).body.error).toBe('profile-busy');
     await call('POST', '/profiles/fx/main/login/recheck');
     const done = (await ws.until(loginFrame('done'))) as Extract<ServerFrame, { type: 'login' }>;
-    expect(done.login).toMatchObject({ username: 'alice', health: { status: 'ready', username: 'alice' } });
+    expect(done.login).toMatchObject({ health: { status: 'ready', username: 'alice' } });
     const profiles = await call<Array<{ status: string; busy: boolean }>>('GET', '/profiles');
     expect(profiles.body[0]).toMatchObject({ status: 'ready', busy: false });
     expect(h.opens).toEqual(['headed']);

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright-core';
 import { describe, expect, it } from 'vitest';
 import { DiscoLurkCoordinator, type RunEvent, type RunPlanSnapshot } from '@disco-lurk/core';
@@ -86,6 +88,48 @@ describe('username from the /my redirect (B04)', () => {
     expect(usernameFromUrl('https://forum.docofcard.com/u/alice/summary')).toBe('alice');
     expect(usernameFromUrl('https://linux.do/u/%E5%BC%A0%E4%B8%89/activity')).toBe('张三');
     expect(usernameFromUrl('https://linux.do/my/activity')).toBeNull();
+  });
+});
+
+describe('DiscourseForum.readUsername (B04)', () => {
+  const fixture = (siteId: string, file: string) => readFileSync(fileURLToPath(new URL(`../../../tests/fixtures/${siteId}/${file}`, import.meta.url)), 'utf8');
+  const docofcard = fixtureSite({ baseUrl: 'https://forum.docofcard.com' });
+  const capturedRedirect: string = JSON.parse(fixture('docofcard', 'capture.json')).steps.progress.redirectedTo;
+  const signedIn = '<header><a id="current-user"><img class="avatar" title="" alt=""></a></header>';
+
+  /** A page that lands on `to` with `html` once it opens `/my/activity`. */
+  function redirecting(from: string, to: string, html: string) {
+    const page = new StaticPage(from, signedIn);
+    page.onNavigate = (kind, url) => {
+      if (kind === 'goto' && url?.endsWith('/my/activity')) Object.assign(page, { address: to, html });
+    };
+    return page;
+  }
+
+  it('docofcard: reads the name from the captured /u/<name>/... redirect', async () => {
+    const page = redirecting('https://forum.docofcard.com/', capturedRedirect, fixture('docofcard', 'trust-level.html'));
+    const { forum } = forumWith(page, { site: docofcard });
+    expect(await forum.readUsername(new AbortController().signal)).toBe('user1');
+    expect(page.navigations).toEqual(['goto https://forum.docofcard.com/my/activity']);
+  });
+
+  it('linux.do: reads and decodes the name from the /u/<name>/activity redirect', async () => {
+    const page = redirecting('https://linux.do/', 'https://linux.do/u/%E5%BC%A0%E4%B8%89/activity', signedIn);
+    const { forum } = forumWith(page);
+    expect(await forum.readUsername(new AbortController().signal)).toBe('张三');
+    expect(page.navigations).toEqual(['goto https://linux.do/my/activity']);
+  });
+
+  it('falls back to the profile header when the address shows no /u/<name>', async () => {
+    const page = redirecting('https://forum.docofcard.com/', 'https://forum.docofcard.com/my/activity', fixture('docofcard', 'trust-level.html'));
+    const { forum } = forumWith(page, { site: docofcard });
+    expect(await forum.readUsername(new AbortController().signal)).toBe('user1');
+  });
+
+  it('is null when neither the address nor the page names the user', async () => {
+    const page = redirecting('https://linux.do/', 'https://linux.do/my/activity', signedIn);
+    const { forum } = forumWith(page);
+    expect(await forum.readUsername(new AbortController().signal)).toBeNull();
   });
 });
 

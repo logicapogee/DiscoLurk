@@ -136,6 +136,8 @@ export interface FixtureForumOptions {
   latency?: { collect?: number; enter?: number; afterClick?: number; dwell?: number; back?: number };
   /** Answers `ensureAuthenticated`; defaults to authenticated at once. */
   auth?: (mode: AuthMode, signal: AbortSignal) => Promise<AuthResult>;
+  /** What `readUsername` finds; defaults to null. */
+  username?: string | null;
   /** Answers `readProgress`; defaults to null, as for `progressSource: 'none'`. */
   progress?: (kind: 'initial' | 'final', signal: AbortSignal) => Promise<LevelSnapshot | null>;
   /** What `discoverCategories` finds; defaults to none. */
@@ -150,6 +152,7 @@ export interface FixtureForumOptions {
 
 type FixtureCall =
   | { op: 'ensureAuthenticated'; mode: AuthMode }
+  | { op: 'readUsername' }
   | { op: 'discoverCategories' }
   | { op: 'readProgress'; kind: 'initial' | 'final' }
   | { op: 'collectTopics'; category: string }
@@ -181,6 +184,11 @@ export class FixtureForum implements ForumPort {
   async ensureAuthenticated(mode: AuthMode, signal: AbortSignal): Promise<AuthResult> {
     this.calls.push({ op: 'ensureAuthenticated', mode });
     return this.opts.auth ? this.opts.auth(mode, signal) : { status: 'authenticated' };
+  }
+
+  async readUsername(): Promise<string | null> {
+    this.calls.push({ op: 'readUsername' });
+    return this.opts.username ?? null;
   }
 
   async discoverCategories(): Promise<Category[]> {

@@ -55,6 +55,13 @@ export async function waitForCurrentUser(page: ReadOnlyPage, opts: LoginWaitOpti
   return waitUntil({ intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_WAIT_MS, ...poll }, present, signal);
 }
 
+const ignoreMiss = (err: unknown) => {
+  if (!expectedMiss(err)) throw err;
+};
+
+/** The username line of the profile header every `/u/<name>/...` page shows. */
+const PROFILE_USERNAME = '.user-profile-names .username';
+
 const USER_PATH = /\/u\/([^/?#]+)/;
 
 /** The username in a `/u/<name>` address, which is where `/my/...` pages redirect to. */
@@ -63,9 +70,21 @@ export function usernameFromUrl(url: string): string | null {
   return m ? decodeURIComponent(m[1]!) : null;
 }
 
-/** The username comes from where `/my/...` redirects, never from the avatar's title. */
+/**
+ * The username of the page a `/my/...` address landed on: its `/u/<name>` address, else the profile
+ * header's username. The avatar's title is empty on some sites, so it is never read.
+ */
+export async function usernameOnPage(page: ReadOnlyPage): Promise<string | null> {
+  await page.waitForURL(USER_PATH, { timeout: 15_000 }).catch(ignoreMiss);
+  const fromUrl = usernameFromUrl(page.url());
+  if (fromUrl) return fromUrl;
+  await page.waitFor(PROFILE_USERNAME, { state: 'attached', timeout: 5_000 }).catch(ignoreMiss);
+  const fromHeader = (await page.text(PROFILE_USERNAME))?.replace(/^@/, '').trim();
+  return fromHeader || null;
+}
+
+/** Opens `/my/activity`, which redirects to the signed-in user's own `/u/<name>/activity`. */
 export async function readUsername(page: ReadOnlyPage, baseUrl: string): Promise<string | null> {
   await page.goto(new URL('/my/activity', baseUrl).href);
-  await page.waitForURL(USER_PATH, { timeout: 15_000 }).catch(() => {});
-  return usernameFromUrl(page.url());
+  return usernameOnPage(page);
 }

@@ -379,6 +379,8 @@ export function formatEvent(e: RunEvent, startMs: number): string | null {
       return `${t}   timings ${e.postsReported} posts, ${e.topicSeconds} s`;
     case 'stats':
       return null;
+    case 'levels':
+      return `${t} site progress (${e.kind}): ${levelSummary(e.snapshot)} · ${e.snapshot.metrics.length} metrics`;
     case 'warning':
       return `${t} warning ${e.code}: ${e.message}`;
     case 'error':
@@ -386,12 +388,16 @@ export function formatEvent(e: RunEvent, startMs: number): string | null {
   }
 }
 
+/** Who, which level and how far, from a progress page snapshot. */
+function levelSummary(s: LevelSnapshot): string {
+  return [s.username ? `@${s.username}` : null, s.level !== undefined ? `level ${s.level}` : null, s.percent !== undefined ? `${s.percent}%` : null].filter(Boolean).join(' · ');
+}
+
 function levelLines(levels: RunResult['levels'], baseline: RunResult['baseline']): string[] {
   const { initial, final } = levels;
   if (baseline === 'not-applicable' && !final) return ['site progress: this site has no progress page'];
-  const head = (s: LevelSnapshot | null) =>
-    s ? [s.username ? `@${s.username}` : null, s.level !== undefined ? `level ${s.level}` : null, s.percent !== undefined ? `${s.percent}%` : null].filter(Boolean).join(' · ') : '';
-  const lines = [`site progress (${final?.source ?? initial?.source ?? 'unread'})${baseline === 'missing' ? ' — no baseline' : ''}: ${head(final ?? initial)}`];
+  const shown = final ?? initial;
+  const lines = [`site progress (${final?.source ?? initial?.source ?? 'unread'})${baseline === 'missing' ? ' — no baseline' : ''}: ${shown ? levelSummary(shown) : ''}`];
   const labels = [...new Set([...(initial?.metrics ?? []), ...(final?.metrics ?? [])].map((m) => m.label))];
   for (const label of labels) {
     const a = initial?.metrics.find((m) => m.label === label);

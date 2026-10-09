@@ -269,6 +269,32 @@ describe('PROGRESS-001 final report from the site (S07, S08)', () => {
     expect(out.stats.reported).toEqual({ topicsViewed: { initial: 21, final: 24 }, postsRead: { initial: 175, final: 190 } });
   });
 
+  it('sends each successful progress read as a levels event, initial before browsing and final after it', async () => {
+    const t = setup({ forum: { progress: async (k) => level(k === 'initial' ? 21 : 24, 175) } });
+    await t.run(plan({ kind: 'topics', count: 3 }));
+    const levels = t.events.filter((e) => e.type === 'levels');
+    expect(levels.map((e) => [e.kind, e.snapshot.metrics[0]!.current])).toEqual([
+      ['initial', 21],
+      ['final', 24],
+    ]);
+    const states = t.events.map((e) => (e.type === 'state' ? e.state : e.type === 'levels' ? `levels:${e.kind}` : null)).filter(Boolean);
+    expect(states.indexOf('levels:initial')).toBeLessThan(states.indexOf('browsing'));
+    expect(states.indexOf('levels:final')).toBeGreaterThan(states.indexOf('verifying'));
+  });
+
+  it('sends no levels event for a failed read', async () => {
+    const t = setup({
+      forum: {
+        progress: async (k) => {
+          if (k === 'initial') throw new RunError('page-timeout', 'slow');
+          return level(24, 190);
+        },
+      },
+    });
+    await t.run(plan({ kind: 'topics', count: 2 }));
+    expect(t.events.filter((e) => e.type === 'levels').map((e) => e.kind)).toEqual(['final']);
+  });
+
   it('reports only attempted / confirmed for a site without a progress page', async () => {
     const { run, forum } = setup({ site: site({ progressSource: 'none' }) });
     const out = await run(plan({ kind: 'topics', count: 2 }));
@@ -462,6 +488,12 @@ describe('S07 connect lag: one interruptible re-read of the final progress', () 
     expect(out.levels.final?.metrics[0]?.current).toBe(103);
     expect(lagWarnings()).toHaveLength(1);
     expect(t.closed()).toBe(1);
+    // The re-read is sent as a second final snapshot.
+    expect(t.events.filter((e) => e.type === 'levels').map((e) => [e.kind, e.snapshot.metrics[0]!.current])).toEqual([
+      ['initial', 100],
+      ['final', 100],
+      ['final', 103],
+    ]);
   });
 
   it('reads only once when the site already shows every confirmed topic', async () => {

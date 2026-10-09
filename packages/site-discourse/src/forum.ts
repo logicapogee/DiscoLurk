@@ -1,5 +1,6 @@
 import {
   isAbortError,
+  LOGIN_WAIT_MS,
   pauseBetween,
   RunError,
   throwIfAborted,
@@ -25,7 +26,7 @@ import {
   type TopicVisit,
 } from '@disco-lurk/core';
 import { PageActionSurface, performActions, templatePicker, type Composer, type LikeButton } from './actions';
-import { LOGIN_POLL_MS, LOGIN_TIMEOUT_MS, pollUntil, usernameFromUrl, waitForCurrentUser } from './auth';
+import { LOGIN_POLL_MS, pollUntil, usernameFromUrl, waitForCurrentUser } from './auth';
 import { expectedMiss, type LoadState, type ReadOnlyPage } from './page';
 import { categoryLinks, floorCounterFromText, parseDocument, parseTopicList, type CategoryLink, type FloorReading } from './parse';
 import { parseConnect } from './progress/connect-linuxdo';
@@ -509,13 +510,13 @@ export class DiscourseForum implements ForumPort {
     if (this.opts.headless) {
       throw new RunError('needs-auth', `${host} asks to authorize access; run once with a headed window (--headed) and approve it there`);
     }
-    this.opts.warn('awaiting-authorization', `${host} asks to authorize access; approve it in the browser window (waiting up to ${LOGIN_TIMEOUT_MS / 60_000} minutes)`);
+    this.opts.warn('awaiting-authorization', `${host} asks to authorize access; approve it in the browser window (waiting up to ${LOGIN_WAIT_MS / 60_000} minutes)`);
     const authorized = await pollUntil(
-      { intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_TIMEOUT_MS, clock: this.opts.deps.clock, sleeper: this.opts.deps.sleeper },
+      { intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_WAIT_MS, clock: this.opts.deps.clock, sleeper: this.opts.deps.sleeper },
       async () => ((await this.count(CONNECT_READY)) > 0 ? true : null),
       signal,
     );
-    if (!authorized) throw new RunError('needs-auth', `${host} authorization was not given within ${LOGIN_TIMEOUT_MS / 60_000} minutes`);
+    if (!authorized) throw new RunError('needs-auth', `${host} authorization was not given within ${LOGIN_WAIT_MS / 60_000} minutes`);
   }
 
   /** Docofcard: the table's rows mark readiness; the loader stays in the DOM after they render. */

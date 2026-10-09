@@ -76,7 +76,7 @@ async function browserCheck(channel: BrowserChannel, platform: NodeJS.Platform, 
       title,
       status: channel === 'chrome' ? 'warn' : 'skipped',
       detail: '未找到',
-      fix: `安装 ${title}，或在设置中手动指定浏览器路径`,
+      fix: '安装 Google Chrome 或 Microsoft Edge 后重试',
     };
   }
   let version = '版本未知';

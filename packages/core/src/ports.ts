@@ -17,6 +17,9 @@ import type {
 
 export type AuthMode = 'headed-wait' | 'headless-check' | 'credentials';
 
+/** How long `headed-wait` and a site's authorization page wait for the person at the window. */
+export const LOGIN_WAIT_MS = 300_000;
+
 /** Page and network failures are thrown as `RunError`; these are the answers a working page can give. */
 export type AuthResult =
   | { status: 'authenticated'; username?: string }

@@ -178,6 +178,17 @@ describe('CLI-002 run output (§11.1)', () => {
     expect(lines).toHaveLength(3);
   });
 
+  it('prints a levels event as one summary line in human output and as-is in JSON', () => {
+    const snapshot = { source: 'connect-linuxdo' as const, username: 'alice', level: 2, percent: 45, metrics: [{ label: '浏览话题', key: 'topicsViewed' as const, current: 120, required: 500 }] };
+    const event = { type: 'levels' as const, at: '2026-10-08T00:00:03.000Z', kind: 'initial' as const, snapshot };
+    const human: string[] = [];
+    createReporter(false, Date.parse('2026-10-08T00:00:00Z'), (l) => human.push(l)).event(event);
+    expect(human).toEqual(['[00:03] site progress (initial): @alice · level 2 · 45% · 1 metrics']);
+    const json: string[] = [];
+    createReporter(true, 0, (l) => json.push(l)).event(event);
+    expect(JSON.parse(json[0]!)).toEqual(event);
+  });
+
   it('S08: adds the lag note only when the site shows fewer topics than were confirmed', () => {
     const withViewed = (confirmed: number, initial: number, final: number): RunResult => {
       const stats = emptyStats();

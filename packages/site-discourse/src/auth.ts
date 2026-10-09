@@ -1,4 +1,4 @@
-import { systemClock, systemSleeper, type Clock, type InterruptibleSleeper } from '@disco-lurk/core';
+import { LOGIN_WAIT_MS, systemClock, systemSleeper, type Clock, type InterruptibleSleeper } from '@disco-lurk/core';
 import { expectedMiss, type ReadOnlyPage } from './page';
 import { SELECTORS } from './selectors';
 
@@ -29,9 +29,8 @@ export interface LoginWaitOptions extends Partial<PollOptions> {
   signal: AbortSignal;
 }
 
-/** Interval and ceiling of the headed login poll. */
+/** Interval of the headed login poll; its ceiling is the kernel's `LOGIN_WAIT_MS`. */
 export const LOGIN_POLL_MS = 5_000;
-export const LOGIN_TIMEOUT_MS = 300_000;
 
 /**
  * Watches for `#current-user` without ever reloading, so a captcha, password entry or
@@ -48,7 +47,7 @@ export async function waitForCurrentUser(page: ReadOnlyPage, opts: LoginWaitOpti
         throw err;
       },
     );
-  return (await pollUntil({ intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_TIMEOUT_MS, ...poll }, present, signal)) ?? false;
+  return (await pollUntil({ intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_WAIT_MS, ...poll }, present, signal)) ?? false;
 }
 
 const USER_PATH = /\/u\/([^/?#]+)/;

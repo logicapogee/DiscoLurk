@@ -184,7 +184,10 @@ export class DiscoLurkCoordinator implements RunCoordinator {
         const readFinal = async () => {
           const snapshot = await forum.readProgress('final', AbortSignal.any([AbortSignal.timeout(TIMEOUTS.verifyMs), session.closed, ...exitSignals]));
           levels.final = snapshot;
-          if (snapshot) stats.reported = reportedMetrics(levels.initial, snapshot);
+          if (snapshot) {
+            stats.reported = reportedMetrics(levels.initial, snapshot);
+            emit({ type: 'levels', at: at(), kind: 'final', snapshot });
+          }
         };
         try {
           await readFinal();
@@ -238,6 +241,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
         if (runSite.progressSource !== 'none') {
           try {
             levels.initial = await forum.readProgress('initial', live);
+            if (levels.initial) emit({ type: 'levels', at: at(), kind: 'initial', snapshot: levels.initial });
           } catch (err) {
             const why = classify(err, live);
             if (why.kind === 'stop') throw err;

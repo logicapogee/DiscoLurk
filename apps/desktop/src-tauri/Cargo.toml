@@ -1,5 +1,6 @@
 [package]
 name = "disco-lurk"
+version = "0.1.0"
 description = "DiscoLurk desktop shell"
 edition = "2021"
 publish = false

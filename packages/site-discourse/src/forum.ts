@@ -334,6 +334,27 @@ export class DiscourseForum implements ForumPort {
     return (await this.challenged()) ? { status: 'challenge-detected' } : { status: 'needs-auth' };
   }
 
+  /**
+   * Whether `selector` renders. A challenge page in a headed window is the person's to solve, so it is
+   * waited out like a login, never reloading, and the page is judged again once the challenge is gone.
+   */
+  private async rendersPastChallenge(selector: string, timeout: number, signal: AbortSignal): Promise<boolean> {
+    if (await this.appears(selector, timeout, signal)) return true;
+    if (this.opts.headless || !(await this.challenged())) return false;
+    const url = this.opts.page.url();
+    const minutes = LOGIN_WAIT_MS / 60_000;
+    this.opts.warn('awaiting-challenge', `Challenge page at ${url}; solve it in the browser window (waiting up to ${minutes} minutes)`);
+    await untilAbort(this.opts.page.bringToFront(), signal);
+    const cleared = await waitUntil(
+      { intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_WAIT_MS, clock: this.opts.deps.clock, sleeper: this.opts.deps.sleeper },
+      async () => !(await this.challenged()),
+      signal,
+    );
+    if (!cleared) throw new RunError('challenge-detected', `Challenge page at ${url} was not solved within ${minutes} minutes`);
+    this.opts.warn('challenge-cleared', `Challenge at ${url} solved; continuing`);
+    return this.appears(selector, timeout, signal);
+  }
+
   /** A list or categories page that never rendered: a lost session or a challenge explains it better than "empty". */
   private async explainMissingPage(): Promise<void> {
     if (await this.challenged()) throw new RunError('challenge-detected', `Challenge page at ${this.opts.page.url()}`);
@@ -342,7 +363,7 @@ export class DiscourseForum implements ForumPort {
 
   async discoverCategories(signal: AbortSignal): Promise<Category[]> {
     await this.goto(this.url('/categories'), signal);
-    if (!(await this.appears(CATEGORY_LINK, TIMEOUTS.listMs, signal))) {
+    if (!(await this.rendersPastChallenge(CATEGORY_LINK, TIMEOUTS.listMs, signal))) {
       await this.explainMissingPage();
       return [];
     }
@@ -367,7 +388,7 @@ export class DiscourseForum implements ForumPort {
     await this.goto(listUrl, signal);
     this.listUrl = listUrl;
     const rendered = source === 'category' ? SELECTORS.topicRow : `${SELECTORS.topicRow}, ${LIST_END}`;
-    if (!(await this.appears(rendered, TIMEOUTS.listMs, signal)) || (await this.count(SELECTORS.topicRow)) === 0) {
+    if (!(await this.rendersPastChallenge(rendered, TIMEOUTS.listMs, signal)) || (await this.count(SELECTORS.topicRow)) === 0) {
       await this.explainMissingPage();
       return { category, source, topics: [] };
     }
@@ -534,7 +555,7 @@ export class DiscourseForum implements ForumPort {
   /** Docofcard: the table's rows mark readiness; the loader stays in the DOM after they render. */
   private async readTrustLevel(url: string, signal: AbortSignal): Promise<LevelSnapshot> {
     const untilRows = async () => {
-      if (await this.appears(TRUST_LEVEL_SELECTORS.rows, TRUST_LEVEL_READY_MS, signal)) return;
+      if (await this.rendersPastChallenge(TRUST_LEVEL_SELECTORS.rows, TRUST_LEVEL_READY_MS, signal)) return;
       await this.explainMissingPage();
       const page = parseTrustLevel(await this.content());
       if (page.state === 'loading') throw new RunError('page-timeout', `No ${TRUST_LEVEL_SELECTORS.rows} within ${TRUST_LEVEL_READY_MS / 1000} s`);

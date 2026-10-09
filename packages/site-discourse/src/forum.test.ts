@@ -526,6 +526,49 @@ describe('filtered candidate lists (§7.2 useNewList / useUnreadList)', () => {
   });
 });
 
+describe('a challenge page in front of a topic list', () => {
+  const cat = { name: 'develop', path: '/c/develop/4', id: 4, enabledByDefault: true };
+  const LIST = 'https://linux.do/c/develop/4?order=posts';
+  const challengeHtml = '<html><body><div id="challenge-stage"></div></body></html>';
+  const listHtml =
+    '<header><a id="current-user"></a></header><table><tbody>' +
+    '<tr class="topic-list-item" data-topic-id="3"><td><a class="title raw-link raw-topic-link" href="/t/t/3">T3</a></td></tr></tbody></table>';
+
+  function challenged(headless: boolean) {
+    const page = new StaticPage('https://linux.do/', '');
+    page.onNavigate = (_kind, url) => {
+      page.address = url ?? page.address;
+      page.html = challengeHtml;
+    };
+    const t = forumWith(page, { headless });
+    return { ...t, page, collect: () => t.time.drive(t.forum.collectTopics(cat, { browseMode: 'deep' }, new AbortController().signal)) };
+  }
+
+  it('headed: waits for the person to solve it, then reads the list without reloading', async () => {
+    const t = challenged(false);
+    t.time.at(60_000, () => {
+      t.page.html = listHtml;
+    });
+    const batch = await t.collect();
+    expect(t.warnings).toEqual(['awaiting-challenge', 'challenge-cleared']);
+    expect(t.page.fronted).toBe(1);
+    expect(t.page.navigations).toEqual([`goto ${LIST}`]);
+    expect(batch.topics.map((r) => r.id)).toEqual(['3']);
+  });
+
+  it('headed: ends as challenge-detected after 5 minutes unsolved', async () => {
+    const t = challenged(false);
+    await expect(t.collect()).rejects.toMatchObject({ code: 'challenge-detected' });
+    expect(t.time.clock.monotonic()).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it('headless: challenge-detected at once', async () => {
+    const t = challenged(true);
+    await expect(t.collect()).rejects.toMatchObject({ code: 'challenge-detected' });
+    expect(t.warnings).toEqual([]);
+  });
+});
+
 describe('TIMINGS-001 read receipts from the page (I7)', () => {
   it('parses the form-encoded body Discourse posts', () => {
     expect(parseTimingsBody('timings%5B1%5D=4000&timings%5B2%5D=4000&timings%5B12%5D=1000&topic_time=4000&topic_id=2996592')).toEqual({

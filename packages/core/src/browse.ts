@@ -76,10 +76,14 @@ interface BrowseContext {
   policy: ActionPolicy;
   /** Starts as the preset's like switch; the like limit turns it off for the rest of the run. */
   liking: boolean;
+  /** Starts as the preset's reply switch; `disableReplies` turns it off for the rest of the run. */
+  replying: boolean;
   /** Unconfirmed likes in a row, across topics. */
   likeRejections: number;
-  /** Whether the topic being visited already has a confirmed reply. */
-  replied: boolean;
+  /** The topic being visited, which a confirmed reply is credited to. */
+  topicId: string | null;
+  /** Topics with a confirmed reply in this run, so a topic met again in a later round counts once. */
+  repliedTopics: Set<string>;
 }
 
 const at = (ctx: BrowseContext) => new Date(ctx.deps.clock.now()).toISOString();
@@ -126,8 +130,8 @@ async function untilTarget<T>(ctx: BrowseContext, step: (signal: AbortSignal) =>
 function onAction(ctx: BrowseContext, report: ActionReport): void {
   ctx.emit({ type: 'action', at: at(ctx), action: report.action, result: report.result });
   addActionReport(ctx.stats, report);
-  if (report.bucket === 'reply-post' && report.result === 'confirmed' && !ctx.replied) {
-    ctx.replied = true;
+  if (report.bucket === 'reply-post' && report.result === 'confirmed' && ctx.topicId !== null && !ctx.repliedTopics.has(ctx.topicId)) {
+    ctx.repliedTopics.add(ctx.topicId);
     ctx.stats.confirmed.repliedTopics++;
   }
   if (report.action !== 'like' || report.result === 'attempted') return;
@@ -138,13 +142,17 @@ function onAction(ctx: BrowseContext, report: ActionReport): void {
   }
 }
 
-/** Clicks into the topic; null when it was not entered or the time ran out on the way. */
+/**
+ * Clicks into the topic; null when it was not entered. A deadline that lands after the click but
+ * before the entry was confirmed still yields the visit when the page is on the topic, so the
+ * topic is left the usual way and recorded.
+ */
 async function enter(ctx: BrowseContext, topic: TopicCandidate): Promise<TopicVisit | null> {
   ctx.stats.attempted.topics++;
   ctx.emit({ type: 'topic', at: at(ctx), topicId: topic.id, phase: 'click' });
   // A hidden window holds entering until it is visible again, so a time target must be able to end that wait.
   const visit = await untilTarget(ctx, (s) => ctx.forum.enterFromList(topic, s));
-  if (!visit) return null;
+  if (!visit) return ctx.forum.showsTopic(topic) ? { topic, entered: true } : null;
   if (!visit.entered) {
     ctx.emit({ type: 'topic', at: at(ctx), topicId: topic.id, phase: 'click', result: visit.reason });
     ctx.ledger?.record({ topicId: topic.id, lastVisitAt: at(ctx), entered: false, failure: visit.reason });
@@ -184,8 +192,7 @@ async function read(ctx: BrowseContext, visit: TopicVisit): Promise<ReadResult |
 
 async function act(ctx: BrowseContext): Promise<void> {
   throwIfAborted(ctx.signal);
-  ctx.replied = false;
-  await untilTarget(ctx, (s) => ctx.forum.performActions(ctx.policy, s));
+  await untilTarget(ctx, (s) => ctx.forum.performActions(ctx.policy, s, ctx.signal));
   publish(ctx);
 }
 
@@ -197,7 +204,11 @@ async function leave(ctx: BrowseContext, visit: TopicVisit, readResult: ReadResu
   ctx.emit({ type: 'topic', at: at(ctx), topicId, phase: 'returned', result: verification });
   if (verification === 'still-unread') warn(ctx, 'still-unread', `Topic ${topicId} still shows the new-topic badge; the site may not have counted the visit`);
   const floors = readResult && readResult.startFloor !== null && readResult.endFloor !== null ? { floors: { from: readResult.startFloor, to: readResult.endFloor } } : {};
-  ctx.ledger?.record({ topicId, lastVisitAt: at(ctx), entered: true, verification, ...floors });
+  if (ctx.ledger) {
+    ctx.ledger.record({ topicId, lastVisitAt: at(ctx), entered: true, verification, ...floors });
+    // Saved after every topic, so a crash or a killed process loses at most the topic in progress.
+    await ctx.ledger.save().catch((err: unknown) => warn(ctx, 'ledger-save-failed', toFailure(err).message));
+  }
   publish(ctx);
 }
 
@@ -205,9 +216,14 @@ async function leave(ctx: BrowseContext, visit: TopicVisit, readResult: ReadResu
 async function visitTopic(ctx: BrowseContext, topic: TopicCandidate): Promise<void> {
   const visit = await enter(ctx, topic);
   if (!visit) return;
-  const readResult = reached(ctx) ? null : await read(ctx, visit);
-  if (!reached(ctx) && (ctx.liking || ctx.policy.reply.enabled)) await act(ctx);
-  await leave(ctx, visit, readResult);
+  ctx.topicId = topic.id;
+  try {
+    const readResult = reached(ctx) ? null : await read(ctx, visit);
+    if (!reached(ctx) && (ctx.liking || ctx.replying)) await act(ctx);
+    await leave(ctx, visit, readResult);
+  } finally {
+    ctx.topicId = null;
+  }
 }
 
 function pick(ctx: BrowseContext, topics: TopicCandidate[], unreadPosts: boolean): TopicCandidate[] {
@@ -242,11 +258,17 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
       ...structuredClone(preset.interaction),
       extraWait: { ...extraWait },
       liking: () => ctx.liking,
+      replying: () => ctx.replying,
+      disableReplies: () => {
+        ctx.replying = false;
+      },
       onAction: (report: ActionReport) => onAction(ctx, report),
     }),
     liking: preset.interaction.like.enabled,
+    replying: preset.interaction.reply.enabled,
     likeRejections: 0,
-    replied: false,
+    topicId: null,
+    repliedTopics: new Set(),
   };
   const strategy: TopicStrategy = {
     browseMode: preset.browseMode,

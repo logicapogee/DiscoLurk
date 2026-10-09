@@ -11,8 +11,9 @@ export interface WaitOptions {
 
 /**
  * What the adapter may do with a site page: navigate, look, scroll and resize. Nothing here can
- * type into, click on or run script in the page; the two inputs a run may send are separate
- * narrow capabilities (`TitleLinks`, `LoginForm`) built by session.ts.
+ * type into or click on the page, and the only script it runs is the fixed read-only functions in
+ * `PageView`; the inputs a run may send are separate narrow capabilities (`TitleLinks`, `LikeButton`,
+ * `Composer`, `LoginForm`) built by session.ts.
  */
 export interface ReadOnlyPage {
   goto(url: string, waitUntil?: LoadState): Promise<void>;
@@ -35,13 +36,12 @@ export interface ReadOnlyPage {
   waitFor(selector: string, opts: WaitOptions): Promise<void>;
   waitForURL(url: RegExp, opts: { timeout: number }): Promise<void>;
   scrollIntoView(selector: string): Promise<void>;
+  /** Scrolls the first match to the middle of the viewport, where a person would have it before pressing it. */
+  centerInViewport(selector: string): Promise<void>;
   moveMouse(x: number, y: number): Promise<void>;
   wheel(dx: number, dy: number): Promise<void>;
-  /**
-   * The page's `document.visibilityState` as last reported by the page itself; the site's screen
-   * tracker counts nothing while it is `hidden`. Reading it costs no round trip.
-   */
-  visibilityState(): DocumentVisibilityState;
+  /** The page's `document.visibilityState`; the site's screen tracker counts nothing while it is `hidden`. */
+  visibilityState(): Promise<DocumentVisibilityState>;
   /** Raises the window and its tab, as a click on the window would. */
   bringToFront(): Promise<void>;
   /** Floor numbers of the posts at least partly inside the viewport, top to bottom. */
@@ -128,12 +128,8 @@ export class TargetWatch {
 
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
 
-/** The page-side function through which every document reports its visibility changes. */
-const VISIBILITY_BINDING = '__discoLurkVisibility';
-
 export class PageView implements ReadOnlyPage {
   private readonly call: <T>(fn: () => Promise<T>) => Promise<T>;
-  private visibility: DocumentVisibilityState = 'visible';
 
   /** Without a `watch`, Playwright's errors pass through unchanged. */
   constructor(
@@ -209,6 +205,10 @@ export class PageView implements ReadOnlyPage {
     return this.call(() => this.page.locator(selector).first().scrollIntoViewIfNeeded({ timeout: PAGE_TIMEOUTS.actionMs }));
   }
 
+  centerInViewport(selector: string): Promise<void> {
+    return this.call(() => this.page.locator(selector).first().evaluate((el) => el.scrollIntoView({ block: 'center' }), undefined, { timeout: PAGE_TIMEOUTS.actionMs }));
+  }
+
   moveMouse(x: number, y: number): Promise<void> {
     return this.call(() => this.page.mouse.move(x, y));
   }
@@ -217,28 +217,8 @@ export class PageView implements ReadOnlyPage {
     return this.call(() => this.page.mouse.wheel(dx, dy));
   }
 
-  /**
-   * Has every document of the page report its visibility on load and on each change, so
-   * `visibilityState()` is a cached read. Until this runs the page counts as visible, which is
-   * what a headless page always is.
-   */
-  async trackVisibility(): Promise<void> {
-    await this.call(() =>
-      this.page.exposeBinding(VISIBILITY_BINDING, (_source, state: DocumentVisibilityState) => {
-        this.visibility = state;
-      }),
-    );
-    const report = (name: string) => {
-      const send = () => (window as unknown as Record<string, (s: DocumentVisibilityState) => void>)[name]!(document.visibilityState);
-      document.addEventListener('visibilitychange', send);
-      send();
-    };
-    await this.call(() => this.page.addInitScript(report, VISIBILITY_BINDING));
-    await this.call(() => this.page.evaluate(report, VISIBILITY_BINDING));
-  }
-
-  visibilityState(): DocumentVisibilityState {
-    return this.visibility;
+  visibilityState(): Promise<DocumentVisibilityState> {
+    return this.call(() => this.page.evaluate(() => document.visibilityState));
   }
 
   bringToFront(): Promise<void> {

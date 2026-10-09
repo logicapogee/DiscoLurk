@@ -73,6 +73,8 @@ describe('CLI-001 lurk run arguments (§11.1)', () => {
     expect(parseRunMode('time:30')).toEqual({ kind: 'time', minutes: 30 });
     expect(() => parseRunMode('topics:40-15')).toThrow(UsageError);
     expect(() => parseRunMode('time:0')).toThrow(UsageError);
+    expect(parseRunMode('time:1440')).toEqual({ kind: 'time', minutes: 1440 });
+    expect(() => parseRunMode('time:1441')).toThrow(UsageError);
   });
 
   it('lurk login takes site, profile and channel only', () => {
@@ -243,7 +245,7 @@ describe('lurk login (§11.1)', () => {
 describe('ACTION-000 likes and replies from the command line (A01, A02, §11.1)', () => {
   it('leaves both off by default at the default rates, with the extra wait on and every experiment off', () => {
     const args = parseRunArgs([]);
-    expect(args.interaction).toEqual({ like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 }, reply: { enabled: false, rate: 5 } });
+    expect(args.interaction).toEqual({ like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 }, reply: { enabled: false, rate: 5, riskAcknowledged: false } });
     expect(args.extraWait).toEqual({ enabled: true, minSec: 1, maxSec: 3 });
     expect(args.experiments).toEqual({ useNewList: false, useUnreadList: false, refreshCategories: false, smartRanked: false });
   });
@@ -258,7 +260,30 @@ describe('ACTION-000 likes and replies from the command line (A01, A02, §11.1)'
     expect(() => parseRunArgs(['--reply'])).toThrow(UsageError);
     expect(() => parseRunArgs(['--reply'])).toThrow(REPLY_RISK_NOTICE);
     const args = parseRunArgs(['--reply', '--i-understand-auto-reply-risk', '--reply-rate', '20']);
-    expect(args.interaction.reply).toEqual({ enabled: true, rate: 20 });
+    expect(args.interaction.reply).toEqual({ enabled: true, rate: 20, riskAcknowledged: true });
+    expect(args.usageWarnings).toEqual([]);
+  });
+
+  it('warns on stderr about options that do nothing without their switch', () => {
+    expect(parseRunArgs(['--like-rate', '50', '--max-reply-likes', '2']).usageWarnings).toEqual(['--like-rate, --max-reply-likes take effect only with --like']);
+    expect(parseRunArgs(['--reply-rate', '20']).usageWarnings).toEqual(['--reply-rate takes effect only with --reply']);
+    expect(parseRunArgs(['--i-understand-auto-reply-risk']).usageWarnings).toEqual(['--i-understand-auto-reply-risk takes effect only with --reply']);
+  });
+
+  it('caps --max-reply-likes at 4 with a warning', () => {
+    const args = parseRunArgs(['--like', '--max-reply-likes', '9']);
+    expect(args.interaction.like.maxReplies).toBe(4);
+    expect(args.usageWarnings).toEqual(['--max-reply-likes 9 is above the limit; 4 reply floors at most are liked per topic']);
+  });
+
+  it('turns replies off in the plan when the risk was not acknowledged, whatever built the arguments', () => {
+    const args = parseRunArgs(['--reply', '--i-understand-auto-reply-risk']);
+    const forged = { ...args, interaction: { ...args.interaction, reply: { ...args.interaction.reply, riskAcknowledged: false } } };
+    const warnings: string[] = [];
+    const plan = buildPlan(forged, [], 1, new Date(0), (code) => warnings.push(code));
+    expect(plan.preset.interaction.reply.enabled).toBe(false);
+    expect(warnings).toEqual(['reply-risk-unacknowledged']);
+    expect(buildPlan(args, [], 1, new Date(0)).preset.interaction.reply.enabled).toBe(true);
   });
 
   it('the risk flag alone turns nothing on', () => {

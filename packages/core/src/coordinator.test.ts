@@ -34,7 +34,7 @@ function plan(runMode: RunMode, browserMode: BrowserMode = 'headless', cats = ca
       categories: cats,
       interaction: {
         like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 },
-        reply: { enabled: false, rate: 5 },
+        reply: { enabled: false, rate: 5, riskAcknowledged: false },
       },
       extraWait: { enabled: true, minSec: 1, maxSec: 3 },
       samplePerCategory: { min: 3, max: 8 },
@@ -701,8 +701,33 @@ describe('TIMINGS-001 read receipts from /topics/timings (I7)', () => {
   });
 });
 
+describe('TIMINGS-002 every ending carries the receipts so far', () => {
+  it('a final read cut short by the app exiting still counts a receipt that arrived during it', async () => {
+    const exit = new AbortController();
+    const t = setup({
+      exit,
+      forum: {
+        progress: async (kind, signal) => {
+          if (kind === 'final') {
+            // The list page's last flush lands while the progress page loads.
+            t.forum.onTimings({ topicId: 'late', postNumbers: [7, 8, 9], topicMs: 1_000 });
+            await t.time.sleeper.sleep(60_000, signal);
+          }
+          return level(21, 175);
+        },
+      },
+    });
+    t.time.at(40_000, () => t.controller.abort(stopRequest('user')));
+    t.time.at(45_000, () => exit.abort());
+    const out = await t.run(plan({ kind: 'endless' }));
+    expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'app-exit' });
+    const reported = t.events.filter((e) => e.type === 'timings').reduce((n, e) => n + (e as { postsReported: number }).postsReported, 0);
+    expect(out.stats.timings.posts).toBe(reported);
+  });
+});
+
 describe('visit ledger through the coordinator (§7.2)', () => {
-  it('opens the Profile ledger before browsing and saves it after the browser closed', async () => {
+  it('opens the Profile ledger before browsing, saves it after every topic left and once more after the browser closed', async () => {
     let saves = 0;
     const ledger = new MapLedger([], async () => void saves++);
     const opened: string[] = [];
@@ -710,7 +735,7 @@ describe('visit ledger through the coordinator (§7.2)', () => {
     await t.run(plan({ kind: 'topics', count: 2 }));
     expect(opened).toEqual(['fixture/main']);
     expect(ledger.records.size).toBeGreaterThanOrEqual(2);
-    expect(saves).toBe(1);
+    expect(saves).toBe(2 + 1);
   });
 
   it('runs without remembering visits when the ledger cannot be opened', async () => {

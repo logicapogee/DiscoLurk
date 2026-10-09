@@ -129,8 +129,11 @@ export interface FixtureForumOptions {
   /** Floor counter readings while reading a topic, one per dwell; defaults to 1→5. */
   floors?: (topic: TopicCandidate) => number[];
   floorsConfirmed?: boolean;
-  /** Simulated page latencies in milliseconds. */
-  latency?: { collect?: number; enter?: number; dwell?: number; back?: number };
+  /**
+   * Simulated page latencies in milliseconds. `enter` passes before the title link is clicked (a
+   * hidden window holds it there), `afterClick` between the click and the confirmed entry.
+   */
+  latency?: { collect?: number; enter?: number; afterClick?: number; dwell?: number; back?: number };
   /** Answers `ensureAuthenticated`; defaults to authenticated at once. */
   auth?: (mode: AuthMode, signal: AbortSignal) => Promise<AuthResult>;
   /** Answers `readProgress`; defaults to null, as for `progressSource: 'none'`. */
@@ -140,7 +143,7 @@ export interface FixtureForumOptions {
   /** Answers `returnAndVerify`; defaults to the badge gone for unread topics and not-applicable for the rest. */
   verify?: (topic: TopicCandidate) => ReadVerification;
   /** Answers `performActions`, reporting through `policy.onAction`; defaults to doing nothing. */
-  actions?: (policy: ActionPolicy, signal: AbortSignal) => Promise<void>;
+  actions?: (policy: ActionPolicy, signal: AbortSignal, stop: AbortSignal) => Promise<void>;
   /** Receipts the site acknowledges when a topic is left, delivered through `onTimings`. */
   timings?: (topic: TopicCandidate) => TimingsReceipt[];
 }
@@ -164,6 +167,8 @@ export class FixtureForum implements ForumPort {
   /** The strategies `collectTopics` was asked for, in call order. */
   readonly strategies: TopicStrategy[] = [];
   private collectCount = new Map<string, number>();
+  /** The topic the page shows: set by a click that `enters` lets in, cleared on the way back. */
+  private shown: string | null = null;
 
   constructor(private readonly opts: FixtureForumOptions) {
     this.site = opts.site;
@@ -200,9 +205,14 @@ export class FixtureForum implements ForumPort {
   async enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit> {
     this.calls.push({ op: 'enterFromList', topicId: topic.id });
     await this.wait(this.opts.latency?.enter ?? 1000, signal);
-    return (this.opts.enters?.(topic) ?? true)
-      ? { topic, entered: true }
-      : { topic, entered: false, reason: 'click-not-confirmed' };
+    const lands = this.opts.enters?.(topic) ?? true;
+    if (lands) this.shown = topic.id;
+    await this.wait(this.opts.latency?.afterClick ?? 0, signal);
+    return lands ? { topic, entered: true } : { topic, entered: false, reason: 'click-not-confirmed' };
+  }
+
+  showsTopic(topic: TopicCandidate): boolean {
+    return this.shown === topic.id;
   }
 
   async readTopic(visit: TopicVisit, strategy: ReadStrategy, signal: AbortSignal): Promise<ReadResult> {
@@ -222,13 +232,14 @@ export class FixtureForum implements ForumPort {
     return { startFloor: readings[0] ?? null, endFloor: last, scrolls, stoppedByTarget: false, layout: 'wide' };
   }
 
-  async performActions(policy: ActionPolicy, signal: AbortSignal): Promise<void> {
+  async performActions(policy: ActionPolicy, signal: AbortSignal, stop: AbortSignal): Promise<void> {
     this.calls.push({ op: 'performActions' });
-    await this.opts.actions?.(policy, signal);
+    await this.opts.actions?.(policy, signal, stop);
   }
 
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {
     this.calls.push({ op: 'returnAndVerify', topicId: visit.topic.id });
+    this.shown = null;
     await this.wait(this.opts.latency?.back ?? 2500, signal);
     for (const receipt of this.opts.timings?.(visit.topic) ?? []) this.onTimings(receipt);
     return this.opts.verify?.(visit.topic) ?? (visit.topic.unread ? 'confirmed' : 'not-applicable');

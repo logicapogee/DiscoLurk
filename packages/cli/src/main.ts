@@ -38,9 +38,9 @@ const USAGE = `lurk ${VERSION}
 
 Usage:
   lurk login --site <id> [--profile <name>] [--channel chrome|msedge]
-  lurk run --site <id> [--profile <name>] [--browse-mode deep|quick] [--run-mode endless|topics:<n>[-<max>]|time:<min>]
+  lurk run --site <id> [--profile <name>] [--browse-mode deep|quick] [--run-mode endless|topics:<n>[-<max>]|time:<min≤1440>]
            [--categories <slug|path,...>] [--headed|--headless] [--channel chrome|msedge] [--json]
-           [--like [--like-rate <%>] [--reply-like-rate <%>] [--max-reply-likes <n>]]
+           [--like [--like-rate <%>] [--reply-like-rate <%>] [--max-reply-likes <n≤4>]]
            [--reply --i-understand-auto-reply-risk [--reply-rate <%>]]
            [--extra-wait <min>-<max>|off] [--experiments useNewList,useUnreadList,refreshCategories,smartRanked]
   lurk doctor [--json] [--port <n>] [--network]
@@ -212,11 +212,12 @@ async function login(argv: string[]): Promise<number> {
 
 async function run(argv: string[]): Promise<number> {
   const args = parseRunArgs(argv);
+  for (const line of args.usageWarnings) console.error(`warning: ${line}`);
   const { signal, exitSignal } = installStopHandlers(() => console.error('Stopping… (Ctrl+C again skips the final progress read)'));
   const credentials = credentialsFromEnv(args.site);
   const env = cliEnv({ channel: args.channel, exitSignal, ...(credentials ? { credentials } : {}) });
   const categories = resolveCategories(args.site, await siteCategories(args.site, env.categories), args.categories);
-  const plan = buildPlan(args, categories, newSeed(), new Date());
+  const plan = buildPlan(args, categories, newSeed(), new Date(), (code, message) => console.error(`warning ${code}: ${message}`));
   const coordinator = new DiscoLurkCoordinator(env);
   const reporter = createReporter(args.json, Date.now());
   // Profile, browser form and channel are stated before anything starts.

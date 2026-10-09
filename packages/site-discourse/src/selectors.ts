@@ -71,22 +71,29 @@ export const LIKED_MARKERS = [
   { name: 'likedIcon', selector: SELECTORS.likedIcon },
 ] as const;
 
+/** The unliked icon (A03): the only positive evidence that a press adds a like instead of taking one back. */
+export const UNLIKED_ICON = `${SELECTORS.likeButton} .d-icon-d-unliked`;
+
 /** Not from the selector table: the reply count a list row shows (linuxdo's posts cell, docofcard's `gf-*` stat box). */
 export const REPLIES_CELL = 'td.posts .number, .gf-stat-posts .gf-stat-number';
 
 /**
- * Not from the selector table: the open composer, its discard button, and the confirmation Discourse
- * asks for before throwing a draft away. Only used to close a reply that could not be confirmed.
+ * Not from the selector table: the composer while it holds anything (open, or minimised to a draft),
+ * its discard button, and the confirmation Discourse asks for before throwing a draft away.
  */
-export const COMPOSER_OPEN = '#reply-control.open';
+export const COMPOSER_OPEN = '#reply-control.open, #reply-control.draft';
 export const COMPOSER_DISCARD = '#reply-control .discard-button';
 export const COMPOSER_DISCARD_CONFIRM = '.discard-draft-modal .btn-danger';
 
-/** The editors the composer may show, in the order they are tried; a ProseMirror editor also carries `.d-editor-input` on docofcard. */
+/**
+ * The editors the composer may show, in the order they are tried. docofcard's ProseMirror editor also
+ * carries `.d-editor-input`, and linuxdo's textarea does too, so the plain `.d-editor-input` kind
+ * covers only an element that is neither.
+ */
 export const EDITOR_SELECTORS = {
+  prosemirror: '#reply-control div[contenteditable].ProseMirror, #reply-control .ProseMirror.d-editor-input',
+  'd-editor-input': `#reply-control ${SELECTORS.replyEditor}:not(textarea)`,
   textarea: SELECTORS.replyTextarea,
-  'd-editor-input': `#reply-control ${SELECTORS.replyEditor}`,
-  prosemirror: '#reply-control .ProseMirror, #reply-control [contenteditable="true"]',
 } as const;
 
 export const rowSelector = (topicId: string) => `tr.topic-list-item[data-topic-id="${topicId}"]`;

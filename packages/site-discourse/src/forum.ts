@@ -162,12 +162,12 @@ class VisibilityGate {
 
   async whenVisible(signal: AbortSignal): Promise<void> {
     const { page, deps, headless, warn } = this.opts;
-    if (headless || page.visibilityState() === 'visible') return;
+    if (headless || (await page.visibilityState()) === 'visible') return;
     const since = deps.clock.monotonic();
     warn('page-hidden', 'The browser window is hidden; the site counts no reading while it is. Bringing it to the front and waiting');
     await untilAbort(page.bringToFront(), signal);
     const { clock, sleeper } = deps;
-    await pollUntil({ intervalMs: TIMEOUTS.visibilityPollMs, timeoutMs: Number.POSITIVE_INFINITY, clock, sleeper }, async () => (page.visibilityState() === 'visible' ? true : null), signal);
+    await pollUntil({ intervalMs: TIMEOUTS.visibilityPollMs, timeoutMs: Number.POSITIVE_INFINITY, clock, sleeper }, async () => ((await page.visibilityState()) === 'visible' ? true : null), signal);
     const seconds = Math.round((deps.clock.monotonic() - since) / 1000);
     warn('page-visible', `The browser window is visible again after ${seconds} s; reading continues`);
   }
@@ -438,12 +438,16 @@ export class DiscourseForum implements ForumPort {
     return readFloors(surface, strategy, this.opts.deps, signal);
   }
 
+  showsTopic(topic: TopicCandidate): boolean {
+    return topicUrlPattern(topic.id).test(this.opts.page.url());
+  }
+
   /**
    * Not wrapped in `untilAbort`: a stop lands at the next wait inside, and a reply stopped after
    * typing must finish discarding its draft before the run moves on.
    */
-  performActions(policy: ActionPolicy, signal: AbortSignal): Promise<void> {
-    return performActions(this.actions, policy, this.opts.deps, { nextTemplate: this.nextTemplate, warn: this.opts.warn }, signal);
+  performActions(policy: ActionPolicy, signal: AbortSignal, stop: AbortSignal): Promise<void> {
+    return performActions(this.actions, policy, this.opts.deps, { nextTemplate: this.nextTemplate, warn: this.opts.warn }, signal, stop);
   }
 
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {

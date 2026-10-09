@@ -30,7 +30,7 @@ function plan(runMode: RunMode, browseMode: BrowseMode = 'quick', extraWait = tr
       categories,
       interaction: {
         like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 },
-        reply: { enabled: false, rate: 5 },
+        reply: { enabled: false, rate: 5, riskAcknowledged: false },
       },
       extraWait: { enabled: extraWait, minSec: 1, maxSec: 3 },
       samplePerCategory: { min: 3, max: 8 },

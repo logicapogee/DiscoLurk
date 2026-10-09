@@ -31,6 +31,8 @@ export interface SchedulerDeps {
   /** False when there is no graphical session for a headed browser (locked screen, logged out, SSH). */
   displayAvailable(): boolean;
   startRun(plan: RunPlanSnapshot, cause: TriggerCause): RunId;
+  /** Where a preset setting the run cannot honour is reported, e.g. replies without their risk acknowledged. */
+  warn?(code: string, message: string): void;
 }
 
 export type SkipReason = 'paused' | 'disabled' | 'overlap' | 'no-display';
@@ -80,7 +82,7 @@ export class PlanScheduler implements Scheduler {
       siteId: this.deps.siteOf(spec.profileId),
       profileId: spec.profileId,
       browserMode: spec.browserMode,
-      preset: resolvePreset(preset, categories, seededRandom(seed)),
+      preset: resolvePreset(preset, categories, seededRandom(seed), (code, message) => this.deps.warn?.(code, `Schedule ${spec.id}: ${message}`)),
       seed,
       plannedAt: this.iso(plannedAtMs),
       materializedAt: this.iso(),

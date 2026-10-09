@@ -82,9 +82,13 @@ export interface WaitRange {
   maxSec: number;
 }
 
+/** The most reply floors liked per topic. */
+export const MAX_REPLY_LIKES = 4;
+
 export interface InteractionPolicy {
   like: { enabled: boolean; topicRate: number; replyRate: number; maxReplies: number };
-  reply: { enabled: boolean; rate: number };
+  /** Replies stay off unless the user has acknowledged that they post real messages under the account. */
+  reply: { enabled: boolean; rate: number; riskAcknowledged: boolean };
 }
 
 /**

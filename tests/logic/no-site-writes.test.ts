@@ -59,8 +59,9 @@ describe('guard: no write paths to a site', () => {
       /^packages\/site-discourse\/src\/session\.ts: if \(asked\) await confirm\.click/,
       /^packages\/site-discourse\/src\/session\.ts: await loginStep\('(username|password|submit)'/,
       /^packages\/site-discourse\/src\/forum\.ts: await untilAbort\(this\.opts\.titleLinks\.click\(topic\.id\), signal\);/,
-      /^packages\/site-discourse\/src\/actions\.ts: await untilAbort\(this\.likeButton\.click\(postNumber\), signal\);/,
+      /^packages\/site-discourse\/src\/actions\.ts: return this\.likeButton\.click\(postNumber\);/,
       /^packages\/site-discourse\/src\/actions\.ts: await untilAbort\(this\.composer\.fill\(kind, text\), signal\);/,
+      /^packages\/site-discourse\/src\/actions\.ts: await surface\.fill\(kind, text, run\.signal\);/,
       /^packages\/cli\/src\/selftest\.ts: /,
       /^packages\/cli\/src\/capture\.ts: await link\.click\(\);/,
     ];
@@ -76,6 +77,33 @@ describe('guard: no write paths to a site', () => {
     expect(surfaceUses).toHaveLength(2);
     const body = forum.slice(forum.indexOf('performActions(policy: ActionPolicy'), forum.indexOf('async returnAndVerify('));
     expect(body).toContain('performActions(this.actions,');
+  });
+
+  it('installs nothing into site pages: no bindings, init scripts or exposed functions', () => {
+    const INSTALL = /\.(exposeBinding|exposeFunction|addInitScript)\(/;
+    const installs = [...sources(join(root, 'packages'))].filter((file) => INSTALL.test(readFileSync(file, 'utf8'))).map((file) => relative(root, file));
+    expect(installs).toEqual([]);
+  });
+
+  it('runs script in a site page only through the fixed read-only functions in page.ts and the window sizing in browser.ts', () => {
+    const EVALUATE = /\.evaluate(All)?\(/;
+    const calls = [...sources(join(root, 'packages'))].flatMap((file) =>
+      readFileSync(file, 'utf8')
+        .split('\n')
+        .filter((line) => EVALUATE.test(line))
+        .map((line) => `${relative(root, file)}: ${line.trim()}`),
+    );
+    // Each entry is a literal function that reads the page; the one that scrolls only moves the viewport.
+    const allowed = [
+      /^packages\/site-discourse\/src\/page\.ts: .*evaluate\(\(\) => \(\{ width: window\.innerWidth, height: window\.innerHeight \}\)\)/,
+      /^packages\/site-discourse\/src\/page\.ts: .*evaluate\(\(all\) => all\.map\(\(s\) => document\.querySelectorAll\(s\)\.length\), \[\.\.\.selectors\]\)/,
+      /^packages\/site-discourse\/src\/page\.ts: .*evaluate\(\(el\) => el\.scrollIntoView\(\{ block: 'center' \}\), undefined,/,
+      /^packages\/site-discourse\/src\/page\.ts: .*evaluate\(\(\) => document\.visibilityState\)\)/,
+      /^packages\/site-discourse\/src\/page\.ts: this\.page\.locator\(POST_WITH_NUMBER\)\.evaluateAll\(\(posts\) =>$/,
+      /^packages\/site-discourse\/src\/browser\.ts: .*evaluate\(\(\) => screen\.availHeight\)/,
+      /^packages\/cli\/src\/selftest\.ts: /,
+    ];
+    expect(calls.filter((c) => !allowed.some((a) => a.test(c)))).toEqual([]);
   });
 
   it('page.ts exports no method that clicks, types or runs script', () => {

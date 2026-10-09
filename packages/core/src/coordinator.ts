@@ -139,14 +139,11 @@ export class DiscoLurkCoordinator implements RunCoordinator {
       emit({ type: 'timings', at: at(), postsReported: receipt.postNumbers.length, topicSeconds: toTenthsSeconds(receipt.topicMs) });
     };
 
-    const end = (outcome: RunOutcome, stopCause: StopCause, failure?: RunFailure): RunResult => ({
-      outcome,
-      stopCause,
-      stats,
-      baseline: baselineOf(site, levels.initial),
-      levels,
-      ...(failure ? { failure } : {}),
-    });
+    // Every ending carries the receipts acknowledged up to that point, whichever path reached it.
+    const end = (outcome: RunOutcome, stopCause: StopCause, failure?: RunFailure): RunResult => {
+      stats.timings = tally.snapshot();
+      return { outcome, stopCause, stats, baseline: baselineOf(site, levels.initial), levels, ...(failure ? { failure } : {}) };
+    };
     // The terminal state is announced only once the browser is closed and the Profile lock released,
     // so whoever sees `completed` may start the next run on the same Profile at once.
     const finish = (result: RunResult): RunResult => {

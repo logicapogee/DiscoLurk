@@ -49,9 +49,10 @@ function likeButton(page: Page, call: PageCall): LikeButton {
 }
 
 /** Typing goes through `fill`, which works on a textarea and a contenteditable ProseMirror editor alike. */
-function composer(page: Page, call: PageCall): Composer {
+function composer(page: Page, call: PageCall, postsAcknowledged: () => number): Composer {
   const timeout = PAGE_TIMEOUTS.actionMs;
   return {
+    postsAcknowledged,
     open: () => call(() => page.locator(SELECTORS.replyOpen).first().click({ timeout })),
     fill: (kind, text) => call(() => page.locator(EDITOR_SELECTORS[kind]).first().fill(text, { timeout })),
     submit: () => call(() => page.locator(SELECTORS.replySubmit).first().click({ timeout })),
@@ -71,19 +72,53 @@ function composer(page: Page, call: PageCall): Composer {
 /** The address the site's screen tracker posts its read receipts to. */
 export const timingsUrlOf = (site: Pick<Site, 'baseUrl'>) => `${new URL(site.baseUrl).origin}/topics/timings`;
 
+/** The address the composer posts a new reply to. */
+export const postsUrlOf = (site: Pick<Site, 'baseUrl'>) => `${new URL(site.baseUrl).origin}/posts`;
+
+type FinishedRequest = Pick<Request, 'url' | 'method' | 'postData' | 'response'>;
+
 /**
- * The read receipt of a finished request when it was an acknowledged `POST` to `timingsUrl`; null
- * for any other request. It runs for every request the page makes, so the address is compared as a
- * string before anything else is looked at.
+ * Whether a finished request was a `POST` to `endpoint` (query string allowed) that the site answered
+ * with success. It runs for every request the page makes, so the address is compared as a string
+ * before anything else is looked at.
  */
-export async function timingsReceipt(timingsUrl: string, request: Pick<Request, 'url' | 'method' | 'postData' | 'response'>): Promise<TimingsReceipt | null> {
+export async function acknowledgedPost(endpoint: string, request: FinishedRequest): Promise<boolean> {
   const url = request.url();
-  if (!url.startsWith(timingsUrl)) return null;
-  const rest = url.slice(timingsUrl.length);
-  if ((rest !== '' && !rest.startsWith('?')) || request.method() !== 'POST') return null;
-  const response = await request.response();
-  if (!response?.ok()) return null;
-  return parseTimingsBody(request.postData());
+  if (!url.startsWith(endpoint)) return false;
+  const rest = url.slice(endpoint.length);
+  if ((rest !== '' && !rest.startsWith('?')) || request.method() !== 'POST') return false;
+  return (await request.response())?.ok() ?? false;
+}
+
+/** The read receipt of a finished request when it was an acknowledged `POST` to `timingsUrl`; null for any other request. */
+export async function timingsReceipt(timingsUrl: string, request: FinishedRequest): Promise<TimingsReceipt | null> {
+  return (await acknowledgedPost(timingsUrl, request)) ? parseTimingsBody(request.postData()) : null;
+}
+
+/**
+ * Follows the page's finished requests: acknowledged read receipts go to `onTimings`, acknowledged
+ * new posts are counted. A request whose response can no longer be read because the page closed
+ * proves nothing; any other failure to read one is reported as a warning.
+ */
+export function watchSiteRequests(
+  page: Pick<Page, 'on'>,
+  site: Pick<Site, 'baseUrl'>,
+  opts: { onTimings?: (receipt: TimingsReceipt) => void; warn: (code: string, message: string) => void },
+): { postsAcknowledged(): number } {
+  const timingsUrl = timingsUrlOf(site);
+  const postsUrl = postsUrlOf(site);
+  let posts = 0;
+  const failed = (err: unknown) => {
+    if (!targetClosed(err)) opts.warn('request-unreadable', `A finished request could not be read: ${err instanceof Error ? err.message : String(err)}`);
+  };
+  page.on('requestfinished', (request) => {
+    const { onTimings } = opts;
+    if (onTimings) timingsReceipt(timingsUrl, request).then((receipt) => receipt && onTimings(receipt), failed);
+    acknowledgedPost(postsUrl, request).then((ok) => {
+      if (ok) posts++;
+    }, failed);
+  });
+  return { postsAcknowledged: () => posts };
 }
 
 /**
@@ -138,19 +173,8 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
   browser.context.on('close', () => watch.markClosed());
   browser.page.on('close', () => watch.markClosed());
   browser.page.on('crash', () => watch.markCrashed());
-  if (opts.onTimings) {
-    const deliver = opts.onTimings;
-    const timingsUrl = timingsUrlOf(opts.site);
-    browser.page.on('requestfinished', (request) => {
-      timingsReceipt(timingsUrl, request).then(
-        (receipt) => receipt && deliver(receipt),
-        // The page closed before its response could be looked up; an unconfirmed flush is not a receipt.
-        (err: unknown) => {
-          if (!targetClosed(err)) throw err;
-        },
-      );
-    });
-  }
+  const warn = opts.warn ?? (() => {});
+  const requests = watchSiteRequests(browser.page, opts.site, { ...(opts.onTimings ? { onTimings: opts.onTimings } : {}), warn });
   const call = watch.call;
   const session = browser;
   // Closing a browser the user already closed must still release the Profile lock.
@@ -159,25 +183,17 @@ export async function openDiscourseForum(opts: OpenForumOptions): Promise<ForumS
       if (!targetClosed(err)) throw err;
     });
   const page = new PageView(browser.page, watch);
-  if (!opts.headless) {
-    try {
-      await page.trackVisibility();
-    } catch (err) {
-      await close();
-      throw err;
-    }
-  }
   const forum = new DiscourseForum({
     site: opts.site,
     page,
     titleLinks: titleLinks(browser.page, call),
     likeButton: likeButton(browser.page, call),
-    composer: composer(browser.page, call),
+    composer: composer(browser.page, call, requests.postsAcknowledged),
     replyTemplates: opts.replyTemplates ?? [],
     deps: opts.deps,
     headless: opts.headless,
     ...(opts.credentials ? { login: { credentials: opts.credentials, form: loginForm(browser.page, opts.deps, call) } } : {}),
-    ...(opts.warn ? { warn: opts.warn } : {}),
+    warn,
   });
   return { forum, closed: watch.closed.signal, close };
 }

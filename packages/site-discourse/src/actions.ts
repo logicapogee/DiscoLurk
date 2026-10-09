@@ -1,47 +1,67 @@
-import { pauseBetween, throwIfAborted, untilAbort, type ActionPolicy, type RandomSource, type RuntimeDeps } from '@disco-lurk/core';
+import { isAbortError, pauseBetween, throwIfAborted, untilAbort, type ActionPolicy, type InterruptibleSleeper, type RandomSource, type RuntimeDeps, type WaitRange } from '@disco-lurk/core';
 import { pollUntil } from './auth';
 import type { ReadOnlyPage } from './page';
 import { EDITOR_KINDS, editorKindFromCounts, type EditorKind } from './parse';
-import { COMPOSER_OPEN, EDITOR_SELECTORS, LIKED_MARKERS, likeButtonOf, postOf, SELECTORS } from './selectors';
+import { COMPOSER_OPEN, EDITOR_SELECTORS, LIKED_MARKERS, likeButtonOf, postOf, SELECTORS, UNLIKED_ICON } from './selectors';
 
-/** Presses one post's like button. Built in session.ts; nothing else can press it. */
+/** Presses one post's like button. Built in session.ts, the one place that holds a clickable page. */
 export interface LikeButton {
   click(postNumber: number): Promise<void>;
 }
 
-/** The reply composer's four inputs. Built in session.ts; nothing else can type into the site. */
+/** The reply composer's inputs and the site's answer to them. Built in session.ts, the one place that holds a clickable page. */
 export interface Composer {
   open(): Promise<void>;
   fill(kind: EditorKind, text: string): Promise<void>;
   submit(): Promise<void>;
   /** Throws the draft away, confirming Discourse's discard prompt when it asks. */
   discard(): Promise<void>;
+  /** How many `POST /posts` the site has answered with success on this page so far. */
+  postsAcknowledged(): number;
 }
+
+/** `liked` on either liked marker; `unliked` only on the unliked icon; `unknown` when neither shows. */
+export type LikeState = 'liked' | 'unliked' | 'unknown';
 
 /**
  * What interacting needs from a topic page; tests drive `performActions` through a scripted one.
- * Every method that sends input checks `signal` on entry and stops waiting once it aborts.
+ * Methods that take a signal check it on entry and stop waiting once it aborts; the two presses
+ * that send something to the site take none and end by their own click timeout.
  */
 export interface ActionSurface {
   postsInViewport(): Promise<number[]>;
   hasLikeButton(postNumber: number): Promise<boolean>;
-  isLiked(postNumber: number): Promise<boolean>;
+  likeState(postNumber: number): Promise<LikeState>;
   /** Scrolls back up until floor 1's like button is rendered; false when it never is. */
   scrollToFirstPost(signal: AbortSignal): Promise<boolean>;
-  /** Centres the floor's like button, lets the page settle, and presses it. */
-  like(postNumber: number, signal: AbortSignal): Promise<void>;
+  /** Scrolls the floor's like button to the middle of the viewport and lets the page settle. */
+  centerLikeButton(postNumber: number, signal: AbortSignal): Promise<void>;
+  pressLike(postNumber: number): Promise<void>;
+  /** Whether the topic's own reply button is rendered; a long topic shows it only once read to its end. */
+  hasReplyButton(): Promise<boolean>;
+  /** Whether the composer is open or minimised to a draft. */
+  composerOpen(): Promise<boolean>;
   /** Opens the composer and reports which editor it shows; null when none appeared. */
   openComposer(signal: AbortSignal): Promise<EditorKind | null>;
-  /** Types the text, pauses as a person would before sending, and submits. */
-  compose(kind: EditorKind, text: string, signal: AbortSignal): Promise<void>;
-  composerOpen(): Promise<boolean>;
-  /** Throws an open draft away; runs to the end even after a stop. */
-  discardComposer(): Promise<void>;
+  fill(kind: EditorKind, text: string, signal: AbortSignal): Promise<void>;
+  submitReply(): Promise<void>;
+  postsAcknowledged(): number;
+  /** Throws the draft away and checks the composer closed; false when it is still open or draft once the check runs out. */
+  discardComposer(signal: AbortSignal): Promise<boolean>;
 }
 
 /** Field-tested pacing for interactions; none of it shortens when the page is fast. */
-export const LIKE = { centerMs: 300, afterSec: [0.8, 1.5], confirmMs: 5_000, pollMs: 250 } as const;
-export const REPLY = { editorMs: 10_000, editorSettleSec: [0.5, 1], afterFillSec: [0.8, 1.5], afterSubmitSec: [1, 2], confirmMs: 10_000, pollMs: 500 } as const;
+export const LIKE = { centerMs: 300, after: { minSec: 0.8, maxSec: 1.5 }, confirmMs: 5_000, pollMs: 250 } as const;
+export const REPLY = {
+  editorMs: 10_000,
+  editorSettle: { minSec: 0.5, maxSec: 1 },
+  afterFill: { minSec: 0.8, maxSec: 1.5 },
+  afterSubmit: { minSec: 1, maxSec: 2 },
+  confirmMs: 10_000,
+  pollMs: 500,
+} as const;
+/** A discarded draft must leave the composer closed within `verifyMs`; after a stop the whole discard gets `afterStopMs` (S05). */
+export const DISCARD = { verifyMs: 3_000, pollMs: 250, afterStopMs: 2_000 } as const;
 export const FIRST_POST = { stepPx: -2500, settleMs: 400, maxSteps: 40 } as const;
 
 /** Draws reply texts at random, each at most once; null once every template has been used. */
@@ -64,34 +84,105 @@ interface ActionRun {
   policy: ActionPolicy;
   deps: RuntimeDeps;
   ctx: ActionContext;
+  /** Stop requests and the time target. */
   signal: AbortSignal;
+  /** Stop requests alone. */
+  stop: AbortSignal;
 }
 
-const pause = (run: ActionRun, range: readonly [number, number]) => pauseBetween(run.deps, range[0], range[1], run.signal);
+const timedOut = (err: unknown) => err instanceof Error && err.name === 'TimeoutError';
+
+const pause = (run: ActionRun, range: WaitRange) => pauseBetween(run.deps, range.minSec, range.maxSec, run.signal);
 
 async function rest(run: ActionRun): Promise<void> {
   const { extraWait } = run.policy;
-  if (extraWait.enabled) await pause(run, [extraWait.minSec, extraWait.maxSec]);
+  if (extraWait.enabled) await pause(run, extraWait);
 }
 
-/** Polls `check` on the injected clock until it holds; false once `ms` passes without it. */
-async function confirmed(run: ActionRun, check: () => Promise<boolean>, ms: number, every: number): Promise<boolean> {
+/**
+ * Whether `check` holds within `ms`. Only a stop request ends the wait early: a press already
+ * sent is confirmed to the end of its window even when the time target runs out meanwhile.
+ */
+async function holdsWithin(run: ActionRun, check: () => Promise<boolean>, ms: number, every: number): Promise<boolean> {
   const { clock, sleeper } = run.deps;
-  return (await pollUntil({ intervalMs: every, timeoutMs: ms, clock, sleeper }, async () => ((await check()) ? true : null), run.signal)) !== null;
+  return (await pollUntil({ intervalMs: every, timeoutMs: ms, clock, sleeper }, async () => ((await check()) ? true : null), run.stop)) === true;
+}
+
+/**
+ * A signal that aborts `ms` after `stop` does (at once if it already has), so work that must
+ * outlive a stop still ends within a fixed time of it. `release` drops the timer.
+ */
+function graceAfter(stop: AbortSignal, ms: number, sleeper: InterruptibleSleeper): { signal: AbortSignal; release(): void } {
+  const expired = new AbortController();
+  const released = new AbortController();
+  const start = () => {
+    sleeper.sleep(ms, released.signal).then(
+      () => expired.abort(stop.reason),
+      (err: unknown) => {
+        if (!isAbortError(err)) throw err;
+      },
+    );
+  };
+  if (stop.aborted) start();
+  else stop.addEventListener('abort', start, { once: true });
+  return {
+    signal: expired.signal,
+    release: () => {
+      stop.removeEventListener('abort', start);
+      released.abort();
+    },
+  };
 }
 
 async function like(run: ActionRun, postNumber: number, bucket: 'topic' | 'reply'): Promise<void> {
-  const { surface, policy } = run;
-  if (!policy.liking()) return;
-  if (!(await surface.hasLikeButton(postNumber))) return;
-  // A liked floor's button would take the like back, so it is never pressed.
-  if (await surface.isLiked(postNumber)) return;
-  await surface.like(postNumber, run.signal);
+  const { surface, policy, ctx } = run;
+  if (!policy.liking() || !(await surface.hasLikeButton(postNumber))) return;
+  if ((await surface.likeState(postNumber)) === 'liked') return;
+  try {
+    await surface.centerLikeButton(postNumber, run.signal);
+  } catch (err) {
+    if (!timedOut(err)) throw err;
+    ctx.warn('like-timeout', `Floor ${postNumber}'s like button could not be scrolled to; it is not liked`);
+    return;
+  }
+  // Read again right before pressing (A03): only the unliked icon proves the press adds a like rather than taking one back.
+  const state = await surface.likeState(postNumber);
+  if (state !== 'unliked') {
+    if (state === 'unknown') ctx.warn('like-state-unknown', `Floor ${postNumber} shows neither the liked nor the unliked icon; it is not liked`);
+    return;
+  }
+  throwIfAborted(run.signal);
   policy.onAction({ action: 'like', bucket, result: 'attempted', postNumber });
-  const ok = await confirmed(run, () => surface.isLiked(postNumber), LIKE.confirmMs, LIKE.pollMs);
-  policy.onAction({ action: 'like', bucket, result: ok ? 'confirmed' : 'rejected', postNumber });
-  await pause(run, LIKE.afterSec);
+  let confirmed = false;
+  try {
+    await surface.pressLike(postNumber);
+    confirmed = await holdsWithin(run, async () => (await surface.likeState(postNumber)) === 'liked', LIKE.confirmMs, LIKE.pollMs);
+  } catch (err) {
+    if (!timedOut(err)) throw err;
+    ctx.warn('like-timeout', `Pressing floor ${postNumber}'s like button timed out`);
+  }
+  policy.onAction({ action: 'like', bucket, result: confirmed ? 'confirmed' : 'rejected', postNumber });
+  await pause(run, LIKE.after);
   await rest(run);
+}
+
+/**
+ * Throws the draft away. After a stop the whole discard has `DISCARD.afterStopMs`. A composer still
+ * open or draft afterwards turns replies off for the run, since the next topic would open onto it.
+ */
+async function discard(run: ActionRun): Promise<void> {
+  const grace = graceAfter(run.stop, DISCARD.afterStopMs, run.deps.sleeper);
+  let closed = false;
+  try {
+    closed = await run.surface.discardComposer(grace.signal);
+  } catch (err) {
+    if (!isAbortError(err) && !timedOut(err)) throw err;
+  } finally {
+    grace.release();
+  }
+  if (closed) return;
+  run.ctx.warn('composer-stuck', 'The reply draft could not be discarded; replies are off for the rest of this run');
+  run.policy.disableReplies();
 }
 
 async function reply(run: ActionRun): Promise<void> {
@@ -101,26 +192,46 @@ async function reply(run: ActionRun): Promise<void> {
     ctx.warn('reply-templates-exhausted', 'Every reply template has been used in this run; no reply is posted');
     return;
   }
-  await rest(run);
-  const kind = await surface.openComposer(run.signal);
-  if (kind === null) {
-    ctx.warn('composer-missing', 'The reply composer did not open; no reply is posted for this topic');
-    await surface.discardComposer();
+  if (!(await surface.hasReplyButton())) {
+    ctx.warn('reply-button-missing', "The topic's reply button is not rendered (a long topic not read to its end); no reply is posted for this topic");
     return;
   }
-  try {
-    await pause(run, REPLY.editorSettleSec);
-    await surface.compose(kind, text, run.signal);
-  } catch (err) {
-    // A reply stopped after typing leaves no draft behind.
-    await surface.discardComposer();
-    throw err;
+  await rest(run);
+  // A composer already open or minimised holds a draft that is not this run's to type into or throw away.
+  if (await surface.composerOpen()) {
+    ctx.warn('composer-busy', 'The composer is already open or holds a minimised draft; no reply is posted for this topic');
+    return;
   }
-  policy.onAction({ action: 'reply', bucket: 'reply-post', result: 'attempted' });
-  const posted = await confirmed(run, async () => !(await surface.composerOpen()), REPLY.confirmMs, REPLY.pollMs);
-  policy.onAction({ action: 'reply', bucket: 'reply-post', result: posted ? 'confirmed' : 'rejected' });
-  if (!posted) await surface.discardComposer();
-  await pause(run, REPLY.afterSubmitSec);
+  let posted = false;
+  try {
+    const kind = await surface.openComposer(run.signal);
+    if (kind === null) {
+      ctx.warn('composer-missing', 'The reply composer did not open; no reply is posted for this topic');
+      return;
+    }
+    await pause(run, REPLY.editorSettle);
+    await surface.fill(kind, text, run.signal);
+    await pause(run, REPLY.afterFill);
+    throwIfAborted(run.signal);
+    const before = surface.postsAcknowledged();
+    policy.onAction({ action: 'reply', bucket: 'reply-post', result: 'attempted' });
+    try {
+      await surface.submitReply();
+      // Posted means the site acknowledged a new post and the composer closed (A07).
+      posted = await holdsWithin(run, async () => surface.postsAcknowledged() > before && !(await surface.composerOpen()), REPLY.confirmMs, REPLY.pollMs);
+    } catch (err) {
+      if (!timedOut(err)) throw err;
+      ctx.warn('reply-timeout', 'Pressing the reply button timed out');
+    }
+    policy.onAction({ action: 'reply', bucket: 'reply-post', result: posted ? 'confirmed' : 'rejected' });
+  } catch (err) {
+    if (!timedOut(err)) throw err;
+    ctx.warn('reply-timeout', 'The composer did not respond in time; no reply is posted for this topic');
+  } finally {
+    // Whatever ended the reply, a draft that was not posted is thrown away.
+    if (!posted) await discard(run);
+  }
+  await pause(run, REPLY.afterSubmit);
 }
 
 /**
@@ -128,14 +239,14 @@ async function reply(run: ActionRun): Promise<void> {
  * screen are liked first, because going back up to floor 1 scrolls them away; the reply comes before
  * that for the same reason.
  */
-export async function performActions(surface: ActionSurface, policy: ActionPolicy, deps: RuntimeDeps, ctx: ActionContext, signal: AbortSignal): Promise<void> {
-  const run: ActionRun = { surface, policy, deps, ctx, signal };
+export async function performActions(surface: ActionSurface, policy: ActionPolicy, deps: RuntimeDeps, ctx: ActionContext, signal: AbortSignal, stop: AbortSignal): Promise<void> {
+  const run: ActionRun = { surface, policy, deps, ctx, signal, stop };
   const roll = (percent: number) => deps.random.next() * 100 < percent;
   if (policy.liking()) {
     const onScreen = (await surface.postsInViewport()).filter((n) => n > 1).slice(0, policy.like.maxReplies);
     for (const postNumber of onScreen) if (roll(policy.like.replyRate)) await like(run, postNumber, 'reply');
   }
-  if (policy.reply.enabled && roll(policy.reply.rate)) await reply(run);
+  if (policy.replying() && roll(policy.reply.rate)) await reply(run);
   if (policy.liking() && roll(policy.like.topicRate)) {
     if (await surface.scrollToFirstPost(signal)) await like(run, 1, 'topic');
     else ctx.warn('first-post-missing', 'Floor 1 never rendered its like button while scrolling back up; the topic is not liked');
@@ -160,9 +271,11 @@ export class PageActionSurface implements ActionSurface {
     return (await this.page.count(likeButtonOf(postNumber))) > 0;
   }
 
-  async isLiked(postNumber: number): Promise<boolean> {
+  async likeState(postNumber: number): Promise<LikeState> {
     const post = postOf(postNumber);
-    return (await this.page.count(LIKED_MARKERS.map((m) => `${post} ${m.selector}`).join(', '))) > 0;
+    const [liked = 0, unliked = 0] = await this.page.counts([LIKED_MARKERS.map((m) => `${post} ${m.selector}`).join(', '), `${post} ${UNLIKED_ICON}`]);
+    if (liked > 0) return 'liked';
+    return unliked > 0 ? 'unliked' : 'unknown';
   }
 
   async scrollToFirstPost(signal: AbortSignal): Promise<boolean> {
@@ -184,11 +297,22 @@ export class PageActionSurface implements ActionSurface {
     return false;
   }
 
-  async like(postNumber: number, signal: AbortSignal): Promise<void> {
+  async centerLikeButton(postNumber: number, signal: AbortSignal): Promise<void> {
     throwIfAborted(signal);
-    await untilAbort(this.page.scrollIntoView(likeButtonOf(postNumber)), signal);
+    await untilAbort(this.page.centerInViewport(likeButtonOf(postNumber)), signal);
     await this.deps.sleeper.sleep(LIKE.centerMs, signal);
-    await untilAbort(this.likeButton.click(postNumber), signal);
+  }
+
+  pressLike(postNumber: number): Promise<void> {
+    return this.likeButton.click(postNumber);
+  }
+
+  async hasReplyButton(): Promise<boolean> {
+    return (await this.page.count(SELECTORS.replyOpen)) > 0;
+  }
+
+  async composerOpen(): Promise<boolean> {
+    return (await this.page.count(COMPOSER_OPEN)) > 0;
   }
 
   private async editor(): Promise<EditorKind | null> {
@@ -202,18 +326,23 @@ export class PageActionSurface implements ActionSurface {
     return pollUntil({ intervalMs: REPLY.pollMs, timeoutMs: REPLY.editorMs, clock, sleeper }, () => this.editor(), signal);
   }
 
-  async compose(kind: EditorKind, text: string, signal: AbortSignal): Promise<void> {
+  async fill(kind: EditorKind, text: string, signal: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     await untilAbort(this.composer.fill(kind, text), signal);
-    await pauseBetween(this.deps, REPLY.afterFillSec[0], REPLY.afterFillSec[1], signal);
-    await untilAbort(this.composer.submit(), signal);
   }
 
-  async composerOpen(): Promise<boolean> {
-    return (await this.page.count(COMPOSER_OPEN)) > 0;
+  submitReply(): Promise<void> {
+    return this.composer.submit();
   }
 
-  async discardComposer(): Promise<void> {
-    if (await this.composerOpen()) await this.composer.discard();
+  postsAcknowledged(): number {
+    return this.composer.postsAcknowledged();
+  }
+
+  async discardComposer(signal: AbortSignal): Promise<boolean> {
+    if (!(await this.composerOpen())) return true;
+    await untilAbort(this.composer.discard(), signal);
+    const { clock, sleeper } = this.deps;
+    return (await pollUntil({ intervalMs: DISCARD.pollMs, timeoutMs: DISCARD.verifyMs, clock, sleeper }, async () => ((await this.composerOpen()) ? null : true), signal)) === true;
   }
 }

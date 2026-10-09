@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { browse } from './browse';
 import type { RunEvent } from './events';
 import { MapLedger, rankTopics, topicScore } from './ledger';
+import { boundInteraction, resolvePreset } from './plan';
 import type { ActionPolicy, ActionReport, ReadVerification } from './ports';
 import { seededRandom } from './runtime';
 import { FixtureForum, fixtureSite, VirtualTime, type FixtureForumOptions } from './testing';
@@ -10,7 +11,7 @@ import { EXPERIMENTS_OFF, type BrowseMode, type Category, type ExperimentFlags, 
 
 const site = fixtureSite();
 const categories: Category[] = ['a', 'b', 'c'].map((slug, i) => ({ name: slug, path: `/c/${slug}/${i + 1}`, id: i + 1, enabledByDefault: true }));
-const OFF: InteractionPolicy = { like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 }, reply: { enabled: false, rate: 5 } };
+const OFF: InteractionPolicy = { like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 }, reply: { enabled: false, rate: 5, riskAcknowledged: false } };
 
 interface PlanOpts {
   browseMode?: BrowseMode;
@@ -97,6 +98,18 @@ describe('TARGET-001 time target ends within the topic (S04)', () => {
     const out = await t.go();
     expect(out.end).toBe('cancelled');
     expect(t.time.clock.monotonic()).toBe(5_000);
+  });
+
+  it('a deadline after the click still leaves the topic and records it', async () => {
+    const ledger = new MapLedger();
+    // The click lands at 2 s; the entry would be confirmed only after the 1-minute deadline.
+    const t = run(plan({ kind: 'time', minutes: 1 }), { latency: { collect: 1000, enter: 1000, afterClick: 10 * 60_000 } }, { ledger });
+    const out = await t.go();
+    expect(out.end).toBe('target-reached');
+    expect(ops(t.forum, 'readTopic')).toHaveLength(0);
+    expect(ops(t.forum, 'returnAndVerify')).toHaveLength(1);
+    expect([...ledger.records.values()]).toMatchObject([{ entered: true, verification: 'confirmed' }]);
+    expect(out.stats.returns.confirmed).toBe(1);
   });
 
   it('enters no topic once the time ran out during a pause', async () => {
@@ -190,7 +203,7 @@ describe('ACTION-000 interactions are off unless switched on (A01, A02)', () => 
   });
 
   it('counts replied topics once per topic however many replies it got', async () => {
-    const interaction: InteractionPolicy = { ...OFF, reply: { enabled: true, rate: 100 } };
+    const interaction: InteractionPolicy = { ...OFF, reply: { enabled: true, rate: 100, riskAcknowledged: true } };
     const t = run(plan({ kind: 'topics', count: 30 }, { interaction }), {
       actions: async (policy) => report(policy, 'reply', 'reply-post', ['confirmed', 'confirmed']),
     });
@@ -198,6 +211,72 @@ describe('ACTION-000 interactions are off unless switched on (A01, A02)', () => 
     const read = ops(t.forum, 'performActions').length;
     expect(out.stats.confirmed.replies).toBe(read * 2);
     expect(out.stats.confirmed.repliedTopics).toBe(read);
+  });
+
+  it('counts a topic met again in a later round once', async () => {
+    const interaction: InteractionPolicy = { ...OFF, reply: { enabled: true, rate: 100, riskAcknowledged: true } };
+    // Every round lists the same two topics per category.
+    const sameRows = (path: string): TopicCandidate[] => [0, 1].map((i) => ({ id: `${path}#${i}`, title: 't', unread: true, pinned: false }));
+    const t = run(plan({ kind: 'topics', count: 15 }, { interaction }), { topics: sameRows, actions: async (policy) => report(policy, 'reply', 'reply-post', ['confirmed']) });
+    const out = await t.go();
+    const acted = ops(t.forum, 'readTopic').map((c) => (c as { topicId: string }).topicId);
+    expect(acted.length).toBeGreaterThan(new Set(acted).size);
+    expect(out.stats.confirmed.replies).toBe(acted.length);
+    expect(out.stats.confirmed.repliedTopics).toBe(new Set(acted).size);
+  });
+
+  it('stops asking for interaction once the adapter turns replies off', async () => {
+    const interaction: InteractionPolicy = { ...OFF, reply: { enabled: true, rate: 100, riskAcknowledged: true } };
+    const replying: boolean[] = [];
+    const t = run(plan({ kind: 'topics', count: 6 }, { interaction }), {
+      actions: async (policy) => {
+        replying.push(policy.replying());
+        policy.disableReplies();
+        replying.push(policy.replying());
+      },
+    });
+    await t.go();
+    expect(replying).toEqual([true, false]);
+    expect(ops(t.forum, 'performActions')).toHaveLength(1);
+  });
+
+  it('hands the adapter the stop requests apart from the time target', async () => {
+    const interaction: InteractionPolicy = { ...OFF, like: { ...OFF.like, enabled: true } };
+    const seen: Array<{ inTopic: boolean; stop: boolean }> = [];
+    const t = run(plan({ kind: 'time', minutes: 1 }, { interaction }), {
+      floors: () => [1, 2],
+      actions: async (_policy, signal, stop) => {
+        // Waits past the deadline: only the time target fires.
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+        seen.push({ inTopic: signal.aborted, stop: stop.aborted });
+      },
+    });
+    await t.go();
+    expect(seen).toEqual([{ inTopic: true, stop: false }]);
+  });
+});
+
+describe('resolving a preset bounds its interaction (A04, §11.1)', () => {
+  it('turns replies off with a warning unless their risk was acknowledged', () => {
+    const warnings: string[] = [];
+    const bounded = boundInteraction({ ...OFF, reply: { enabled: true, rate: 5, riskAcknowledged: false } }, (code) => warnings.push(code));
+    expect(bounded.reply.enabled).toBe(false);
+    expect(warnings).toEqual(['reply-risk-unacknowledged']);
+    expect(boundInteraction({ ...OFF, reply: { enabled: true, rate: 5, riskAcknowledged: true } }).reply.enabled).toBe(true);
+  });
+
+  it('likes at most 4 reply floors per topic, whatever the preset says', () => {
+    const preset = {
+      id: 'p',
+      siteId: site.id,
+      browseMode: 'quick' as const,
+      runMode: { kind: 'endless' as const },
+      categoryPaths: [categories[0]!.path],
+      interaction: { ...OFF, like: { ...OFF.like, enabled: true, maxReplies: 10 } },
+      extraWait: { enabled: false, minSec: 1, maxSec: 3 },
+      samplePerCategory: { min: 3, max: 8 },
+    };
+    expect(resolvePreset(preset, categories, seededRandom(1)).interaction.like.maxReplies).toBe(4);
   });
 });
 
@@ -224,7 +303,7 @@ describe('STOP-002 a stop is checked before interacting (A08)', () => {
 });
 
 describe('LIKE-003 two unconfirmed likes in a row end liking for the run (A09)', () => {
-  const interaction: InteractionPolicy = { like: { ...OFF.like, enabled: true }, reply: { enabled: true, rate: 5 } };
+  const interaction: InteractionPolicy = { like: { ...OFF.like, enabled: true }, reply: { enabled: true, rate: 5, riskAcknowledged: true } };
 
   it('turns likes off across topics after the second rejection and warns like-limit once', async () => {
     const liking: boolean[] = [];

@@ -71,13 +71,19 @@ export class StaticPage implements ReadOnlyPage {
   async scrollIntoView() {
     if (this.scrollError) throw this.scrollError;
   }
+  /** Selectors `centerInViewport` was asked for, in call order. */
+  readonly centered: string[] = [];
+  async centerInViewport(selector: string) {
+    if (this.scrollError) throw this.scrollError;
+    this.centered.push(selector);
+  }
   async moveMouse() {}
   async wheel(_dx: number, dy: number) {
     this.onWheel(dy);
   }
   visibility: DocumentVisibilityState = 'visible';
   fronted = 0;
-  visibilityState() {
+  async visibilityState() {
     return this.visibility;
   }
   async bringToFront() {

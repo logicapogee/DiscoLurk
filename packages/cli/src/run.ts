@@ -5,8 +5,9 @@ import { FileCategoryStore, FileLedgerStore, validateReplyTemplates } from '@dis
 import {
   EXPERIMENTS_OFF,
   isAbortError,
+  MAX_REPLY_LIKES,
   reportedTopicsShortfall,
-  resolveRunMode,
+  resolvePreset,
   seededRandom,
   systemDeps,
   type AuthSession,
@@ -22,6 +23,7 @@ import {
   type RunEvent,
   type RunModeSpec,
   type RunPlanSnapshot,
+  type RunPreset,
   type RunResult,
   type Site,
   type WaitRange,
@@ -47,6 +49,9 @@ export function parseProfileId(profileId: string): { siteId: string; name: strin
   return { siteId, name };
 }
 
+/** The longest time target: one day. */
+export const MAX_RUN_MINUTES = 24 * 60;
+
 /** Run mode syntax: `endless`, `topics:<n>`, `topics:<min>-<max>`, `time:<minutes>`. */
 export function parseRunMode(raw: string): RunModeSpec {
   if (raw === 'endless') return { kind: 'endless' };
@@ -58,6 +63,7 @@ export function parseRunMode(raw: string): RunModeSpec {
     return { kind: 'topics', min, max };
   }
   const time = /^time:(\d+)$/.exec(raw);
+  if (time && Number(time[1]) > MAX_RUN_MINUTES) throw new UsageError(`--run-mode time:<minutes> allows at most ${MAX_RUN_MINUTES} minutes (24 hours), not ${time[1]}`);
   if (time && Number(time[1]) > 0) return { kind: 'time', minutes: Number(time[1]) };
   throw new UsageError(`--run-mode must be endless, topics:<n>, topics:<min>-<max> or time:<minutes>, not ${raw}`);
 }
@@ -113,12 +119,14 @@ export interface RunArgs extends LoginArgs {
   interaction: InteractionPolicy;
   extraWait: WaitRange & { enabled: boolean };
   experiments: ExperimentFlags;
+  /** Options that were given but have no effect as combined, for stderr. */
+  usageWarnings: string[];
 }
 
 /** The default RunPreset's interaction settings: likes and replies off, at the field-tested rates. */
 export const DEFAULT_INTERACTION: InteractionPolicy = {
   like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 },
-  reply: { enabled: false, rate: 5 },
+  reply: { enabled: false, rate: 5, riskAcknowledged: false },
 };
 
 export const DEFAULT_EXTRA_WAIT: WaitRange & { enabled: boolean } = { enabled: true, minSec: 1, maxSec: 3 };
@@ -187,6 +195,16 @@ export function parseRunArgs(argv: string[]): RunArgs {
   if (v['browse-mode'] !== 'deep' && v['browse-mode'] !== 'quick') throw new UsageError('--browse-mode must be deep or quick');
   if (v.reply && !v[REPLY_RISK_FLAG]) throw new UsageError(REPLY_RISK_NOTICE);
   const d = DEFAULT_INTERACTION;
+  const usageWarnings: string[] = [];
+  const likeOptions = (['like-rate', 'reply-like-rate', 'max-reply-likes'] as const).filter((f) => v[f] !== undefined);
+  if (!v.like && likeOptions.length > 0) usageWarnings.push(`${likeOptions.map((f) => `--${f}`).join(', ')} take effect only with --like`);
+  if (!v.reply && v['reply-rate'] !== undefined) usageWarnings.push('--reply-rate takes effect only with --reply');
+  if (!v.reply && v[REPLY_RISK_FLAG]) usageWarnings.push(`--${REPLY_RISK_FLAG} takes effect only with --reply`);
+  let maxReplies = parseCount(v['max-reply-likes'], 'max-reply-likes', d.like.maxReplies);
+  if (maxReplies > MAX_REPLY_LIKES) {
+    usageWarnings.push(`--max-reply-likes ${maxReplies} is above the limit; ${MAX_REPLY_LIKES} reply floors at most are liked per topic`);
+    maxReplies = MAX_REPLY_LIKES;
+  }
   return {
     ...loginArgsFrom(v),
     browseMode: v['browse-mode'],
@@ -199,12 +217,13 @@ export function parseRunArgs(argv: string[]): RunArgs {
         enabled: v.like,
         topicRate: parsePercent(v['like-rate'], 'like-rate', d.like.topicRate),
         replyRate: parsePercent(v['reply-like-rate'], 'reply-like-rate', d.like.replyRate),
-        maxReplies: parseCount(v['max-reply-likes'], 'max-reply-likes', d.like.maxReplies),
+        maxReplies,
       },
-      reply: { enabled: v.reply, rate: parsePercent(v['reply-rate'], 'reply-rate', d.reply.rate) },
+      reply: { enabled: v.reply, rate: parsePercent(v['reply-rate'], 'reply-rate', d.reply.rate), riskAcknowledged: v[REPLY_RISK_FLAG] },
     },
     extraWait: parseExtraWait(v['extra-wait']),
     experiments: parseExperiments(v.experiments),
+    usageWarnings,
   };
 }
 
@@ -228,9 +247,20 @@ export function resolveCategories(site: Site, known: readonly Category[], tokens
   });
 }
 
-/** The CLI's default RunPreset, with this command line's choices. */
-export function buildPlan(args: RunArgs, categories: Category[], seed: number, now: Date): RunPlanSnapshot {
+/** The CLI's default RunPreset, with this command line's choices, resolved the way every entry point resolves a preset. */
+export function buildPlan(args: RunArgs, categories: Category[], seed: number, now: Date, warn?: (code: string, message: string) => void): RunPlanSnapshot {
   const at = now.toISOString();
+  const preset: RunPreset = {
+    id: 'cli',
+    siteId: args.site.id,
+    browseMode: args.browseMode,
+    runMode: args.runMode,
+    categoryPaths: categories.map((c) => c.path),
+    interaction: args.interaction,
+    extraWait: args.extraWait,
+    samplePerCategory: { min: 3, max: 8 },
+    experiments: args.experiments,
+  };
   return {
     id: `run-${now.getTime()}-${seed.toString(16)}`,
     siteId: args.site.id,
@@ -239,16 +269,7 @@ export function buildPlan(args: RunArgs, categories: Category[], seed: number, n
     seed,
     plannedAt: at,
     materializedAt: at,
-    preset: {
-      presetId: 'cli',
-      browseMode: args.browseMode,
-      runMode: resolveRunMode(args.runMode, seededRandom(seed)),
-      categories,
-      interaction: structuredClone(args.interaction),
-      extraWait: { ...args.extraWait },
-      samplePerCategory: { min: 3, max: 8 },
-      experiments: { ...args.experiments },
-    },
+    preset: resolvePreset(preset, categories, seededRandom(seed), warn),
   };
 }
 

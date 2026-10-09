@@ -93,6 +93,10 @@ export interface ActionPolicy extends Readonly<InteractionPolicy> {
   readonly extraWait: Readonly<WaitRange & { enabled: boolean }>;
   /** Whether a like may be sent now: the preset's like switch, until the site's daily like limit turns it off. Asked before every like. */
   liking(): boolean;
+  /** Whether a reply may be posted now: the preset's reply switch, until `disableReplies` turns it off. */
+  replying(): boolean;
+  /** Turns replies off for the rest of the run, e.g. after a draft could not be closed. */
+  disableReplies(): void;
   onAction(report: ActionReport): void;
 }
 
@@ -115,8 +119,14 @@ export interface ForumPort {
   readProgress(kind: 'initial' | 'final', signal: AbortSignal): Promise<LevelSnapshot | null>;
   collectTopics(category: Category, strategy: TopicStrategy, signal: AbortSignal): Promise<TopicBatch>;
   enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit>;
+  /** Whether the page is on this topic now; tells an entry the deadline cut short after its click from one that never left the list. */
+  showsTopic(topic: TopicCandidate): boolean;
   readTopic(visit: TopicVisit, strategy: ReadStrategy, signal: AbortSignal): Promise<ReadResult>;
-  performActions(policy: ActionPolicy, signal: AbortSignal): Promise<void>;
+  /**
+   * `signal` cuts the topic short (a stop or the time target); `stop` carries stop requests alone
+   * and bounds what must finish once a click has been sent: confirming it, or discarding a draft.
+   */
+  performActions(policy: ActionPolicy, signal: AbortSignal, stop: AbortSignal): Promise<void>;
   returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification>;
 }
 

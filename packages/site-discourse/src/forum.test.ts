@@ -98,7 +98,7 @@ function forumWith(page: ReadOnlyPage, over: Partial<ConstructorParameters<typeo
     page,
     titleLinks: { click: async () => {} },
     likeButton: { click: async () => {} },
-    composer: { open: async () => {}, fill: async () => {}, submit: async () => {}, discard: async () => {} },
+    composer: { open: async () => {}, fill: async () => {}, submit: async () => {}, discard: async () => {}, postsAcknowledged: () => 0 },
     replyTemplates: [],
     deps: time.deps(),
     headless: true,
@@ -285,6 +285,18 @@ describe('entering from the list and getting back to it (T08, T10)', () => {
   });
 });
 
+describe('showsTopic tells a click that landed from one that never left the list', () => {
+  it('answers from the page address by topic id', () => {
+    const page = new StaticPage('https://linux.do/t/some-topic/2496114/3', '');
+    const { forum } = forumWith(page);
+    const topic = { id: '2496114', title: '', unread: true, pinned: false };
+    expect(forum.showsTopic(topic)).toBe(true);
+    expect(forum.showsTopic({ ...topic, id: '249611' })).toBe(false);
+    page.address = 'https://linux.do/c/develop/4';
+    expect(forum.showsTopic(topic)).toBe(false);
+  });
+});
+
 describe('B10 password login keeps the credentials out of every report', () => {
   const SECRET = 'hunter2-Sup3rSecret';
 
@@ -307,7 +319,7 @@ describe('B10 password login keeps the credentials out of every report', () => {
       page,
       titleLinks: { click: async () => {} },
       likeButton: { click: async () => {} },
-      composer: { open: async () => {}, fill: async () => {}, submit: async () => {}, discard: async () => {} },
+      composer: { open: async () => {}, fill: async () => {}, submit: async () => {}, discard: async () => {}, postsAcknowledged: () => 0 },
       replyTemplates: [],
       deps: time.deps(),
       headless: true,
@@ -333,7 +345,7 @@ describe('B10 password login keeps the credentials out of every report', () => {
         browseMode: 'quick',
         runMode: { kind: 'endless' },
         categories: [{ name: 'a', path: '/c/a/1', id: 1, enabledByDefault: true }],
-        interaction: { like: { enabled: false, topicRate: 0, replyRate: 0, maxReplies: 0 }, reply: { enabled: false, rate: 0 } },
+        interaction: { like: { enabled: false, topicRate: 0, replyRate: 0, maxReplies: 0 }, reply: { enabled: false, rate: 0, riskAcknowledged: false } },
         extraWait: { enabled: false, minSec: 1, maxSec: 3 },
         samplePerCategory: { min: 1, max: 1 },
         experiments: { useNewList: false, useUnreadList: false, refreshCategories: false, smartRanked: false },

@@ -1,4 +1,4 @@
-import type { BrowseMode, BrowserMode, RunModeSpec } from '@disco-lurk/core';
+import { MAX_REPLY_LIKES, type BrowseMode, type BrowserMode, type RunModeSpec } from '@disco-lurk/core';
 import type { ActiveRun, StoredPreset } from '@disco-lurk/server/contract';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { ApiError } from '../api';
@@ -7,7 +7,7 @@ import { ReplyRiskDialog } from '../components/dialog';
 import { LogPanel } from '../components/log';
 import { LevelTable, StatsPanel } from '../components/stats';
 import { apiMessage, copy } from '../copy';
-import { duration, lastStats, remainingText, runModeSpecText, runModeText } from '../format';
+import { duration, lastStats, levelsOf, remainingText, runModeSpecText, runModeText } from '../format';
 import { useStore } from '../store';
 
 function errorText(err: unknown): string {
@@ -27,7 +27,6 @@ export function RunPage() {
   const current = state.presets.find((p) => p.id === state.settings.currentPresetId);
   const [siteId, setSiteId] = useState(current?.siteId ?? state.sites[0]?.site.id ?? '');
   const [draft, setDraft] = useState<StoredPreset | null>(null);
-  const [replyConfirmed, setReplyConfirmed] = useState(false);
   const [askReply, setAskReply] = useState(false);
   const [message, setMessage] = useState<{ kind: 'error' | 'ok' | 'info'; text: string } | null>(null);
   const [pending, setPending] = useState<'start' | 'refresh' | null>(null);
@@ -81,11 +80,11 @@ export function RunPage() {
   const toggleReply = (on: boolean) => {
     // Turning replies on waits for the risk dialog; cancelling leaves them off.
     if (on) setAskReply(true);
-    else setReply({ enabled: false });
+    else setReply({ enabled: false, riskAcknowledged: false });
   };
 
   const save = async (d: StoredPreset) => {
-    const saved = await api.savePreset(d, replyConfirmed);
+    const saved = await api.savePreset(d);
     await store.refreshPresets();
     return saved;
   };
@@ -173,8 +172,7 @@ export function RunPage() {
         <ReplyRiskDialog
           onConfirm={() => {
             setAskReply(false);
-            setReplyConfirmed(true);
-            setReply({ enabled: true });
+            setReply({ enabled: true, riskAcknowledged: true });
           }}
           onCancel={() => setAskReply(false)}
         />
@@ -290,7 +288,7 @@ export function RunPage() {
                     {copy.run.replyLikeRate} <NumberInput label={copy.run.replyLikeRate} value={interaction.like.replyRate} min={0} max={100} suffix="%" onChange={(replyRate) => setLike({ replyRate })} />
                   </label>
                   <label>
-                    {copy.run.replyLikeMax} <NumberInput label={copy.run.replyLikeMax} value={interaction.like.maxReplies} min={0} max={20} onChange={(maxReplies) => setLike({ maxReplies })} />
+                    {copy.run.replyLikeMax} <NumberInput label={copy.run.replyLikeMax} value={interaction.like.maxReplies} min={0} max={MAX_REPLY_LIKES} onChange={(maxReplies) => setLike({ maxReplies })} />
                   </label>
                 </div>
               )}
@@ -384,7 +382,7 @@ export function RunPage() {
             </div>
           )}
           {stats && <StatsPanel stats={stats} />}
-          {run?.result ? <LevelTable result={run.result} events={events} /> : run && <div class="panel muted">{copy.levels.pending}</div>}
+          {run && <LevelTable levels={run.result?.levels ?? levelsOf(events)} baseline={run.result?.baseline ?? null} stats={stats} events={events} />}
         </div>
       </div>
       {run && <LogPanel api={api} runId={run.runId} events={events} />}

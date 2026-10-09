@@ -1,4 +1,5 @@
 import type { ScheduleSpec, ScheduleView } from '@disco-lurk/core';
+import type { ScheduleHistoryEntry, ScheduleList } from '@disco-lurk/server/contract';
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError } from '../api';
 import { Field, Notice, NumberInput, Segmented, Select, Toggle } from '../components/fields';
@@ -28,6 +29,33 @@ function blankSpec(profileId: string, presetId: string): ScheduleSpec {
 function triggerText(spec: ScheduleSpec): string {
   const t = spec.trigger;
   return t.kind === 'cron' ? `cron ${t.expression}` : `${copy.schedules.triggers['daily-window']} ${t.runs} 次 · ${t.start}–${t.end}`;
+}
+
+function historyLine(e: ScheduleHistoryEntry): string {
+  const c = copy.schedules;
+  const reason = e.reason ? `（${c.skipReasons[e.reason] ?? e.reason}）` : '';
+  const ended = e.ended ? ` → ${copy.states[e.ended.outcome]} · ${copy.stopCauses[e.ended.stopCause] ?? e.ended.stopCause}${e.ended.failure ? ` · ${e.ended.failure}` : ''}` : '';
+  return `${dateTime(e.at)} ${c.causes[e.cause] ?? e.cause} ${c.outcomes[e.outcome] ?? e.outcome}${reason}${ended}`;
+}
+
+function ScheduleHistory(props: { id: string }) {
+  const [, store] = useStore();
+  const [entries, setEntries] = useState<ScheduleHistoryEntry[] | null>(null);
+  useEffect(() => {
+    store.api.scheduleHistory(props.id).then(setEntries, () => setEntries([]));
+  }, [props.id]);
+  if (!entries) return <p class="muted">{copy.common.loading}</p>;
+  if (entries.length === 0) return <p class="muted">{copy.schedules.historyEmpty}</p>;
+  return (
+    <ul class="schedule-history">
+      {entries
+        .slice(-20)
+        .reverse()
+        .map((e) => (
+          <li key={`${e.at}-${e.snapshotId}`}>{historyLine(e)}</li>
+        ))}
+    </ul>
+  );
 }
 
 function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleView[]): void; onCancel(): void }) {
@@ -154,22 +182,25 @@ function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleVie
 
 export function SchedulesPage() {
   const [state, store] = useStore();
-  const [views, setViews] = useState<ScheduleView[]>([]);
+  const [list, setList] = useState<ScheduleList>({ available: true, schedules: [] });
+  const views = list.schedules;
+  const setViews = (schedules: ScheduleView[]) => setList({ ...list, schedules });
   const [editing, setEditing] = useState<ScheduleSpec | null>(null);
+  const [shownHistory, setShownHistory] = useState<string | null>(null);
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     store.api.schedules().then(
-      (l) => setViews(l.schedules),
+      (l) => setList(l),
       (err: unknown) => setMessage({ kind: 'error', text: errorText(err) }),
     );
   }, []);
 
-  const act = async (fn: () => Promise<ScheduleView[] | void>) => {
+  const act = async (fn: () => Promise<ScheduleList | void>) => {
     setMessage(null);
     try {
-      const v = await fn();
-      if (v) setViews(v);
+      const l = await fn();
+      if (l) setList(l);
     } catch (err) {
       setMessage({ kind: 'error', text: errorText(err) });
     }
@@ -179,7 +210,7 @@ export function SchedulesPage() {
   return (
     <div class="page">
       <h1>{copy.schedules.title}</h1>
-      <Notice kind="warn">{copy.schedules.memoryNote}</Notice>
+      {!list.available && <Notice kind="warn">{copy.schedules.notOwned(list.reason)}</Notice>}
       {message && <Notice kind={message.kind}>{message.text}</Notice>}
       {views.length === 0 && !editing && <p class="muted">{copy.schedules.empty}</p>}
       <ul class="schedules">
@@ -210,16 +241,26 @@ export function SchedulesPage() {
               <button type="button" class="primary" onClick={() => act(async () => void (await store.api.triggerSchedule(v.spec.id)))}>
                 {copy.schedules.runNow}
               </button>
-              <button type="button" disabled={v.paused} onClick={() => act(async () => (await store.api.pauseSchedule(v.spec.id)).schedules)}>
-                {copy.schedules.pause}
+              {v.paused ? (
+                <button type="button" onClick={() => act(() => store.api.resumeSchedule(v.spec.id))}>
+                  {copy.schedules.resume}
+                </button>
+              ) : (
+                <button type="button" onClick={() => act(() => store.api.pauseSchedule(v.spec.id))}>
+                  {copy.schedules.pause}
+                </button>
+              )}
+              <button type="button" aria-expanded={shownHistory === v.spec.id} onClick={() => setShownHistory(shownHistory === v.spec.id ? null : v.spec.id)}>
+                {copy.schedules.history}
               </button>
               <button type="button" onClick={() => setEditing(structuredClone(v.spec))}>
                 {copy.common.edit}
               </button>
-              <button type="button" class="danger" onClick={() => act(async () => (await store.api.deleteSchedule(v.spec.id)).schedules)}>
+              <button type="button" class="danger" onClick={() => act(() => store.api.deleteSchedule(v.spec.id))}>
                 {copy.common.delete}
               </button>
             </div>
+            {shownHistory === v.spec.id && <ScheduleHistory id={v.spec.id} />}
           </li>
         ))}
       </ul>
@@ -232,7 +273,7 @@ export function SchedulesPage() {
             setEditing(null);
           }}
         />
-      ) : firstPreset ? (
+      ) : !list.available ? null : firstPreset ? (
         <button type="button" class="primary" onClick={() => setEditing(blankSpec(firstPreset.profileId!, firstPreset.id))}>
           {copy.schedules.create}
         </button>

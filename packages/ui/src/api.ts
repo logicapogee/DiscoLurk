@@ -6,6 +6,7 @@ import type {
   ProfilePatch,
   ProfileView,
   RunRecord,
+  ScheduleHistoryEntry,
   ScheduleList,
   ServerFrame,
   ServerInfo,
@@ -103,8 +104,7 @@ export class Api {
   loginAction = (id: string, action: 'recheck' | 'continue' | 'close') => this.json<LoginView>('POST', `/profiles/${seg(id)}/login/${action}`);
 
   presets = () => this.json<StoredPreset[]>('GET', '/presets');
-  savePreset = (preset: StoredPreset, confirmReply: boolean) =>
-    this.json<StoredPreset>('PUT', `/presets/${encodeURIComponent(preset.id)}`, { preset, ...(confirmReply ? { confirmReply: true } : {}) });
+  savePreset = (preset: StoredPreset) => this.json<StoredPreset>('PUT', `/presets/${encodeURIComponent(preset.id)}`, { preset });
   deletePreset = (id: string) => this.json<void>('DELETE', `/presets/${encodeURIComponent(id)}`);
 
   activeRuns = () => this.json<ActiveRun[]>('GET', '/runs/active');
@@ -125,6 +125,8 @@ export class Api {
   deleteSchedule = (id: string) => this.json<ScheduleList>('DELETE', `/schedules/${encodeURIComponent(id)}`);
   triggerSchedule = (id: string) => this.json<{ runId: string }>('POST', `/schedules/${encodeURIComponent(id)}/trigger`);
   pauseSchedule = (id: string) => this.json<ScheduleList>('POST', `/schedules/${encodeURIComponent(id)}/pause`);
+  resumeSchedule = (id: string) => this.json<ScheduleList>('POST', `/schedules/${encodeURIComponent(id)}/resume`);
+  scheduleHistory = (id: string) => this.json<ScheduleHistoryEntry[]>('GET', `/schedules/${encodeURIComponent(id)}/history`);
 }
 
 export type StreamStatus = 'connecting' | 'open' | 'closed' | 'auth-failed';

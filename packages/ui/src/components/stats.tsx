@@ -1,4 +1,4 @@
-import { estimateMetrics, reportedTopicsShortfall, type LevelSnapshot, type MetricKey, type RunEvent, type RunResult, type RunStats } from '@disco-lurk/core';
+import { emptyStats, estimateMetrics, reportedTopicsShortfall, type LevelSnapshot, type MetricKey, type RunEvent, type RunResult, type RunStats } from '@disco-lurk/core';
 import { copy } from '../copy';
 import { duration } from '../format';
 
@@ -64,11 +64,16 @@ function head(s: LevelSnapshot | null) {
     .join(' · ');
 }
 
-/** The progress page before and after, with the local estimate marked as such. */
-export function LevelTable(props: { result: RunResult; events: readonly RunEvent[] }) {
-  const { levels, baseline, stats } = props.result;
+/**
+ * The progress page before and after, with the local estimate marked as such. While the run is
+ * going `levels` comes from its events and `baseline` is not known yet (null).
+ */
+export function LevelTable(props: { levels: RunResult['levels']; baseline: RunResult['baseline'] | null; stats: RunStats | undefined; events: readonly RunEvent[] }) {
+  const { levels, baseline } = props;
+  const stats = props.stats ?? emptyStats();
   const l = copy.levels;
   if (baseline === 'not-applicable') return <div class="panel muted">{l.notApplicable}</div>;
+  if (baseline === null && !levels.initial && !levels.final) return <div class="panel muted">{l.pending}</div>;
   const estimates = estimateMetrics(levels.initial, stats);
   const labels = [...new Set([...(levels.initial?.metrics ?? []), ...(levels.final?.metrics ?? [])].map((m) => m.label))];
   const shortfall = reportedTopicsShortfall(stats);
@@ -100,7 +105,7 @@ export function LevelTable(props: { result: RunResult; events: readonly RunEvent
             const b = levels.final?.metrics.find((m) => m.label === label);
             const est = estimates.find((m) => m.label === label)?.estimated ?? null;
             const req = (b ?? a)?.required;
-            const delta = a && b && baseline === 'present' ? b.current - a.current : null;
+            const delta = a && b && baseline !== 'missing' ? b.current - a.current : null;
             return (
               <tr key={label}>
                 <th scope="row">{label}</th>

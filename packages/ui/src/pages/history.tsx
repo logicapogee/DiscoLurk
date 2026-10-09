@@ -23,7 +23,7 @@ function Details(props: { record: RunRecord }) {
       )}
       <div class="columns">
         <StatsPanel stats={r.stats} />
-        <LevelTable result={r} events={events ?? []} />
+        <LevelTable levels={r.levels} baseline={r.baseline} stats={r.stats} events={events ?? []} />
       </div>
       {events && <LogPanel api={store.api} runId={props.record.runId} events={events} />}
     </div>

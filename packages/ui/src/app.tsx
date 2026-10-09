@@ -63,6 +63,37 @@ function TokenForm(props: { error?: string | undefined; onSubmit(token: string):
   );
 }
 
+/** The app icon's bubble and eye, drawn small enough to sit beside the name. */
+function BrandMark() {
+  return (
+    <svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true">
+      <path fill="#2cc7ea" d="M13 2.5c5.8 0 10.2 4.1 10.2 9.4S18.8 21.3 13 21.3c-1.4 0-2.8-.3-4-.8L3.8 22.3l1.5-4.2C3.8 16.4 2.8 14.3 2.8 11.9 2.8 6.6 7.2 2.5 13 2.5Z" />
+      <path fill="#0f1428" d="M6.6 11.9C8.6 8.6 10.7 7.4 13 7.4s4.4 1.2 6.4 4.5c-2 3.3-4.1 4.5-6.4 4.5s-4.4-1.2-6.4-4.5Z" />
+      <circle cx="13" cy="11.9" r="3.3" fill="#3ee08f" />
+      <circle cx="13" cy="11.9" r="1.4" fill="#0f1428" />
+    </svg>
+  );
+}
+
+const ICONS: Record<Page | 'logout', string> = {
+  dashboard: 'M3 3h6v8H3zM11 3h6v4h-6zM11 9h6v8h-6zM3 13h6v4H3z',
+  run: 'M6 4.5v11l9-5.5z',
+  profiles: 'M10 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM4 17c.8-3 3.1-4.5 6-4.5s5.2 1.5 6 4.5',
+  schedules: 'M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM10 6v4l2.5 2',
+  history: 'M3.5 10a6.5 6.5 0 1 0 2-4.7M3 3v3.5h3.5M10 6.5V10l2.5 1.5',
+  settings: 'M4 6h6M14 6h2M4 14h2M10 14h6M12 4v4M8 12v4',
+  about: 'M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM10 9v4.5M10 6.5v.01',
+  logout: 'M8 4H5v12h3M12 6.5 15.5 10 12 13.5M15.5 10H8',
+};
+
+function NavIcon(props: { page: Page | 'logout' }) {
+  return (
+    <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d={ICONS[props.page]} />
+    </svg>
+  );
+}
+
 function Shell(props: { conn: SidecarConnection | null; notice?: string | undefined; onLogout?: (() => void) | undefined; onTokenRotated(token: string): void }) {
   // The shell redraws for its badges and the connection notice only, never for each run event.
   const [state] = useStore((s) => ({ running: Object.values(s.runs).filter((r) => !r.result).length, newer: s.update?.newer === true, stream: s.stream }));
@@ -71,9 +102,13 @@ function Shell(props: { conn: SidecarConnection | null; notice?: string | undefi
   return (
     <div class="shell">
       <nav class="sidebar" aria-label="主导航">
-        <div class="brand">{copy.app.name}</div>
+        <div class="brand">
+          <BrandMark />
+          {copy.app.name}
+        </div>
         {PAGES.map((p) => (
           <button key={p} type="button" class={`nav${p === page ? ' on' : ''}`} aria-current={p === page ? 'page' : undefined} onClick={() => setPage(p)}>
+            <NavIcon page={p} />
             {copy.nav[p]}
             {p === 'run' && running > 0 && <span class="count">{running}</span>}
             {p === 'about' && state.newer && <span class="count">新</span>}
@@ -81,6 +116,7 @@ function Shell(props: { conn: SidecarConnection | null; notice?: string | undefi
         ))}
         {props.onLogout && (
           <button type="button" class="nav logout" onClick={props.onLogout}>
+            <NavIcon page="logout" />
             {copy.token.logout}
           </button>
         )}

@@ -19,6 +19,8 @@ export interface LevelMetric {
   key: MetricKey;
   current: number;
   required: number | null;
+  /** The requirement is a ceiling to stay at or under (flags, bans) rather than a goal to reach. */
+  limit?: true;
 }
 
 /** A parsed site progress page; `level` is numeric on linuxdo and a title on docofcard. */

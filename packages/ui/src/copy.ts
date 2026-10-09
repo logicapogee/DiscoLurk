@@ -377,6 +377,18 @@ export const copy = {
     idle: '空闲',
     progress: '站点进度',
     current: '本次统计',
+    noProgress: '还没有读到站点进度，完成一次运行后显示',
+    goals: '升级要求',
+    limits: '限制项',
+    met: (n: number, total: number) => `${n} / ${total} 项达标`,
+    left: (n: number) => `还差 ${n}`,
+    done: '已达标',
+    over: '超出上限',
+    ceiling: (n: number) => `上限 ${n}`,
+    estimated: '含本次估算',
+    thisRun: '本次运行',
+    lastRunStats: '最近一次运行',
+    openRun: '查看运行',
   },
 } as const;
 

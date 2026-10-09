@@ -109,6 +109,10 @@ describe('CONNECT-001 connect.linux.do parsing (§5.1)', () => {
     for (const label of ['被禁言', '被封禁']) expect(snapshot.metrics.find((m) => m.label === label)?.required).toBe(0);
   });
 
+  it('marks quota and veto items as limits and the rest as goals', () => {
+    expect(snapshot.metrics.filter((m) => m.limit).map((m) => m.label)).toEqual(['被举报帖子', '举报用户', '被禁言', '被封禁']);
+  });
+
   it('reports selector-contract-broken when every tl3 group is missing', () => {
     expect(contractBroken(() => parseConnect(EMPTY()))).toBe(true);
   });

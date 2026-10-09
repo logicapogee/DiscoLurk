@@ -26,9 +26,9 @@ export const connectLinuxdo: ProgressModule = {
 
 const text = (el: Element | null) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
 
-function metric(label: string, current: number | null, required: number | null): LevelMetric | null {
+function metric(label: string, current: number | null, required: number | null, limit = false): LevelMetric | null {
   if (!label || current === null) return null;
-  return { label, key: connectLinuxdo.labelMap[label] ?? 'other', current, required };
+  return { label, key: connectLinuxdo.labelMap[label] ?? 'other', current, required, ...(limit ? { limit: true as const } : {}) };
 }
 
 /** All four `tl3-*` groups; a page with none of them breaks the contract. */
@@ -51,10 +51,10 @@ export function parseConnect(root: DomRoot): LevelSnapshot {
   }
   for (const card of Array.from(root.querySelectorAll('.tl3-quota-card'))) {
     const nums = /(\d+)\s*\/\s*(\d+)/.exec(text(card.querySelector('.tl3-quota-nums')));
-    push(metric(text(card.querySelector('.tl3-quota-label')), nums ? Number(nums[1]) : null, nums ? Number(nums[2]) : null));
+    push(metric(text(card.querySelector('.tl3-quota-label')), nums ? Number(nums[1]) : null, nums ? Number(nums[2]) : null, true));
   }
   for (const veto of Array.from(root.querySelectorAll('.tl3-veto-item'))) {
-    push(metric(text(veto.querySelector('.tl3-veto-label')), toInt(veto.querySelector('.tl3-veto-value')?.textContent), 0));
+    push(metric(text(veto.querySelector('.tl3-veto-label')), toInt(veto.querySelector('.tl3-veto-value')?.textContent), 0, true));
   }
   if (metrics.length === 0) {
     throw new RunError('selector-contract-broken', 'connect page has none of tl3-ring / tl3-bar-item / tl3-quota-card / tl3-veto-item');

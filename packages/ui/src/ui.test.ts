@@ -397,12 +397,19 @@ describe('spec pages', () => {
     };
   };
 
-  it('shows the last run\'s site progress and numbers on the dashboard', async () => {
-    mount(fakeApi(), () => h(DashboardPage, { go: () => {} }), { history: [ended()] });
-    await screen.findByText(copy.levels.title);
-    expect(screen.getByText(copy.stats.title)).toBeTruthy();
-    const row = [...document.querySelectorAll('table.levels tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent));
-    expect(row[0]).toEqual(['10', expect.any(String), '14', '500', '+4']);
+  it('shows the last run\'s site progress against each requirement and its numbers on the dashboard', async () => {
+    const rec = ended();
+    rec.result.levels.final!.metrics.push({ label: '被禁言', key: 'silenced', current: 0, required: 0, limit: true });
+    mount(fakeApi(), () => h(DashboardPage, { go: () => {} }), { history: [rec] });
+    await screen.findByText(copy.dashboard.goals);
+    const meter = screen.getByRole('meter', { name: '浏览话题' });
+    expect(meter.getAttribute('aria-valuenow')).toBe('14');
+    expect(meter.closest('.meter')?.textContent).toContain(copy.dashboard.left(486));
+    expect(meter.closest('.meter')?.textContent).toContain('+4');
+    // A ceiling that holds counts as met and is listed apart from the goals.
+    expect(document.querySelector('ul.limits .limit.met')?.textContent).toContain('被禁言');
+    expect(screen.getByText(copy.dashboard.met(0, 1))).toBeTruthy();
+    expect(document.querySelector('.tiles')?.textContent).toContain('4');
   });
 
   it('offers each history entry\'s log for download', async () => {

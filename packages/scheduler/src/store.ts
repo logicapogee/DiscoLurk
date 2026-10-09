@@ -1,8 +1,16 @@
-import type { RunId, RunPlanSnapshot, ScheduleId, TriggerCause } from '@disco-lurk/core';
+import type { ErrorCode, RunId, RunOutcome, RunPlanSnapshot, ScheduleId, StopCause, TriggerCause } from '@disco-lurk/core';
 
 export interface PlannedRun {
   snapshot: RunPlanSnapshot;
   status: 'pending' | 'started' | 'skipped' | 'missed';
+}
+
+/** How a started run ended. */
+export interface RunEnding {
+  at: string;
+  outcome: RunOutcome;
+  stopCause: StopCause;
+  failure?: ErrorCode;
 }
 
 export interface HistoryEntry {
@@ -12,12 +20,15 @@ export interface HistoryEntry {
   outcome: 'started' | 'skipped' | 'missed';
   reason?: string;
   runId?: RunId;
+  ended?: RunEnding;
 }
 
 export interface ScheduleState {
   paused: boolean;
   runOnStartConsumed: boolean;
-  /** Local dates (in the schedule's zone) whose runs are already materialized. */
+  /** The trigger and zone the pending plan was made for; a change replans the runs not yet due. */
+  planKey?: string;
+  /** Local dates (in the schedule's zone) whose daily-window runs are already materialized. */
   generatedDays: string[];
   planned: PlannedRun[];
   history: HistoryEntry[];

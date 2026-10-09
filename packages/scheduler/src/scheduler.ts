@@ -8,6 +8,7 @@ import {
   type RunId,
   type RunPlanSnapshot,
   type RunPreset,
+  type RunResult,
   type ScheduleId,
   type ScheduleSpec,
   type ScheduleView,
@@ -15,6 +16,7 @@ import {
   type SiteId,
   type TriggerCause,
 } from '@disco-lurk/core';
+import { nextCronTime, parseCron } from './cron';
 import { dailyPoints, type DailyWindow } from './daily';
 import type { HistoryEntry, PlannedRun, ScheduleState, SchedulerState, ScheduleStore } from './store';
 import { localParts, parseHhmm, zonedToEpoch } from './tz';
@@ -47,7 +49,33 @@ export class ScheduleSkipped extends Error {
   }
 }
 
+/** History entries kept per schedule; older ones are dropped on the next write. */
+export const HISTORY_LIMIT = 200;
+/** Finished planned runs and generated days older than this are dropped; history keeps their outcome. */
+const PLAN_RETENTION_MS = 7 * 24 * 3_600_000;
+
 const emptyScheduleState = (): ScheduleState => ({ paused: false, runOnStartConsumed: false, generatedDays: [], planned: [], history: [] });
+
+const planKey = (spec: ScheduleSpec) => JSON.stringify([spec.timezone, spec.trigger]);
+
+/** Rejects a trigger the scheduler could not plan, before anything is persisted for it. */
+export function validateTrigger(spec: Pick<ScheduleSpec, 'trigger' | 'timezone'>): void {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: spec.timezone });
+  } catch {
+    throw new Error(`Unknown time zone "${spec.timezone}"; use an IANA name such as Asia/Shanghai`);
+  }
+  const t = spec.trigger;
+  if (t.kind === 'cron') {
+    parseCron(t.expression);
+    return;
+  }
+  const start = parseHhmm(t.start);
+  const end = parseHhmm(t.end);
+  if (end <= start) throw new Error(`Window ${t.start}-${t.end} must end after it starts`);
+  if (!Number.isInteger(t.runs) || t.runs < 1) throw new Error('runs per day must be a whole number of at least 1');
+  if (t.jitterMinutes < 0 || t.minGapMinutes < 0) throw new Error('jitter and minimum gap cannot be negative');
+}
 
 /** Materializes runs into immutable snapshots up front and persists them before anything fires. */
 export class PlanScheduler implements Scheduler {
@@ -62,6 +90,13 @@ export class PlanScheduler implements Scheduler {
   }
 
   private persist(): Promise<void> {
+    const now = this.deps.clock.now();
+    for (const s of Object.values(this.state!.schedules)) {
+      if (s.history.length > HISTORY_LIMIT) s.history.splice(0, s.history.length - HISTORY_LIMIT);
+      s.planned = s.planned.filter((p) => p.status === 'pending' || now - Date.parse(p.snapshot.plannedAt) < PLAN_RETENTION_MS);
+      const oldest = new Date(now - PLAN_RETENTION_MS).toISOString().slice(0, 10);
+      s.generatedDays = s.generatedDays.filter((d) => d >= oldest);
+    }
     return this.deps.store.save(structuredClone(this.state!));
   }
 
@@ -89,15 +124,28 @@ export class PlanScheduler implements Scheduler {
     };
   }
 
-  /** Generates the current local day once; later reconciles and restarts read the stored plan. */
-  private planToday(spec: ScheduleSpec, s: ScheduleState): void {
-    if (spec.trigger.kind !== 'daily-window') {
-      throw new Error(`Schedule ${spec.id}: trigger kind "${spec.trigger.kind}" is not supported by this build`);
+  /**
+   * Keeps the plan ahead filled: the current local day for a daily window, the next occurrence
+   * for cron. Existing pending runs are kept as materialized, so restarts read the same plan.
+   */
+  private plan(spec: ScheduleSpec, s: ScheduleState): void {
+    const key = planKey(spec);
+    if (s.planKey !== undefined && s.planKey !== key) {
+      s.planned = s.planned.filter((p) => p.status !== 'pending');
+      s.generatedDays = [];
     }
+    s.planKey = key;
     const now = this.deps.clock.now();
+    const t = spec.trigger;
+    if (t.kind === 'cron') {
+      if (s.planned.some((p) => p.status === 'pending')) return;
+      const last = s.planned.reduce((max, p) => Math.max(max, Date.parse(p.snapshot.plannedAt)), -Infinity);
+      const at = nextCronTime(parseCron(t.expression), Math.max(now, last), spec.timezone);
+      if (at !== null) s.planned.push({ snapshot: this.materialize(spec, at), status: 'pending' });
+      return;
+    }
     const today = localParts(now, spec.timezone);
     if (s.generatedDays.includes(today.date)) return;
-    const t = spec.trigger;
     const window: DailyWindow = {
       runs: t.runs,
       start: parseHhmm(t.start),
@@ -146,12 +194,19 @@ export class PlanScheduler implements Scheduler {
     }
   }
 
+  /** Takes the current definitions without planning or firing anything. */
+  async adopt(specs: ScheduleSpec[]): Promise<void> {
+    await this.load();
+    for (const spec of specs) validateTrigger(spec);
+    this.specs = new Map(specs.map((s) => [s.id, s]));
+  }
+
   async reconcile(specs: ScheduleSpec[]): Promise<ScheduleView[]> {
     const state = await this.load();
-    this.specs = new Map(specs.map((s) => [s.id, s]));
+    await this.adopt(specs);
     for (const spec of specs) {
       const s = (state.schedules[spec.id] ??= emptyScheduleState());
-      if (spec.enabled) this.planToday(spec, s);
+      if (spec.enabled) this.plan(spec, s);
     }
     await this.persist();
     await this.tick();
@@ -179,17 +234,18 @@ export class PlanScheduler implements Scheduler {
     for (const spec of this.specs.values()) {
       const s = state.schedules[spec.id];
       if (!s || !spec.enabled) continue;
-      this.planToday(spec, s);
+      this.plan(spec, s);
       const due = s.planned.filter((p) => p.status === 'pending' && Date.parse(p.snapshot.plannedAt) <= now);
       const graceMs = spec.misfire.graceMinutes * 60_000;
       const missed = due.filter((p) => now - Date.parse(p.snapshot.plannedAt) > graceMs);
       for (const p of due.filter((p) => !missed.includes(p))) this.tryFire(spec, s, p, 'planned');
-      if (missed.length === 0) continue;
       for (const p of missed) {
         p.status = 'missed';
         this.record(s, { snapshotId: p.snapshot.id, cause: 'misfire', outcome: 'missed' });
       }
-      if (spec.misfire.policy === 'run-once') this.tryFire(spec, s, missed.at(-1)!, 'misfire');
+      if (missed.length > 0 && spec.misfire.policy === 'run-once') this.tryFire(spec, s, missed.at(-1)!, 'misfire');
+      // A cron schedule holds one pending run, so the next one is planned once this one is settled.
+      this.plan(spec, s);
     }
     await this.persist();
   }
@@ -207,23 +263,57 @@ export class PlanScheduler implements Scheduler {
   }
 
   async pause(scheduleId: ScheduleId): Promise<void> {
+    await this.setPaused(scheduleId, true);
+  }
+
+  /** Runs that came due while paused were skipped; resuming only affects runs still ahead. */
+  async resume(scheduleId: ScheduleId): Promise<void> {
+    await this.setPaused(scheduleId, false);
+  }
+
+  private async setPaused(scheduleId: ScheduleId, paused: boolean): Promise<void> {
     const state = await this.load();
-    (state.schedules[scheduleId] ??= emptyScheduleState()).paused = true;
+    (state.schedules[scheduleId] ??= emptyScheduleState()).paused = paused;
     await this.persist();
+  }
+
+  /** Forgets a deleted schedule's plan and history. */
+  async remove(scheduleId: ScheduleId): Promise<void> {
+    const state = await this.load();
+    delete state.schedules[scheduleId];
+    this.specs.delete(scheduleId);
+    await this.persist();
+  }
+
+  /** Records how a run this scheduler started ended. */
+  async finish(runId: RunId, result: Pick<RunResult, 'outcome' | 'stopCause' | 'failure'>): Promise<void> {
+    const state = await this.load();
+    for (const s of Object.values(state.schedules)) {
+      const entry = s.history.find((e) => e.runId === runId);
+      if (!entry) continue;
+      entry.ended = {
+        at: this.iso(),
+        outcome: result.outcome,
+        stopCause: result.stopCause,
+        ...(result.failure ? { failure: result.failure.code } : {}),
+      };
+      await this.persist();
+      return;
+    }
   }
 
   history(scheduleId: ScheduleId): readonly HistoryEntry[] {
     return this.state?.schedules[scheduleId]?.history ?? [];
   }
 
-  private views(): ScheduleView[] {
+  views(): ScheduleView[] {
     const now = this.deps.clock.now();
     return [...this.specs.values()].map((spec) => {
-      const s = this.state!.schedules[spec.id]!;
-      const next = s.planned
+      const s = this.state?.schedules[spec.id];
+      const next = s?.planned
         .filter((p) => p.status === 'pending' && Date.parse(p.snapshot.plannedAt) > now)
         .sort((a, b) => Date.parse(a.snapshot.plannedAt) - Date.parse(b.snapshot.plannedAt))[0];
-      return { spec, paused: s.paused, next: next ? structuredClone(next.snapshot) : null };
+      return { spec, paused: s?.paused ?? false, next: next ? structuredClone(next.snapshot) : null };
     });
   }
 }

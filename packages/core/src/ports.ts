@@ -183,4 +183,5 @@ export interface Scheduler {
   reconcile(specs: ScheduleSpec[]): Promise<ScheduleView[]>;
   trigger(scheduleId: ScheduleId, cause: TriggerCause): Promise<RunId>;
   pause(scheduleId: ScheduleId): Promise<void>;
+  resume(scheduleId: ScheduleId): Promise<void>;
 }

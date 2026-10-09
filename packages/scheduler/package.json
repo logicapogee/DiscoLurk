@@ -2,7 +2,10 @@
   "name": "@disco-lurk/scheduler",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts"
+  },
   "dependencies": {
     "@disco-lurk/core": "workspace:*"
   }

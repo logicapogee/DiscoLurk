@@ -84,7 +84,7 @@ export function isNewer(latest: string, current: string): boolean {
   return false;
 }
 
-const EVENT_TYPES: ReadonlySet<RunEvent['type']> = new Set(['state', 'topic', 'floor', 'action', 'timings', 'stats', 'levels', 'warning', 'error']);
+const EVENT_TYPES: ReadonlySet<RunEvent['type']> = new Set(['state', 'topic', 'floor', 'action', 'timings', 'stats', 'signed-in', 'levels', 'warning', 'error']);
 
 export function createApp(deps: AppDeps): LurkApp {
   const log = deps.log ?? (() => {});
@@ -118,6 +118,11 @@ export function createApp(deps: AppDeps): LurkApp {
     newSeed: deps.newSeed ?? (() => randomInt(0, 2 ** 31)),
     notify,
     onActiveChange: (n) => deps.shell?.activeRuns(n),
+    // A run that passed its sign-in check vouches for the Profile as a health check would.
+    onSignedIn: async (profileId, username, checkedAt) => {
+      await recordHealth({ profileId, status: 'ready', username, checkedAt });
+      await publishProfiles();
+    },
     log,
   });
   const publishProfiles = async () => hub.publish({ type: 'profiles-changed', profiles: await profiles.list((id) => gate.isBusy(id)) });
@@ -131,10 +136,8 @@ export function createApp(deps: AppDeps): LurkApp {
     gate,
     hub,
     clock: deps.clock,
-    afterSignIn: async (health) => {
-      await recordHealth(health);
-      await publishProfiles();
-    },
+    afterSignIn: recordHealth,
+    released: () => publishProfiles(),
   });
   const schedules = new ScheduleService({
     clock: deps.clock,

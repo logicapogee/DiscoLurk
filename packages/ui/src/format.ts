@@ -67,6 +67,8 @@ export function eventText(e: RunEvent): string {
       return `已读回执：${e.postsReported} 层，${e.topicSeconds} 秒`;
     case 'stats':
       return `统计：确认 ${e.stats.confirmed.topics} 话题 / ${e.stats.confirmed.floors} 楼层`;
+    case 'signed-in':
+      return `已登录：${e.username}`;
     case 'levels':
       return `${e.kind === 'initial' ? '初始' : '结束'}进度：${e.snapshot.metrics.map((m) => `${m.label} ${m.current}`).join('，')}`;
     case 'warning':

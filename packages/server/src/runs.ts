@@ -107,6 +107,8 @@ interface RunManagerDeps {
   newSeed(): number;
   notify: Notify;
   onActiveChange?(count: number): void;
+  /** Hears who a run signed in as, so the Profile record can show the account. */
+  onSignedIn?(profileId: ProfileId, username: string, at: string): Promise<void>;
   log?(message: string): void;
 }
 
@@ -180,6 +182,9 @@ export class RunManager {
       const line = JSON.stringify(logged);
       this.deps.history.appendEvent(plan.id, line);
       this.deps.hub.publish({ type: 'event', runId: plan.id, event: logged }, `{"type":"event","runId":${runIdJson},"event":${line}}`);
+      if (event.type === 'signed-in') {
+        void this.deps.onSignedIn?.(plan.profileId, event.username, event.at).catch((err: unknown) => this.deps.log?.(`run ${plan.id}: recording the username failed: ${String(err)}`));
+      }
       // The run's state reaches clients only through `run` frames; the UI never derives it from events.
       if (event.type === 'state') {
         view.state = event.state;

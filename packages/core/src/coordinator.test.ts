@@ -161,6 +161,27 @@ describe('STATE-001 run state machine (§6.2)', () => {
     expect(out.stopCause).toBe('app-exit');
   });
 
+  it('reports who it signed in as before reading progress, and runs on when the name cannot be read', async () => {
+    const named = setup({ forum: { username: async () => 'alice' } });
+    await named.run(plan({ kind: 'topics', count: 1 }));
+    const kinds = named.events.map((e) => (e.type === 'state' ? e.state : e.type));
+    expect(kinds.indexOf('signed-in')).toBeGreaterThan(kinds.indexOf('launching'));
+    expect(kinds.indexOf('signed-in')).toBeLessThan(kinds.indexOf('reading_initial_progress'));
+    expect(named.events.find((e) => e.type === 'signed-in')).toMatchObject({ username: 'alice' });
+
+    const unnamed = setup({
+      forum: {
+        username: async () => {
+          throw new RunError('page-timeout', '/my/activity did not load');
+        },
+      },
+    });
+    const out = await unnamed.run(plan({ kind: 'topics', count: 1 }));
+    expect(out.outcome).toBe('completed');
+    expect(unnamed.events.some((e) => e.type === 'signed-in')).toBe(false);
+    expect(unnamed.events.find((e) => e.type === 'warning')).toMatchObject({ code: 'username-missing' });
+  });
+
   it('a headless run without a session goes awaiting_login → needs_auth → cancelled (needs-auth)', async () => {
     const { run, states } = setup({ forum: { auth: async () => ({ status: 'needs-auth' }) } });
     const out = await run(plan({ kind: 'endless' }));
@@ -376,7 +397,7 @@ describe('CAT-001 discovered categories (§7.1 step 2, §7.2)', () => {
   });
 
   it('inspect reads the username from the forum once the sign-in check passes (B04)', async () => {
-    const t = setup({ forum: { username: 'alice' } });
+    const t = setup({ forum: { username: async () => 'alice' } });
     const health = await t.time.drive(t.coordinator.inspect('fixture/main'));
     expect(health).toMatchObject({ status: 'ready', username: 'alice' });
     expect(t.forum.calls.map((c) => c.op)).toEqual(['ensureAuthenticated', 'readUsername']);
@@ -426,9 +447,10 @@ describe('AUTH-001 (kernel side) AuthSession', () => {
     const t = setup({
       open: () => opens++,
       forum: {
+        username: async () => 'me',
         auth: async (mode) => {
           modes.push(mode);
-          return { status: 'authenticated', username: 'me' };
+          return { status: 'authenticated' };
         },
       },
     });

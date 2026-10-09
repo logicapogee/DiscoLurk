@@ -10,13 +10,15 @@ interface LoginManagerDeps {
   clock: Clock;
   /** Stores the health read right after a sign-in and refreshes discovered categories. */
   afterSignIn(health: ProfileHealth): Promise<void>;
+  /** Hears that the Profile is free again, so clients can be told it is no longer in use. */
+  released(profileId: ProfileId): Promise<void>;
 }
 
 interface Login {
   view: LoginView;
   session: AuthSession | null;
   wait: AbortController | null;
-  release: () => void;
+  release: () => Promise<void>;
   /** The step in flight (opening, waiting, rechecking), so close() can let it unwind. */
   step: Promise<void>;
   /** Set by close(); a step that resumes afterwards closes whatever it opened and stops. */
@@ -56,7 +58,14 @@ export class LoginManager {
   start(profileId: ProfileId): LoginView {
     const existing = this.logins.get(profileId);
     if (existing && !['done', 'failed', 'closed'].includes(existing.view.phase)) return { ...existing.view };
-    const release = this.deps.gate.claim(profileId, 'sign-in');
+    const unclaim = this.deps.gate.claim(profileId, 'sign-in');
+    let released = false;
+    const release = async () => {
+      if (released) return;
+      released = true;
+      unclaim();
+      await this.deps.released(profileId).catch(() => {});
+    };
     const l: Login = { view: { profileId, phase: 'opening' }, session: null, wait: null, release, step: Promise.resolve(), closed: false };
     this.logins.set(profileId, l);
     this.publish(l, { phase: 'opening' });
@@ -65,14 +74,14 @@ export class LoginManager {
       try {
         session = await this.deps.coordinator.beginAuth(profileId);
       } catch (err) {
-        release();
+        await release();
         if (!l.closed) this.publish(l, { phase: 'failed', message: describe(err) });
         return;
       }
       // The window opened after the sign-in was closed: nobody is left to use it.
       if (l.closed) {
         await session.close().catch(() => {});
-        return release();
+        return await release();
       }
       l.session = session;
       await this.waitOnce(l);
@@ -100,25 +109,32 @@ export class LoginManager {
       return this.finish(l, 'failed', describe(err));
     }
     if (l.closed) return;
-    if (result.status === 'authenticated') return this.signedIn(l, result.username);
+    if (result.status === 'authenticated') return this.signedIn(l);
     this.publish(l, { phase: result.status === 'challenge-detected' ? 'challenge-detected' : 'needs-auth' });
   }
 
-  /** The health check runs in the signed-in window, the same way `lurk login` verifies a sign-in. */
-  private async signedIn(l: Login, username: string | undefined) {
+  /**
+   * The health check runs in the signed-in window, the same way `lurk login` verifies a sign-in.
+   * Its result is stored before the window closes, so the Profile is announced free together with it;
+   * a close() during the check has already closed the window and released the Profile.
+   */
+  private async signedIn(l: Login) {
     const session = l.session!;
-    this.publish(l, { phase: 'checking-health', ...(username ? { username } : {}) });
+    this.publish(l, { phase: 'checking-health' });
+    let outcome: Partial<LoginView>;
     try {
       const health = await session.inspect();
       await this.deps.afterSignIn(health);
-      if (!l.closed) this.publish(l, { phase: 'done', ...(username ? { username } : {}), health });
+      outcome = { health };
     } catch (err) {
-      if (!l.closed) this.publish(l, { phase: 'done', ...(username ? { username } : {}), message: describe(err) });
-    } finally {
+      outcome = { message: describe(err) };
+    }
+    if (l.session === session) {
       l.session = null;
       await session.close().catch(() => {});
-      l.release();
+      await l.release();
     }
+    if (!l.closed) this.publish(l, { phase: 'done', ...outcome });
   }
 
   /**
@@ -131,7 +147,7 @@ export class LoginManager {
     l.session = null;
     if (session) {
       await session.close().catch(() => {});
-      l.release();
+      await l.release();
     }
     this.publish(l, { phase, ...(message ? { message } : {}) });
   }

@@ -352,7 +352,7 @@ export async function signIn(auth: AuthSession, signal: AbortSignal, log: (line:
       log(`Not signed in: ${result.status}`);
       return EXIT.needsAuth;
     }
-    log(`Signed in${result.username ? ` as ${result.username}` : ''}.`);
+    log('Signed in.');
     return EXIT.ok;
   } catch (err) {
     if (isAbortError(err)) return EXIT.cancelled;
@@ -464,6 +464,8 @@ function formatEvent(e: RunEvent, startMs: number): string | null {
       return `${t}   timings ${e.postsReported} posts, ${e.topicSeconds} s`;
     case 'stats':
       return null;
+    case 'signed-in':
+      return `${t} signed in as ${e.username}`;
     case 'levels':
       return `${t} site progress (${e.kind}): ${levelSummary(e.snapshot)} · ${e.snapshot.metrics.length} metrics`;
     case 'warning':

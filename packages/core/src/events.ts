@@ -74,6 +74,8 @@ export type RunEvent =
   | { type: 'action'; at: string; action: 'like' | 'reply'; result: 'attempted' | 'confirmed' | 'rejected' }
   | { type: 'timings'; at: string; postsReported: number; topicSeconds: number }
   | { type: 'stats'; at: string; stats: RunStats }
+  /** Who the run is signed in as, read once the sign-in check passes. */
+  | { type: 'signed-in'; at: string; username: string }
   /** The progress page as read before browsing and after it; a re-read after the site's lag sends `final` again. */
   | { type: 'levels'; at: string; kind: 'initial' | 'final'; snapshot: LevelSnapshot }
   | { type: 'warning'; at: string; code: string; message: string }

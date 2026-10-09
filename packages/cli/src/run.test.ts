@@ -255,11 +255,11 @@ describe('lurk login (§11.1)', () => {
   }
 
   it('succeeds on #current-user in the headed window and runs no headless check afterwards', async () => {
-    const { auth, calls } = session(async () => ({ status: 'authenticated', username: 'alice' }));
+    const { auth, calls } = session(async () => ({ status: 'authenticated' }));
     const lines: string[] = [];
     expect(await signIn(auth, new AbortController().signal, (l) => lines.push(l))).toBe(EXIT.ok);
     expect(calls).toEqual(['continueWaiting', 'close']);
-    expect(lines).toEqual(['Signed in as alice.']);
+    expect(lines).toEqual(['Signed in.']);
   });
 
   it('maps a timed-out wait to exit 3 and a stop to exit 2, closing the browser either way', async () => {

@@ -98,7 +98,6 @@ export interface LoginView {
   phase: LoginPhase;
   /** Epoch ms when the current wait gives up; set while `waiting`. */
   deadline?: number;
-  username?: string;
   health?: ProfileHealth;
   message?: string;
 }

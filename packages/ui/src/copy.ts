@@ -162,6 +162,7 @@ export const copy = {
       action: '互动',
       timings: '已读回执',
       stats: '统计',
+      'signed-in': '登录账号',
       levels: '站点进度',
       warning: '警告',
       error: '错误',

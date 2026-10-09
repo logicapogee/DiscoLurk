@@ -234,6 +234,15 @@ export class DiscoLurkCoordinator implements RunCoordinator {
           }
         }
 
+        try {
+          const username = await forum.readUsername(live);
+          if (username) emit({ type: 'signed-in', at: at(), username });
+        } catch (err) {
+          const why = classify(err, live);
+          if (why.kind === 'stop') throw err;
+          warn('username-missing', `Reading the username failed (${why.failure.code}: ${why.failure.message}); continuing`);
+        }
+
         state('reading_initial_progress');
         if (runSite.progressSource !== 'none') {
           try {
@@ -318,7 +327,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     try {
       const auth = await session.forum.ensureAuthenticated(mode, signal);
       if (auth.status !== 'authenticated') return { profileId, status: 'needs-auth', checkedAt: this.checkedAt() };
-      const username = auth.username ?? (await session.forum.readUsername(signal));
+      const username = await session.forum.readUsername(signal);
       // The health check is where a discovered site reads its categories.
       if (site.categorySource === 'discovered') await this.refreshCategories(site, session.forum, signal, () => {});
       return { profileId, status: 'ready', ...(username ? { username } : {}), checkedAt: this.checkedAt() };

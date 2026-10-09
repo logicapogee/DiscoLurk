@@ -103,7 +103,7 @@ async function boot(opts: BootOptions = {}): Promise<Harness> {
         topics: (path, call) => Array.from({ length: 3 }, (_, i) => ({ id: `${path}-${call}-${i}`, title: 't', unread: true, pinned: false })),
         latency: { collect: 2, enter: 2, dwell: 2, back: 2 },
         auth: (mode, signal) => auth.next(mode, signal),
-        username: 'alice',
+        username: async () => 'alice',
       });
       return { forum, closed: new AbortController().signal, close: async () => {} };
     },
@@ -391,6 +391,9 @@ describe('server API', () => {
     await ws.until((f) => f.type === 'run' && f.run.runId === runId && f.run.state === 'browsing');
     const ended = (await ws.until((f) => f.type === 'run' && f.run.runId === runId && f.record !== undefined)) as Extract<ServerFrame, { type: 'run' }>;
     expect(ended.record).toMatchObject({ runId, result: { outcome: ended.run.result!.outcome } });
+    // The run's sign-in check names the account, which reaches the Profile record.
+    await ws.until((f) => f.type === 'profiles-changed' && f.profiles[0]?.health?.username === 'alice');
+    expect((await call<Array<{ health?: { status: string; username?: string } }>>('GET', '/profiles')).body[0]?.health).toMatchObject({ status: 'ready', username: 'alice' });
     const seqs = ws.frames.flatMap((f) => (f.type === 'event' && f.runId === runId ? [f.event.seq] : []));
     expect(seqs).toEqual(seqs.map((_, i) => i + 1));
 
@@ -508,6 +511,9 @@ describe('server API', () => {
     await call('POST', '/profiles/fx/main/login/recheck');
     const done = (await ws.until(loginFrame('done'))) as Extract<ServerFrame, { type: 'login' }>;
     expect(done.login).toMatchObject({ health: { status: 'ready', username: 'alice' } });
+    // The window is closed and the Profile announced free, with the check's result, before `done`.
+    const announced = ws.frames.slice(0, ws.frames.indexOf(done)).filter((f) => f.type === 'profiles-changed').at(-1);
+    expect(announced).toMatchObject({ profiles: [{ id: 'fx/main', busy: false, health: { status: 'ready', username: 'alice' } }] });
     const profiles = await call<Array<{ status: string; busy: boolean }>>('GET', '/profiles');
     expect(profiles.body[0]).toMatchObject({ status: 'ready', busy: false });
     expect(h.opens).toEqual(['headed']);

@@ -1,5 +1,6 @@
 import type { ReadOnlyPage } from './page';
 import { parseDocument } from './parse';
+import { POST_WITH_NUMBER } from './selectors';
 
 export const timeoutError = (message: string) => Object.assign(new Error(message), { name: 'TimeoutError' });
 
@@ -52,6 +53,9 @@ export class StaticPage implements ReadOnlyPage {
   async count(selector: string) {
     return this.all(selector).length;
   }
+  async counts(selectors: readonly string[]) {
+    return selectors.map((s) => this.all(s).length);
+  }
   async text(selector: string) {
     return (await this.texts(selector))[0] ?? null;
   }
@@ -80,7 +84,7 @@ export class StaticPage implements ReadOnlyPage {
     this.fronted++;
   }
   async postsInViewport() {
-    return this.all('.topic-post[data-post-number]').map((e) => Number(e.getAttribute('data-post-number')));
+    return this.all(POST_WITH_NUMBER).map((e) => Number(e.getAttribute('data-post-number')));
   }
 }
 

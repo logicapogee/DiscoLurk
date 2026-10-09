@@ -1,5 +1,6 @@
 import type { Page } from 'playwright-core';
 import { abortError, RunError, stopRequest } from '@disco-lurk/core';
+import { POST_WITH_NUMBER } from './selectors';
 
 export type LoadState = 'domcontentloaded' | 'commit';
 
@@ -26,6 +27,8 @@ export interface ReadOnlyPage {
   /** The serialized DOM, for the parsers in parse.ts and progress/. */
   content(): Promise<string>;
   count(selector: string): Promise<number>;
+  /** Matches per selector, read in one round trip. */
+  counts(selectors: readonly string[]): Promise<number[]>;
   /** Whitespace-collapsed text of the first match; null when nothing matches. */
   text(selector: string): Promise<string | null>;
   texts(selector: string): Promise<string[]>;
@@ -175,6 +178,10 @@ export class PageView implements ReadOnlyPage {
     return this.call(() => this.page.locator(selector).count());
   }
 
+  counts(selectors: readonly string[]): Promise<number[]> {
+    return this.call(() => this.page.evaluate((all) => all.map((s) => document.querySelectorAll(s).length), [...selectors]));
+  }
+
   async text(selector: string): Promise<string | null> {
     return (await this.texts(selector))[0] ?? null;
   }
@@ -213,7 +220,7 @@ export class PageView implements ReadOnlyPage {
 
   postsInViewport(): Promise<number[]> {
     return this.call(() =>
-      this.page.locator('.topic-post[data-post-number]').evaluateAll((posts) =>
+      this.page.locator(POST_WITH_NUMBER).evaluateAll((posts) =>
         posts
           .filter((p) => {
             const r = p.getBoundingClientRect();

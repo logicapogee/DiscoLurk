@@ -3,7 +3,7 @@ import { browse } from './browse';
 import { emptyStats, type RunEvent } from './events';
 import { targetReached } from './target';
 import { FixtureForum, fixtureSite, VirtualTime } from './testing';
-import type { BrowseMode, Category, RunMode, RunPlanSnapshot, TopicCandidate } from './terms';
+import { EXPERIMENTS_OFF, type BrowseMode, type Category, type RunMode, type RunPlanSnapshot, type TopicCandidate } from './terms';
 
 const site = fixtureSite();
 
@@ -34,6 +34,7 @@ function plan(runMode: RunMode, browseMode: BrowseMode = 'quick', extraWait = tr
       },
       extraWait: { enabled: extraWait, minSec: 1, maxSec: 3 },
       samplePerCategory: { min: 3, max: 8 },
+      experiments: { ...EXPERIMENTS_OFF },
     },
   };
 }

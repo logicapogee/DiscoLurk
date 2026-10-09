@@ -5,7 +5,6 @@ import {
   throwIfAborted,
   untilAbort,
   type ActionPolicy,
-  type ActionResult,
   type AuthMode,
   type AuthResult,
   type BrowseMode,
@@ -25,7 +24,7 @@ import {
   type TopicStrategy,
   type TopicVisit,
 } from '@disco-lurk/core';
-import { LikeStreak, PageActionSurface, performActions, templatePicker, type Composer, type LikeButton } from './actions';
+import { PageActionSurface, performActions, templatePicker, type Composer, type LikeButton } from './actions';
 import { LOGIN_POLL_MS, LOGIN_TIMEOUT_MS, pollUntil, usernameFromUrl, waitForCurrentUser } from './auth';
 import { expectedMiss, type LoadState, type ReadOnlyPage } from './page';
 import { categoryLinks, floorCounterFromText, parseDocument, parseTopicList, type CategoryLink, type FloorReading } from './parse';
@@ -193,18 +192,19 @@ export class DiscourseForum implements ForumPort {
   private readonly opts: DiscourseForumOptions & Required<Pick<DiscourseForumOptions, 'warn'>>;
   /** The list page the current topic was entered from; returns and failed entries come back to it. */
   private listUrl: string | null = null;
-  private readonly likeStreak = new LikeStreak();
   private readonly nextTemplate: () => string | null;
+  /** The only holder of the like button and the composer. */
+  private readonly actions: PageActionSurface;
 
   constructor(opts: DiscourseForumOptions) {
     this.opts = { warn: () => {}, ...opts };
     this.nextTemplate = templatePicker(opts.replyTemplates, opts.deps.random);
+    this.actions = new PageActionSurface(opts.page, opts.likeButton, opts.composer, opts.deps, this.opts.warn);
   }
 
   get site(): Site {
     return this.opts.site;
   }
-
 
   private url(path: string): string {
     return new URL(path, this.site.baseUrl).href;
@@ -434,9 +434,8 @@ export class DiscourseForum implements ForumPort {
    * Not wrapped in `untilAbort`: a stop lands at the next wait inside, and a reply stopped after
    * typing must finish discarding its draft before the run moves on.
    */
-  async performActions(policy: ActionPolicy, signal: AbortSignal): Promise<ActionResult> {
-    const surface = new PageActionSurface(this.opts.page, this.opts.likeButton, this.opts.composer, this.opts.deps, this.opts.warn);
-    return performActions(surface, policy, this.opts.deps, { streak: this.likeStreak, nextTemplate: this.nextTemplate, warn: this.opts.warn }, signal);
+  performActions(policy: ActionPolicy, signal: AbortSignal): Promise<void> {
+    return performActions(this.actions, policy, this.opts.deps, { nextTemplate: this.nextTemplate, warn: this.opts.warn }, signal);
   }
 
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {

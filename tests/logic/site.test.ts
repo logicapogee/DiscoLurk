@@ -1,4 +1,4 @@
-import { browse, type Site, type TopicCandidate } from '@disco-lurk/core';
+import { browse, EXPERIMENTS_OFF, type Site, type TopicCandidate } from '@disco-lurk/core';
 import { FixtureForum, fixtureSite, VirtualTime } from '@disco-lurk/core/testing';
 import { loadBuiltinSites, validateSite } from '@disco-lurk/config';
 import { progressModuleFor } from '@disco-lurk/site-discourse';
@@ -96,6 +96,7 @@ describe('SITE-001 site configuration (§2.2)', () => {
             },
             extraWait: { enabled: false, minSec: 1, maxSec: 3 },
             samplePerCategory: { min: 3, max: 8 },
+            experiments: { ...EXPERIMENTS_OFF },
           },
         },
         forum,

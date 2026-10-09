@@ -5,7 +5,7 @@ import type { LevelSnapshot } from './metrics';
 import type { AuthMode, AuthResult } from './ports';
 import { MemoryLedger } from './ledger';
 import { FixtureForum, fixtureSite, VirtualTime, type FixtureForumOptions } from './testing';
-import type { BrowserMode, Category, RunMode, RunPlanSnapshot, Site, TopicCandidate } from './terms';
+import { EXPERIMENTS_OFF, type BrowserMode, type Category, type RunMode, type RunPlanSnapshot, type Site, type TopicCandidate } from './terms';
 
 const site = (over: Partial<Site> = {}): Site =>
   fixtureSite({
@@ -38,6 +38,7 @@ function plan(runMode: RunMode, browserMode: BrowserMode = 'headless', cats = ca
       },
       extraWait: { enabled: true, minSec: 1, maxSec: 3 },
       samplePerCategory: { min: 3, max: 8 },
+      experiments: { ...EXPERIMENTS_OFF },
     },
   };
 }

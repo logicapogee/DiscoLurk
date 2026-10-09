@@ -336,6 +336,7 @@ describe('B10 password login keeps the credentials out of every report', () => {
         interaction: { like: { enabled: false, topicRate: 0, replyRate: 0, maxReplies: 0 }, reply: { enabled: false, rate: 0 } },
         extraWait: { enabled: false, minSec: 1, maxSec: 3 },
         samplePerCategory: { min: 1, max: 1 },
+        experiments: { useNewList: false, useUnreadList: false, refreshCategories: false, smartRanked: false },
       },
     } as const satisfies RunPlanSnapshot;
     const result = await time.drive(coordinator.run(structuredClone(plan) as RunPlanSnapshot, new AbortController().signal, (e) => events.push(e)));

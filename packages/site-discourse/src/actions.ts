@@ -1,7 +1,8 @@
-import { pauseBetween, throwIfAborted, type ActionPolicy, type ActionResult, type RandomSource, type RuntimeDeps } from '@disco-lurk/core';
+import { pauseBetween, throwIfAborted, untilAbort, type ActionPolicy, type RandomSource, type RuntimeDeps } from '@disco-lurk/core';
+import { pollUntil } from './auth';
 import type { ReadOnlyPage } from './page';
-import { editorKindFromCounts, type EditorKind } from './parse';
-import { COMPOSER_OPEN, EDITOR_SELECTORS, likeButtonOf, postOf, SELECTORS } from './selectors';
+import { EDITOR_KINDS, editorKindFromCounts, type EditorKind } from './parse';
+import { COMPOSER_OPEN, EDITOR_SELECTORS, LIKED_MARKERS, likeButtonOf, postOf, SELECTORS } from './selectors';
 
 /** Presses one post's like button. Built in session.ts; nothing else can press it. */
 export interface LikeButton {
@@ -17,42 +18,31 @@ export interface Composer {
   discard(): Promise<void>;
 }
 
-/** What interacting needs from a topic page; tests drive `performActions` through a scripted one. */
+/**
+ * What interacting needs from a topic page; tests drive `performActions` through a scripted one.
+ * Every method that sends input checks `signal` on entry and stops waiting once it aborts.
+ */
 export interface ActionSurface {
   postsInViewport(): Promise<number[]>;
   hasLikeButton(postNumber: number): Promise<boolean>;
   isLiked(postNumber: number): Promise<boolean>;
   /** Scrolls back up until floor 1's like button is rendered; false when it never is. */
   scrollToFirstPost(signal: AbortSignal): Promise<boolean>;
-  centerLikeButton(postNumber: number): Promise<void>;
-  clickLike(postNumber: number): Promise<void>;
-  /** True once the floor shows either liked marker within the confirmation window. */
-  awaitLiked(postNumber: number, signal: AbortSignal): Promise<boolean>;
+  /** Centres the floor's like button, lets the page settle, and presses it. */
+  like(postNumber: number, signal: AbortSignal): Promise<void>;
   /** Opens the composer and reports which editor it shows; null when none appeared. */
   openComposer(signal: AbortSignal): Promise<EditorKind | null>;
-  fillComposer(kind: EditorKind, text: string): Promise<void>;
-  submitComposer(): Promise<void>;
-  /** True once the composer closed after submitting, within the confirmation window. */
-  awaitReplyPosted(signal: AbortSignal): Promise<boolean>;
+  /** Types the text, pauses as a person would before sending, and submits. */
+  compose(kind: EditorKind, text: string, signal: AbortSignal): Promise<void>;
+  composerOpen(): Promise<boolean>;
+  /** Throws an open draft away; runs to the end even after a stop. */
   discardComposer(): Promise<void>;
 }
 
 /** Field-tested pacing for interactions; none of it shortens when the page is fast. */
-export const LIKE = { centerMs: 300, afterSec: [0.8, 1.5], confirmMs: 5_000, pollMs: 250, limitAfter: 2 } as const;
+export const LIKE = { centerMs: 300, afterSec: [0.8, 1.5], confirmMs: 5_000, pollMs: 250 } as const;
 export const REPLY = { editorMs: 10_000, editorSettleSec: [0.5, 1], afterFillSec: [0.8, 1.5], afterSubmitSec: [1, 2], confirmMs: 10_000, pollMs: 500 } as const;
 export const FIRST_POST = { stepPx: -2500, settleMs: 400, maxSteps: 40 } as const;
-
-/**
- * Unconfirmed likes in a row across a run's topics. Discourse's daily like limit shows up as likes
- * that never turn into the liked state, so two in a row end liking for the run.
- */
-export class LikeStreak {
-  failures = 0;
-
-  get limitHit(): boolean {
-    return this.failures >= LIKE.limitAfter;
-  }
-}
 
 /** Draws reply texts at random, each at most once; null once every template has been used. */
 export function templatePicker(templates: readonly string[], random: RandomSource): () => string | null {
@@ -64,105 +54,92 @@ export function templatePicker(templates: readonly string[], random: RandomSourc
 }
 
 export interface ActionContext {
-  streak: LikeStreak;
   /** The next reply text; null when no template is left to use. */
   nextTemplate(): string | null;
   warn(code: string, message: string): void;
 }
 
-const blank = () => ({ attempted: 0, confirmed: 0 });
+interface ActionRun {
+  surface: ActionSurface;
+  policy: ActionPolicy;
+  deps: RuntimeDeps;
+  ctx: ActionContext;
+  signal: AbortSignal;
+}
+
+const pause = (run: ActionRun, range: readonly [number, number]) => pauseBetween(run.deps, range[0], range[1], run.signal);
+
+async function rest(run: ActionRun): Promise<void> {
+  const { extraWait } = run.policy;
+  if (extraWait.enabled) await pause(run, [extraWait.minSec, extraWait.maxSec]);
+}
+
+/** Polls `check` on the injected clock until it holds; false once `ms` passes without it. */
+async function confirmed(run: ActionRun, check: () => Promise<boolean>, ms: number, every: number): Promise<boolean> {
+  const { clock, sleeper } = run.deps;
+  return (await pollUntil({ intervalMs: every, timeoutMs: ms, clock, sleeper }, async () => ((await check()) ? true : null), run.signal)) !== null;
+}
+
+async function like(run: ActionRun, postNumber: number, bucket: 'topic' | 'reply'): Promise<void> {
+  const { surface, policy } = run;
+  if (!policy.liking()) return;
+  if (!(await surface.hasLikeButton(postNumber))) return;
+  // A liked floor's button would take the like back, so it is never pressed.
+  if (await surface.isLiked(postNumber)) return;
+  await surface.like(postNumber, run.signal);
+  policy.onAction({ action: 'like', bucket, result: 'attempted', postNumber });
+  const ok = await confirmed(run, () => surface.isLiked(postNumber), LIKE.confirmMs, LIKE.pollMs);
+  policy.onAction({ action: 'like', bucket, result: ok ? 'confirmed' : 'rejected', postNumber });
+  await pause(run, LIKE.afterSec);
+  await rest(run);
+}
+
+async function reply(run: ActionRun): Promise<void> {
+  const { surface, policy, ctx } = run;
+  const text = ctx.nextTemplate();
+  if (text === null) {
+    ctx.warn('reply-templates-exhausted', 'Every reply template has been used in this run; no reply is posted');
+    return;
+  }
+  await rest(run);
+  const kind = await surface.openComposer(run.signal);
+  if (kind === null) {
+    ctx.warn('composer-missing', 'The reply composer did not open; no reply is posted for this topic');
+    await surface.discardComposer();
+    return;
+  }
+  try {
+    await pause(run, REPLY.editorSettleSec);
+    await surface.compose(kind, text, run.signal);
+  } catch (err) {
+    // A reply stopped after typing leaves no draft behind.
+    await surface.discardComposer();
+    throw err;
+  }
+  policy.onAction({ action: 'reply', bucket: 'reply-post', result: 'attempted' });
+  const posted = await confirmed(run, async () => !(await surface.composerOpen()), REPLY.confirmMs, REPLY.pollMs);
+  policy.onAction({ action: 'reply', bucket: 'reply-post', result: posted ? 'confirmed' : 'rejected' });
+  if (!posted) await surface.discardComposer();
+  await pause(run, REPLY.afterSubmitSec);
+}
 
 /**
- * Likes and the reply for the topic on screen. Replies on screen are liked first, because going
- * back up to floor 1 scrolls them away; the reply comes before that for the same reason. The stop
- * signal is checked before every action, and a reply interrupted after typing is discarded.
+ * Likes and the reply for the topic on screen, each reported through `policy.onAction`. Replies on
+ * screen are liked first, because going back up to floor 1 scrolls them away; the reply comes before
+ * that for the same reason.
  */
-export async function performActions(
-  surface: ActionSurface,
-  policy: ActionPolicy,
-  deps: RuntimeDeps,
-  ctx: ActionContext,
-  signal: AbortSignal,
-): Promise<ActionResult> {
-  const result: ActionResult = { likes: blank(), replyLikes: blank(), replies: blank(), likeLimitHit: ctx.streak.limitHit };
+export async function performActions(surface: ActionSurface, policy: ActionPolicy, deps: RuntimeDeps, ctx: ActionContext, signal: AbortSignal): Promise<void> {
+  const run: ActionRun = { surface, policy, deps, ctx, signal };
   const roll = (percent: number) => deps.random.next() * 100 < percent;
-  const pause = (range: readonly [number, number]) => pauseBetween(deps, range[0], range[1], signal);
-  const rest = async () => {
-    if (policy.extraWait.enabled) await pause([policy.extraWait.minSec, policy.extraWait.maxSec]);
-  };
-
-  const like = async (postNumber: number, bucket: { attempted: number; confirmed: number }) => {
-    throwIfAborted(signal);
-    if (ctx.streak.limitHit) return;
-    if (!(await surface.hasLikeButton(postNumber))) return;
-    // A liked floor's button would take the like back, so it is never pressed.
-    if (await surface.isLiked(postNumber)) return;
-    await surface.centerLikeButton(postNumber);
-    await deps.sleeper.sleep(LIKE.centerMs, signal);
-    throwIfAborted(signal);
-    await surface.clickLike(postNumber);
-    bucket.attempted++;
-    policy.onAction({ action: 'like', result: 'attempted', postNumber });
-    if (await surface.awaitLiked(postNumber, signal)) {
-      bucket.confirmed++;
-      ctx.streak.failures = 0;
-      policy.onAction({ action: 'like', result: 'confirmed', postNumber });
-    } else {
-      ctx.streak.failures++;
-      policy.onAction({ action: 'like', result: 'rejected', postNumber });
-    }
-    await pause(LIKE.afterSec);
-    await rest();
-  };
-
-  const reply = async () => {
-    const text = ctx.nextTemplate();
-    if (text === null) {
-      ctx.warn('reply-templates-exhausted', 'Every reply template has been used in this run; no reply is posted');
-      return;
-    }
-    await rest();
-    throwIfAborted(signal);
-    const kind = await surface.openComposer(signal);
-    if (kind === null) {
-      ctx.warn('composer-missing', 'The reply composer did not open; no reply is posted for this topic');
-      await surface.discardComposer();
-      return;
-    }
-    try {
-      await pause(REPLY.editorSettleSec);
-      await surface.fillComposer(kind, text);
-      await pause(REPLY.afterFillSec);
-      throwIfAborted(signal);
-    } catch (err) {
-      await surface.discardComposer();
-      throw err;
-    }
-    await surface.submitComposer();
-    result.replies.attempted++;
-    policy.onAction({ action: 'reply', result: 'attempted' });
-    if (await surface.awaitReplyPosted(signal)) {
-      result.replies.confirmed++;
-      policy.onAction({ action: 'reply', result: 'confirmed' });
-    } else {
-      policy.onAction({ action: 'reply', result: 'rejected' });
-      await surface.discardComposer();
-    }
-    await pause(REPLY.afterSubmitSec);
-  };
-
-  if (policy.like.enabled) {
+  if (policy.liking()) {
     const onScreen = (await surface.postsInViewport()).filter((n) => n > 1).slice(0, policy.like.maxReplies);
-    for (const postNumber of onScreen) if (roll(policy.like.replyRate)) await like(postNumber, result.replyLikes);
+    for (const postNumber of onScreen) if (roll(policy.like.replyRate)) await like(run, postNumber, 'reply');
   }
-  if (policy.reply.enabled && roll(policy.reply.rate)) await reply();
-  if (policy.like.enabled && !ctx.streak.limitHit && roll(policy.like.topicRate)) {
-    throwIfAborted(signal);
-    if (await surface.scrollToFirstPost(signal)) await like(1, result.likes);
+  if (policy.reply.enabled && roll(policy.reply.rate)) await reply(run);
+  if (policy.liking() && roll(policy.like.topicRate)) {
+    if (await surface.scrollToFirstPost(signal)) await like(run, 1, 'topic');
     else ctx.warn('first-post-missing', 'Floor 1 never rendered its like button while scrolling back up; the topic is not liked');
   }
-  result.likeLimitHit = ctx.streak.limitHit;
-  return result;
 }
 
 /** The `ActionSurface` of a live topic page: reads through `ReadOnlyPage`, presses only the two narrow inputs. */
@@ -175,41 +152,27 @@ export class PageActionSurface implements ActionSurface {
     private readonly warn: (code: string, message: string) => void,
   ) {}
 
-  private count(selector: string): Promise<number> {
-    return this.page.count(selector);
-  }
-
-  /** Polls `check` until it holds or `ms` passes on the injected clock. */
-  private async poll(check: () => Promise<boolean>, ms: number, every: number, signal: AbortSignal): Promise<boolean> {
-    const until = this.deps.clock.monotonic() + ms;
-    for (;;) {
-      if (await check()) return true;
-      if (this.deps.clock.monotonic() >= until) return false;
-      await this.deps.sleeper.sleep(every, signal);
-    }
-  }
-
   postsInViewport(): Promise<number[]> {
     return this.page.postsInViewport();
   }
 
   async hasLikeButton(postNumber: number): Promise<boolean> {
-    return (await this.count(likeButtonOf(postNumber))) > 0;
+    return (await this.page.count(likeButtonOf(postNumber))) > 0;
   }
 
   async isLiked(postNumber: number): Promise<boolean> {
     const post = postOf(postNumber);
-    const [reacted, icon] = await Promise.all([this.count(`${post} ${SELECTORS.likedReacted}`), this.count(`${post} ${SELECTORS.likedIcon}`)]);
-    return reacted > 0 || icon > 0;
+    return (await this.page.count(LIKED_MARKERS.map((m) => `${post} ${m.selector}`).join(', '))) > 0;
   }
 
   async scrollToFirstPost(signal: AbortSignal): Promise<boolean> {
+    throwIfAborted(signal);
     const { width, height } = await this.page.viewportSize();
     await this.page.moveMouse(Math.round(width / 2), Math.round(height / 2));
     for (let step = 0; step <= FIRST_POST.maxSteps; step++) {
       if (await this.hasLikeButton(1)) {
         // `#post_1` is only a cross-check: on a cloaked topic it is an empty placeholder outside floor 1.
-        if ((await this.count(`${postOf(1)} ${SELECTORS.firstPostById}`)) === 0) {
+        if ((await this.page.count(`${postOf(1)} ${SELECTORS.firstPostById}`)) === 0) {
           this.warn('first-post-unverified', 'Floor 1 rendered without #post_1 inside it');
         }
         return true;
@@ -221,47 +184,36 @@ export class PageActionSurface implements ActionSurface {
     return false;
   }
 
-  centerLikeButton(postNumber: number): Promise<void> {
-    return this.page.scrollIntoView(likeButtonOf(postNumber));
-  }
-
-  clickLike(postNumber: number): Promise<void> {
-    return this.likeButton.click(postNumber);
-  }
-
-  awaitLiked(postNumber: number, signal: AbortSignal): Promise<boolean> {
-    return this.poll(() => this.isLiked(postNumber), LIKE.confirmMs, LIKE.pollMs, signal);
+  async like(postNumber: number, signal: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
+    await untilAbort(this.page.scrollIntoView(likeButtonOf(postNumber)), signal);
+    await this.deps.sleeper.sleep(LIKE.centerMs, signal);
+    await untilAbort(this.likeButton.click(postNumber), signal);
   }
 
   private async editor(): Promise<EditorKind | null> {
-    const [textarea, dEditor, prosemirror] = await Promise.all([
-      this.count(EDITOR_SELECTORS.textarea),
-      this.count(EDITOR_SELECTORS['d-editor-input']),
-      this.count(EDITOR_SELECTORS.prosemirror),
-    ]);
-    return editorKindFromCounts({ textarea, 'd-editor-input': dEditor, prosemirror });
+    return editorKindFromCounts(await this.page.counts(EDITOR_KINDS.map((kind) => EDITOR_SELECTORS[kind])));
   }
 
   async openComposer(signal: AbortSignal): Promise<EditorKind | null> {
-    await this.composer.open();
-    let kind: EditorKind | null = null;
-    await this.poll(async () => (kind = await this.editor()) !== null, REPLY.editorMs, REPLY.pollMs, signal);
-    return kind;
+    throwIfAborted(signal);
+    await untilAbort(this.composer.open(), signal);
+    const { clock, sleeper } = this.deps;
+    return pollUntil({ intervalMs: REPLY.pollMs, timeoutMs: REPLY.editorMs, clock, sleeper }, () => this.editor(), signal);
   }
 
-  fillComposer(kind: EditorKind, text: string): Promise<void> {
-    return this.composer.fill(kind, text);
+  async compose(kind: EditorKind, text: string, signal: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
+    await untilAbort(this.composer.fill(kind, text), signal);
+    await pauseBetween(this.deps, REPLY.afterFillSec[0], REPLY.afterFillSec[1], signal);
+    await untilAbort(this.composer.submit(), signal);
   }
 
-  submitComposer(): Promise<void> {
-    return this.composer.submit();
-  }
-
-  awaitReplyPosted(signal: AbortSignal): Promise<boolean> {
-    return this.poll(async () => (await this.count(COMPOSER_OPEN)) === 0, REPLY.confirmMs, REPLY.pollMs, signal);
+  async composerOpen(): Promise<boolean> {
+    return (await this.page.count(COMPOSER_OPEN)) > 0;
   }
 
   async discardComposer(): Promise<void> {
-    if ((await this.count(COMPOSER_OPEN)) > 0) await this.composer.discard();
+    if (await this.composerOpen()) await this.composer.discard();
   }
 }

@@ -129,8 +129,7 @@ export interface ResolvedPreset {
   interaction: InteractionPolicy;
   extraWait: WaitRange & { enabled: boolean };
   samplePerCategory: { min: number; max: number };
-  /** Absent means every experiment is off. */
-  experiments?: ExperimentFlags;
+  experiments: ExperimentFlags;
 }
 
 /** One run fixed in advance: every random choice is drawn from `seed`, so the snapshot replays exactly. */

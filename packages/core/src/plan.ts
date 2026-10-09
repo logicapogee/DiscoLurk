@@ -1,5 +1,5 @@
 import { randomInt, type RandomSource } from './runtime';
-import type { Category, ResolvedPreset, RunMode, RunModeSpec, RunPreset } from './terms';
+import { EXPERIMENTS_OFF, type Category, type ResolvedPreset, type RunMode, type RunModeSpec, type RunPreset } from './terms';
 
 /** Fixes a run mode's random range, so the snapshot states exactly what will run. */
 export function resolveRunMode(spec: RunModeSpec, random: RandomSource): RunMode {
@@ -17,7 +17,7 @@ export function resolvePreset(preset: RunPreset, categories: readonly Category[]
     interaction: preset.interaction,
     extraWait: preset.extraWait,
     samplePerCategory: preset.samplePerCategory,
-    ...(preset.experiments ? { experiments: preset.experiments } : {}),
+    experiments: preset.experiments ?? EXPERIMENTS_OFF,
   });
 }
 

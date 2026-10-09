@@ -3,22 +3,31 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { seededRandom, type ActionPolicy, type ActionReport, type InteractionPolicy } from '@disco-lurk/core';
 import { VirtualTime } from '@disco-lurk/core/testing';
-import { FIRST_POST, LikeStreak, PageActionSurface, performActions, templatePicker, type ActionSurface, type Composer } from './actions';
+import { FIRST_POST, PageActionSurface, performActions, templatePicker, type ActionSurface, type Composer } from './actions';
 import type { EditorKind } from './parse';
 import { likeButtonOf } from './selectors';
 import { StaticPage } from './testing';
 
 const OFF: InteractionPolicy = { like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 }, reply: { enabled: false, rate: 5 } };
 
-function policy(over: { like?: Partial<InteractionPolicy['like']>; reply?: Partial<InteractionPolicy['reply']>; extraWait?: boolean } = {}) {
+/** A policy whose liking switch is the preset's; `liking` overrides it, as the kernel's like limit would. */
+function policy(over: { like?: Partial<InteractionPolicy['like']>; reply?: Partial<InteractionPolicy['reply']>; extraWait?: boolean; liking?: () => boolean } = {}) {
   const reports: ActionReport[] = [];
+  const like = { ...OFF.like, ...over.like };
   const p: ActionPolicy = {
-    like: { ...OFF.like, ...over.like },
+    like,
     reply: { ...OFF.reply, ...over.reply },
     extraWait: { enabled: over.extraWait ?? false, minSec: 1, maxSec: 3 },
+    liking: over.liking ?? (() => like.enabled),
     onAction: (r) => reports.push(r),
   };
   return { p, reports };
+}
+
+/** Attempted and confirmed counts per bucket, as the kernel would add them up. */
+function tally(reports: readonly ActionReport[], bucket: ActionReport['bucket']) {
+  const of = (result: ActionReport['result']) => reports.filter((r) => r.bucket === bucket && r.result === result).length;
+  return { attempted: of('attempted'), confirmed: of('confirmed') };
 }
 
 interface Script {
@@ -46,28 +55,30 @@ function scripted(time: VirtualTime, s: Script = {}) {
       log('scrollToFirstPost');
       return s.firstPostRenders ?? true;
     },
-    centerLikeButton: async (n) => log('center', n),
-    clickLike: async (n) => {
+    like: async (n) => {
       log('clickLike', n);
       if (s.confirms?.(n) ?? true) liked.add(n);
     },
-    awaitLiked: async (n) => liked.has(n),
     openComposer: async () => {
       log('openComposer');
       return s.editor === undefined ? 'textarea' : s.editor;
     },
-    fillComposer: async (kind, text) => log('fill', { kind, text }),
-    submitComposer: async () => log('submit'),
-    awaitReplyPosted: async () => s.posted ?? true,
+    // Typing, the pause after it and submitting, with the pause cut short by a stop like the real one.
+    compose: async (kind, text, signal) => {
+      log('fill', { kind, text });
+      await time.sleeper.sleep(1_000, signal);
+      log('submit');
+    },
+    composerOpen: async () => !(s.posted ?? true),
     discardComposer: async () => log('discard'),
   };
   return { surface, calls, clicks: () => calls.filter((c) => c.op === 'clickLike').map((c) => c.arg) };
 }
 
-function act(time: VirtualTime, surface: ActionSurface, p: ActionPolicy, opts: { streak?: LikeStreak; templates?: string[]; signal?: AbortSignal; seed?: number } = {}) {
+function act(time: VirtualTime, surface: ActionSurface, p: ActionPolicy, opts: { templates?: string[]; signal?: AbortSignal; seed?: number } = {}) {
   const warnings: string[] = [];
   const deps = { ...time.deps(), random: seededRandom(opts.seed ?? 1) };
-  const ctx = { streak: opts.streak ?? new LikeStreak(), nextTemplate: templatePicker(opts.templates ?? ['感谢分享，学到了新东西'], deps.random), warn: (c: string) => warnings.push(c) };
+  const ctx = { nextTemplate: templatePicker(opts.templates ?? ['感谢分享，学到了新东西'], deps.random), warn: (c: string) => warnings.push(c) };
   return { run: () => time.drive(performActions(surface, p, deps, ctx, opts.signal ?? new AbortController().signal)), warnings };
 }
 
@@ -75,9 +86,10 @@ describe('ACTION-000 nothing happens with likes and replies off (A01, A02)', () 
   it('touches no control', async () => {
     const time = new VirtualTime();
     const s = scripted(time, { viewport: [2, 3] });
-    const out = await act(time, s.surface, policy().p).run();
+    const { p, reports } = policy();
+    await act(time, s.surface, p).run();
     expect(s.calls).toEqual([]);
-    expect(out).toMatchObject({ likes: { attempted: 0 }, replyLikes: { attempted: 0 }, replies: { attempted: 0 }, likeLimitHit: false });
+    expect(reports).toEqual([]);
   });
 });
 
@@ -137,7 +149,7 @@ describe('LIKE-002 floor 1 is found by its post number after cloaking; replies o
     const surface = new PageActionSurface(page, { click: async (n) => void pressed.push(n) }, NO_COMPOSER, time.deps(), () => {});
     await expect(time.drive(surface.scrollToFirstPost(new AbortController().signal))).resolves.toBe(true);
     expect(wheels).toBe(3);
-    await surface.clickLike(1);
+    await time.drive(surface.like(1, new AbortController().signal));
     expect(pressed).toEqual([1]);
     expect(page.all(likeButtonOf(1))).toHaveLength(1);
   });
@@ -145,65 +157,72 @@ describe('LIKE-002 floor 1 is found by its post number after cloaking; replies o
   it('gives up on floor 1 when it never renders and warns, liking nothing there', async () => {
     const time = new VirtualTime();
     const s = scripted(time, { firstPostRenders: false });
-    const a = act(time, s.surface, policy({ like: { enabled: true, topicRate: 100 } }).p);
-    const out = await a.run();
-    expect(out.likes.attempted).toBe(0);
+    const { p, reports } = policy({ like: { enabled: true, topicRate: 100 } });
+    const a = act(time, s.surface, p);
+    await a.run();
+    expect(reports).toEqual([]);
     expect(a.warnings).toContain('first-post-missing');
   });
 });
 
 describe('ACTION-001 a click counts as confirmed only after the page shows it (A05, A07)', () => {
-  it('centres the button, waits about 300 ms, clicks, and reports attempted then confirmed', async () => {
+  it('centres the button, waits about 300 ms, then clicks', async () => {
+    const time = new VirtualTime();
+    const page = new StaticPage('https://linux.do/t/x/1', `<div class="topic-post" data-post-number="2"><button class="btn-toggle-reaction-like"></button></div>`);
+    const marks: Array<{ op: string; at: number }> = [];
+    page.scrollIntoView = async () => void marks.push({ op: 'center', at: time.clock.monotonic() });
+    const surface = new PageActionSurface(page, { click: async () => void marks.push({ op: 'click', at: time.clock.monotonic() }) }, NO_COMPOSER, time.deps(), () => {});
+    await time.drive(surface.like(2, new AbortController().signal));
+    expect(marks.map((m) => m.op)).toEqual(['center', 'click']);
+    expect(marks[1]!.at - marks[0]!.at).toBe(300);
+  });
+
+  it('reports a confirmed like as attempted then confirmed, in the topic bucket for floor 1', async () => {
     const time = new VirtualTime();
     const s = scripted(time);
     const { p, reports } = policy({ like: { enabled: true, topicRate: 100 } });
-    const out = await act(time, s.surface, p).run();
-    const center = s.calls.find((c) => c.op === 'center')!;
-    const click = s.calls.find((c) => c.op === 'clickLike')!;
-    expect(click.at - center.at).toBe(300);
-    expect(out.likes).toEqual({ attempted: 1, confirmed: 1 });
-    expect(reports.map((r) => r.result)).toEqual(['attempted', 'confirmed']);
+    await act(time, s.surface, p).run();
+    expect(reports).toEqual([
+      { action: 'like', bucket: 'topic', result: 'attempted', postNumber: 1 },
+      { action: 'like', bucket: 'topic', result: 'confirmed', postNumber: 1 },
+    ]);
   });
 
-  it('an unconfirmed like stays attempted and is reported rejected', async () => {
+  it('an unconfirmed like stays attempted and is reported rejected after the 5 s confirmation window', async () => {
     const time = new VirtualTime();
     const s = scripted(time, { confirms: () => false });
     const { p, reports } = policy({ like: { enabled: true, topicRate: 100 } });
-    const out = await act(time, s.surface, p).run();
-    expect(out.likes).toEqual({ attempted: 1, confirmed: 0 });
+    await act(time, s.surface, p).run();
+    expect(tally(reports, 'topic')).toEqual({ attempted: 1, confirmed: 0 });
     expect(reports.map((r) => r.result)).toEqual(['attempted', 'rejected']);
+    expect(time.clock.monotonic()).toBeGreaterThanOrEqual(5_000);
   });
 
   it('a reply whose composer stays open is attempted, rejected and discarded', async () => {
     const time = new VirtualTime();
     const s = scripted(time, { posted: false });
     const { p, reports } = policy({ reply: { enabled: true, rate: 100 } });
-    const out = await act(time, s.surface, p).run();
-    expect(out.replies).toEqual({ attempted: 1, confirmed: 0 });
-    expect(reports.map((r) => r.result)).toEqual(['attempted', 'rejected']);
+    await act(time, s.surface, p).run();
+    expect(reports).toEqual([
+      { action: 'reply', bucket: 'reply-post', result: 'attempted' },
+      { action: 'reply', bucket: 'reply-post', result: 'rejected' },
+    ]);
     expect(s.calls.map((c) => c.op)).toEqual(['openComposer', 'fill', 'submit', 'discard']);
   });
 });
 
-describe('LIKE-003 two unconfirmed likes in a row (A09)', () => {
-  it('stops liking after the second unconfirmed like and carries the streak across topics', async () => {
+describe('LIKE-003 the kernel can turn liking off mid-topic (A09)', () => {
+  it('asks liking() before every like and presses nothing once it answers false', async () => {
     const time = new VirtualTime();
-    const streak = new LikeStreak();
     const s = scripted(time, { viewport: [2, 3, 4], confirms: () => false });
-    const out = await act(time, s.surface, policy({ like: { enabled: true, replyRate: 100, topicRate: 100 } }).p, { streak }).run();
+    let rejected = 0;
+    const { p } = policy({ like: { enabled: true, replyRate: 100, topicRate: 100 }, liking: () => rejected < 2 });
+    const reports: ActionReport[] = [];
+    const counting: ActionPolicy = { ...p, onAction: (r) => (reports.push(r), r.result === 'rejected' && rejected++) };
+    await act(time, s.surface, counting).run();
     expect(s.clicks()).toEqual([2, 3]);
-    expect(out.likeLimitHit).toBe(true);
-    const next = await act(time, s.surface, policy({ like: { enabled: true, replyRate: 100, topicRate: 100 } }).p, { streak }).run();
-    expect(next.likes.attempted + next.replyLikes.attempted).toBe(0);
-  });
-
-  it('a confirmed like in between resets the streak', async () => {
-    const time = new VirtualTime();
-    let n = 0;
-    const s = scripted(time, { viewport: [2, 3, 4, 5], confirms: () => n++ % 2 === 1 });
-    const out = await act(time, s.surface, policy({ like: { enabled: true, replyRate: 100, topicRate: 0 } }).p).run();
-    expect(s.clicks()).toEqual([2, 3, 4, 5]);
-    expect(out.likeLimitHit).toBe(false);
+    expect(tally(reports, 'reply')).toEqual({ attempted: 2, confirmed: 0 });
+    expect(s.calls.some((c) => c.op === 'scrollToFirstPost')).toBe(false);
   });
 });
 
@@ -211,9 +230,10 @@ describe('REPLY-001 the composer is typed into with fill, on either editor (A06)
   it.each<EditorKind>(['textarea', 'd-editor-input', 'prosemirror'])('fills the %s editor the composer opened with', async (editor) => {
     const time = new VirtualTime();
     const s = scripted(time, { editor });
-    const out = await act(time, s.surface, policy({ reply: { enabled: true, rate: 100 } }).p, { templates: ['写得很清楚，收藏慢慢看'] }).run();
+    const { p, reports } = policy({ reply: { enabled: true, rate: 100 } });
+    await act(time, s.surface, p, { templates: ['写得很清楚，收藏慢慢看'] }).run();
     expect(s.calls.find((c) => c.op === 'fill')!.arg).toEqual({ kind: editor, text: '写得很清楚，收藏慢慢看' });
-    expect(out.replies).toEqual({ attempted: 1, confirmed: 1 });
+    expect(tally(reports, 'reply-post')).toEqual({ attempted: 1, confirmed: 1 });
   });
 
   it.each([
@@ -232,9 +252,10 @@ describe('REPLY-001 the composer is typed into with fill, on either editor (A06)
   it('opens no composer when it did not appear, and posts nothing', async () => {
     const time = new VirtualTime();
     const s = scripted(time, { editor: null });
-    const a = act(time, s.surface, policy({ reply: { enabled: true, rate: 100 } }).p);
-    const out = await a.run();
-    expect(out.replies.attempted).toBe(0);
+    const { p, reports } = policy({ reply: { enabled: true, rate: 100 } });
+    const a = act(time, s.surface, p);
+    await a.run();
+    expect(reports).toEqual([]);
     expect(a.warnings).toContain('composer-missing');
   });
 
@@ -246,13 +267,24 @@ describe('REPLY-001 the composer is typed into with fill, on either editor (A06)
 });
 
 describe('STOP-002 no interaction after a stop (A08)', () => {
-  it('a stop before acting presses nothing', async () => {
+  it('a stop before acting presses nothing: every input checks the signal on entry', async () => {
     const time = new VirtualTime();
-    const s = scripted(time, { viewport: [2] });
+    const page = new StaticPage('https://linux.do/t/x/1', `<div class="topic-post" data-post-number="2"><button class="btn-toggle-reaction-like"></button></div>`);
+    const pressed: string[] = [];
+    const composer: Composer = {
+      open: async () => void pressed.push('open'),
+      fill: async () => void pressed.push('fill'),
+      submit: async () => void pressed.push('submit'),
+      discard: async () => {},
+    };
+    const surface = new PageActionSurface(page, { click: async (n) => void pressed.push(`like ${n}`) }, composer, time.deps(), () => {});
     const controller = new AbortController();
     controller.abort();
-    await expect(act(time, s.surface, policy({ like: { enabled: true, replyRate: 100, topicRate: 100 } }).p, { signal: controller.signal }).run()).rejects.toMatchObject({ name: 'AbortError' });
-    expect(s.clicks()).toEqual([]);
+    const { p } = policy({ like: { enabled: true, replyRate: 100, topicRate: 100 }, reply: { enabled: true, rate: 100 } });
+    await expect(act(time, surface, p, { signal: controller.signal }).run()).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(surface.openComposer(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(surface.compose('textarea', 'x', controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(pressed).toEqual([]);
   });
 
   it('a stop after typing discards the draft and never submits', async () => {
@@ -277,7 +309,7 @@ describe('Appendix B interaction pacing', () => {
       const s = scripted(time, { viewport: [2, 3] });
       await act(time, s.surface, policy({ like: { enabled: true, replyRate: 100, topicRate: 0 }, extraWait }).p).run();
       const clicks = s.calls.filter((c) => c.op === 'clickLike');
-      const gap = clicks[1]!.at - clicks[0]!.at - 300;
+      const gap = clicks[1]!.at - clicks[0]!.at;
       if (extraWait) {
         expect(gap).toBeGreaterThanOrEqual(800 + 1000);
         expect(gap).toBeLessThanOrEqual(1500 + 3000);
@@ -288,7 +320,7 @@ describe('Appendix B interaction pacing', () => {
     }
   });
 
-  it('waits the extra wait before a reply, 0.5–1 s for the editor, 0.8–1.5 s after typing and 1–2 s after submitting', async () => {
+  it('waits the extra wait before a reply, 0.5–1 s for the editor and 1–2 s after submitting', async () => {
     const time = new VirtualTime();
     const s = scripted(time);
     const start = time.clock.monotonic();
@@ -298,9 +330,20 @@ describe('Appendix B interaction pacing', () => {
     expect(at('openComposer') - start).toBeLessThanOrEqual(3000);
     expect(at('fill') - at('openComposer')).toBeGreaterThanOrEqual(500);
     expect(at('fill') - at('openComposer')).toBeLessThanOrEqual(1000);
-    expect(at('submit') - at('fill')).toBeGreaterThanOrEqual(800);
-    expect(at('submit') - at('fill')).toBeLessThanOrEqual(1500);
     expect(time.clock.monotonic() - at('submit')).toBeGreaterThanOrEqual(1000);
     expect(time.clock.monotonic() - at('submit')).toBeLessThanOrEqual(2000);
+  });
+
+  it('pauses 0.8–1.5 s between typing and submitting', async () => {
+    const time = new VirtualTime();
+    const marks: Array<{ op: string; at: number }> = [];
+    const mark = (op: string) => async () => void marks.push({ op, at: time.clock.monotonic() });
+    const page = new StaticPage('https://x/t/y/1', '');
+    const surface = new PageActionSurface(page, { click: async () => {} }, { ...NO_COMPOSER, fill: mark('fill'), submit: mark('submit') }, time.deps(), () => {});
+    await time.drive(surface.compose('textarea', '感谢分享', new AbortController().signal));
+    const gap = marks[1]!.at - marks[0]!.at;
+    expect(marks.map((m) => m.op)).toEqual(['fill', 'submit']);
+    expect(gap).toBeGreaterThanOrEqual(800);
+    expect(gap).toBeLessThanOrEqual(1500);
   });
 });

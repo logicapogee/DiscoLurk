@@ -1,7 +1,6 @@
 import type { LevelSnapshot } from './metrics';
 import type {
   ActionPolicy,
-  ActionResult,
   AuthMode,
   AuthResult,
   ForumPort,
@@ -140,18 +139,11 @@ export interface FixtureForumOptions {
   discovered?: Category[];
   /** Answers `returnAndVerify`; defaults to the badge gone for unread topics and not-applicable for the rest. */
   verify?: (topic: TopicCandidate) => ReadVerification;
-  /** Answers `performActions`; defaults to doing nothing. */
-  actions?: (policy: ActionPolicy, signal: AbortSignal) => Promise<ActionResult>;
+  /** Answers `performActions`, reporting through `policy.onAction`; defaults to doing nothing. */
+  actions?: (policy: ActionPolicy, signal: AbortSignal) => Promise<void>;
   /** Receipts the site acknowledges when a topic is left, delivered through `onTimings`. */
   timings?: (topic: TopicCandidate) => TimingsReceipt[];
 }
-
-export const NO_ACTIONS: ActionResult = Object.freeze({
-  likes: { attempted: 0, confirmed: 0 },
-  replyLikes: { attempted: 0, confirmed: 0 },
-  replies: { attempted: 0, confirmed: 0 },
-  likeLimitHit: false,
-});
 
 export type FixtureCall =
   | { op: 'ensureAuthenticated'; mode: AuthMode }
@@ -230,9 +222,9 @@ export class FixtureForum implements ForumPort {
     return { startFloor: readings[0] ?? null, endFloor: last, scrolls, stoppedByTarget: false, layout: 'wide' };
   }
 
-  async performActions(policy: ActionPolicy, signal: AbortSignal): Promise<ActionResult> {
+  async performActions(policy: ActionPolicy, signal: AbortSignal): Promise<void> {
     this.calls.push({ op: 'performActions' });
-    return this.opts.actions ? this.opts.actions(policy, signal) : structuredClone(NO_ACTIONS);
+    await this.opts.actions?.(policy, signal);
   }
 
   async returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification> {

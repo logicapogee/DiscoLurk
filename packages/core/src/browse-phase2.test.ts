@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { browse } from './browse';
 import type { RunEvent } from './events';
 import { MemoryLedger, rankTopics, topicScore } from './ledger';
-import type { ActionPolicy, ActionResult, ReadVerification } from './ports';
+import type { ActionPolicy, ActionReport, ReadVerification } from './ports';
 import { seededRandom } from './runtime';
-import { FixtureForum, fixtureSite, NO_ACTIONS, VirtualTime, type FixtureForumOptions } from './testing';
+import { FixtureForum, fixtureSite, VirtualTime, type FixtureForumOptions } from './testing';
 import { TimingsTally } from './timings';
-import type { BrowseMode, Category, ExperimentFlags, InteractionPolicy, RunMode, RunPlanSnapshot, TopicCandidate } from './terms';
+import { EXPERIMENTS_OFF, type BrowseMode, type Category, type ExperimentFlags, type InteractionPolicy, type RunMode, type RunPlanSnapshot, type TopicCandidate } from './terms';
 
 const site = fixtureSite();
 const categories: Category[] = ['a', 'b', 'c'].map((slug, i) => ({ name: slug, path: `/c/${slug}/${i + 1}`, id: i + 1, enabledByDefault: true }));
@@ -36,7 +36,7 @@ function plan(runMode: RunMode, o: PlanOpts = {}): RunPlanSnapshot {
       interaction: o.interaction ?? OFF,
       extraWait: { enabled: o.extraWait ?? true, minSec: 1, maxSec: 3 },
       samplePerCategory: { min: 3, max: 8 },
-      ...(o.experiments ? { experiments: o.experiments } : {}),
+      experiments: o.experiments ?? { ...EXPERIMENTS_OFF },
     },
   };
 }
@@ -137,7 +137,13 @@ describe('STATS-001 three-layer statistics (§6.4)', () => {
   });
 });
 
-const liked = (over: Partial<ActionResult> = {}): ActionResult => ({ ...structuredClone(NO_ACTIONS), ...over });
+/** Reports each action as attempted, then with its outcome. */
+function report(policy: ActionPolicy, action: ActionReport['action'], bucket: ActionReport['bucket'], outcomes: Array<'confirmed' | 'rejected'>): void {
+  for (const result of outcomes) {
+    policy.onAction({ action, bucket, result: 'attempted' });
+    policy.onAction({ action, bucket, result });
+  }
+}
 
 describe('ACTION-000 interactions are off unless switched on (A01, A02)', () => {
   it('never calls performActions with likes and replies off', async () => {
@@ -152,9 +158,8 @@ describe('ACTION-000 interactions are off unless switched on (A01, A02)', () => 
     const t = run(plan({ kind: 'topics', count: 2 }, { interaction }), {
       actions: async (policy) => {
         seen.push(policy);
-        policy.onAction({ action: 'like', result: 'attempted', postNumber: 1 });
-        policy.onAction({ action: 'like', result: 'confirmed', postNumber: 1 });
-        return liked({ likes: { attempted: 1, confirmed: 1 }, replyLikes: { attempted: 2, confirmed: 1 } });
+        report(policy, 'like', 'topic', ['confirmed']);
+        report(policy, 'like', 'reply', ['confirmed', 'rejected']);
       },
     });
     const out = await t.go();
@@ -163,13 +168,13 @@ describe('ACTION-000 interactions are off unless switched on (A01, A02)', () => 
     expect(seen[0]!.extraWait).toEqual({ enabled: true, minSec: 1, maxSec: 3 });
     expect(out.stats.attempted).toMatchObject({ likes: 1, replyLikes: 2 });
     expect(out.stats.confirmed).toMatchObject({ likes: 1, replyLikes: 1 });
-    expect(t.events.filter((e) => e.type === 'action').map((e) => (e as { result: string }).result)).toEqual(['attempted', 'confirmed']);
+    expect(t.events.filter((e) => e.type === 'action').map((e) => (e as { result: string }).result)).toEqual(['attempted', 'confirmed', 'attempted', 'confirmed', 'attempted', 'rejected']);
   });
 
   it('counts replied topics once per topic however many replies it got', async () => {
     const interaction: InteractionPolicy = { ...OFF, reply: { enabled: true, rate: 100 } };
     const t = run(plan({ kind: 'topics', count: 30 }, { interaction }), {
-      actions: async () => liked({ replies: { attempted: 2, confirmed: 2 } }),
+      actions: async (policy) => report(policy, 'reply', 'reply-post', ['confirmed', 'confirmed']),
     });
     const out = await t.go();
     const read = ops(t.forum, 'performActions').length;
@@ -201,21 +206,56 @@ describe('STOP-002 a stop is checked before interacting (A08)', () => {
 });
 
 describe('LIKE-003 two unconfirmed likes in a row end liking for the run (A09)', () => {
-  it('turns likes off after the adapter reports the limit and warns like-limit once', async () => {
-    const interaction: InteractionPolicy = { like: { ...OFF.like, enabled: true }, reply: { enabled: true, rate: 5 } };
-    const policies: Array<{ like: boolean }> = [];
-    let calls = 0;
+  const interaction: InteractionPolicy = { like: { ...OFF.like, enabled: true }, reply: { enabled: true, rate: 5 } };
+
+  it('turns likes off across topics after the second rejection and warns like-limit once', async () => {
+    const liking: boolean[] = [];
     const t = run(plan({ kind: 'topics', count: 12 }, { interaction }), {
       actions: async (policy) => {
-        policies.push({ like: policy.like.enabled });
-        calls++;
-        return liked({ likes: { attempted: 1, confirmed: 0 }, likeLimitHit: calls >= 2 });
+        liking.push(policy.liking());
+        if (policy.liking()) report(policy, 'like', 'topic', ['rejected']);
+      },
+    });
+    const out = await t.go();
+    expect(liking.slice(0, 2)).toEqual([true, true]);
+    expect(liking.slice(2).every((on) => !on)).toBe(true);
+    expect(out.stats.attempted.likes).toBe(2);
+    expect(t.events.filter((e) => e.type === 'warning' && e.code === 'like-limit')).toHaveLength(1);
+  });
+
+  it('answers liking() false within the topic as soon as the second rejection lands', async () => {
+    const between: boolean[] = [];
+    const t = run(plan({ kind: 'topics', count: 2 }, { interaction }), {
+      actions: async (policy) => {
+        report(policy, 'like', 'reply', ['rejected']);
+        between.push(policy.liking());
+        report(policy, 'like', 'reply', ['rejected']);
+        between.push(policy.liking());
       },
     });
     await t.go();
-    expect(policies.slice(0, 2).every((p) => p.like)).toBe(true);
-    expect(policies.slice(2).every((p) => !p.like)).toBe(true);
-    expect(t.events.filter((e) => e.type === 'warning' && e.code === 'like-limit')).toHaveLength(1);
+    expect(between.slice(0, 2)).toEqual([true, false]);
+  });
+
+  it('a confirmed like in between resets the count', async () => {
+    const t = run(plan({ kind: 'topics', count: 6 }, { interaction }), {
+      actions: async (policy) => report(policy, 'like', 'reply', ['rejected', 'confirmed', 'rejected', 'confirmed']),
+    });
+    await t.go();
+    expect(t.events.some((e) => e.type === 'warning' && e.code === 'like-limit')).toBe(false);
+  });
+
+  it('keeps the policy it hands out unchanged', async () => {
+    const seen: ActionPolicy[] = [];
+    const t = run(plan({ kind: 'topics', count: 12 }, { interaction }), {
+      actions: async (policy) => {
+        seen.push(policy);
+        report(policy, 'like', 'topic', ['rejected']);
+      },
+    });
+    await t.go();
+    expect(Object.isFrozen(seen[0])).toBe(true);
+    expect(seen.every((p) => p.like.enabled)).toBe(true);
   });
 });
 

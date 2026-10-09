@@ -1,3 +1,9 @@
+/** A floor's container, addressed by post number so cloaking or DOM order cannot point it at another post. */
+export const postOf = (postNumber: number) => `.topic-post[data-post-number="${postNumber}"]`;
+
+/** Every rendered floor that carries its post number. */
+export const POST_WITH_NUMBER = '.topic-post[data-post-number]';
+
 /**
  * The design's selector table, verbatim. Both built-in sites share these; a per-site difference
  * belongs in `Site`, not in a second copy of this table.
@@ -14,7 +20,7 @@ export const SELECTORS = {
   unreadPostsBadge: '.badge-notification.unread-posts',
   floorWide: '.timeline-replies',
   floorNarrow: '#topic-progress .nums span',
-  firstPost: '.topic-post[data-post-number="1"]',
+  firstPost: postOf(1),
   /** A cross-check only: once a long topic cloaks floor 1 this is an empty `div.post-stream--cloaked`. */
   firstPostById: '#post_1',
   likeButton: 'button.btn-toggle-reaction-like',
@@ -56,11 +62,14 @@ export const LIST_END = 'footer.topic-list-bottom';
 /** Any rendered post of a topic; it marks entry when a one-floor topic shows no floor counter. */
 export const TOPIC_POST = '.topic-post';
 
-/** A post's like button, addressed by floor so cloaking or DOM order cannot point it at another post. */
-export const likeButtonOf = (postNumber: number) => `.topic-post[data-post-number="${postNumber}"] ${SELECTORS.likeButton}`;
+/** A post's like button, looked up inside its own floor. */
+export const likeButtonOf = (postNumber: number) => `${postOf(postNumber)} ${SELECTORS.likeButton}`;
 
-/** A floor's container; liked markers and the like button are looked up inside it. */
-export const postOf = (postNumber: number) => `.topic-post[data-post-number="${postNumber}"]`;
+/** Either marker inside a floor means it is already liked: the reactions container, and the liked icon as second evidence. */
+export const LIKED_MARKERS = [
+  { name: 'reacted', selector: SELECTORS.likedReacted },
+  { name: 'likedIcon', selector: SELECTORS.likedIcon },
+] as const;
 
 /** Not from the selector table: the reply count a list row shows (linuxdo's posts cell, docofcard's `gf-*` stat box). */
 export const REPLIES_CELL = 'td.posts .number, .gf-stat-posts .gf-stat-number';

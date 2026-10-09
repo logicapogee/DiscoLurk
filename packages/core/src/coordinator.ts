@@ -19,7 +19,7 @@ import { mergeDiscoveredCategories } from './plan';
 import { TimingsTally, type TimingsReceipt } from './timings';
 import type { AuthMode, AuthResult, AuthSession, ForumPort, RunCoordinator } from './ports';
 import { isAbortError, seededRandom, throwIfAborted, type RuntimeDeps } from './runtime';
-import { EXPERIMENTS_OFF, type BrowserMode, type Category, type Profile, type ProfileHealth, type ProfileId, type RunPlanSnapshot, type Site, type SiteId } from './terms';
+import type { BrowserMode, Category, Profile, ProfileHealth, ProfileId, RunPlanSnapshot, Site, SiteId } from './terms';
 
 export interface ForumSession {
   forum: ForumPort;
@@ -250,7 +250,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
         }
         if (runSite.categorySource === 'discovered') await this.refreshCategories(runSite, forum, live, warn);
         const categories =
-          runSite.categorySource === 'builtin' && (plan.preset.experiments ?? EXPERIMENTS_OFF).refreshCategories
+          runSite.categorySource === 'builtin' && plan.preset.experiments.refreshCategories
             ? await this.refreshBuiltinPaths(plan.preset.categories, forum, live, warn)
             : plan.preset.categories;
         visits.ledger = await this.openLedger(plan.profileId, warn);

@@ -1,5 +1,5 @@
 import { parseHTML } from 'linkedom';
-import { CATEGORY_NAME_SELECTORS, CATEGORY_PATH, EDITOR_SELECTORS, REPLIES_CELL, SELECTORS } from './selectors';
+import { CATEGORY_NAME_SELECTORS, CATEGORY_PATH, EDITOR_SELECTORS, LIKED_MARKERS, REPLIES_CELL, SELECTORS } from './selectors';
 
 /** Parsers take any DOM root so the same code reads a live page snapshot and a stored fixture. */
 export type DomRoot = ParentNode;
@@ -79,31 +79,30 @@ export function parseFloorCounter(root: DomRoot): FloorReading | null {
   return floorCounterFromText(wide ? text(wide) : null, Array.from(root.querySelectorAll(SELECTORS.floorNarrow)).map(text));
 }
 
-/** Liked-marker counts within `root`: the reactions container and, as second evidence, the liked icon. */
-export function likedMarkers(root: DomRoot): { reacted: number; likedIcon: number } {
-  return {
-    reacted: root.querySelectorAll(SELECTORS.likedReacted).length,
-    likedIcon: root.querySelectorAll(SELECTORS.likedIcon).length,
-  };
+type LikedMarker = (typeof LIKED_MARKERS)[number]['name'];
+
+/** How many of each liked marker `root` holds. */
+export function likedMarkers(root: DomRoot): Record<LikedMarker, number> {
+  return Object.fromEntries(LIKED_MARKERS.map((m) => [m.name, root.querySelectorAll(m.selector).length])) as Record<LikedMarker, number>;
 }
 
 /** A floor showing either marker is already liked, and its like button must not be pressed. */
 export function isLiked(post: DomRoot): boolean {
-  const m = likedMarkers(post);
-  return m.reacted > 0 || m.likedIcon > 0;
+  return LIKED_MARKERS.some((m) => post.querySelector(m.selector) !== null);
 }
 
 export type EditorKind = keyof typeof EDITOR_SELECTORS;
 
-/** Which of the editor selector sets the open composer exposes, from counts per set. */
-export function editorKindFromCounts(counts: Readonly<Record<EditorKind, number>>): EditorKind | null {
-  for (const kind of Object.keys(EDITOR_SELECTORS) as EditorKind[]) if (counts[kind] > 0) return kind;
-  return null;
+/** The editors in the order they are tried. */
+export const EDITOR_KINDS = Object.keys(EDITOR_SELECTORS) as EditorKind[];
+
+/** The first editor with a match, from counts given in `EDITOR_KINDS` order. */
+export function editorKindFromCounts(counts: readonly number[]): EditorKind | null {
+  return EDITOR_KINDS.find((_, i) => (counts[i] ?? 0) > 0) ?? null;
 }
 
 export function editorKind(root: DomRoot): EditorKind | null {
-  const count = (kind: EditorKind) => root.querySelectorAll(EDITOR_SELECTORS[kind]).length;
-  return editorKindFromCounts({ textarea: count('textarea'), 'd-editor-input': count('d-editor-input'), prosemirror: count('prosemirror') });
+  return editorKindFromCounts(EDITOR_KINDS.map((kind) => root.querySelectorAll(EDITOR_SELECTORS[kind]).length));
 }
 
 /**

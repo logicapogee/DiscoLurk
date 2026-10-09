@@ -59,8 +59,8 @@ describe('guard: no write paths to a site', () => {
       /^packages\/site-discourse\/src\/session\.ts: if \(asked\) await confirm\.click/,
       /^packages\/site-discourse\/src\/session\.ts: await loginStep\('(username|password|submit)'/,
       /^packages\/site-discourse\/src\/forum\.ts: await untilAbort\(this\.opts\.titleLinks\.click\(topic\.id\), signal\);/,
-      /^packages\/site-discourse\/src\/actions\.ts: return this\.likeButton\.click\(postNumber\);/,
-      /^packages\/site-discourse\/src\/actions\.ts: return this\.composer\.fill\(kind, text\);/,
+      /^packages\/site-discourse\/src\/actions\.ts: await untilAbort\(this\.likeButton\.click\(postNumber\), signal\);/,
+      /^packages\/site-discourse\/src\/actions\.ts: await untilAbort\(this\.composer\.fill\(kind, text\), signal\);/,
       /^packages\/cli\/src\/selftest\.ts: /,
       /^packages\/cli\/src\/capture\.ts: await link\.click\(\);/,
     ];
@@ -72,8 +72,10 @@ describe('guard: no write paths to a site', () => {
     const uses = forum.split('\n').filter((line) => /opts\.(likeButton|composer)\b/.test(line));
     expect(uses).toHaveLength(1);
     expect(uses[0]).toContain('new PageActionSurface(');
-    const body = forum.slice(forum.indexOf('async performActions('), forum.indexOf('async returnAndVerify('));
-    expect(body).toContain('new PageActionSurface(');
+    const surfaceUses = forum.split('\n').filter((line) => /this\.actions\b/.test(line));
+    expect(surfaceUses).toHaveLength(2);
+    const body = forum.slice(forum.indexOf('performActions(policy: ActionPolicy'), forum.indexOf('async returnAndVerify('));
+    expect(body).toContain('performActions(this.actions,');
   });
 
   it('page.ts exports no method that clicks, types or runs script', () => {

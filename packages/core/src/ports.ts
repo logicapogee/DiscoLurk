@@ -75,23 +75,22 @@ export interface ReadResult {
 
 export interface ActionReport {
   action: 'like' | 'reply';
+  /** The counter it lands in: a like on floor 1, a like on a reply, or a posted reply. */
+  bucket: 'topic' | 'reply' | 'reply-post';
   /** `rejected` is an action that was sent but never confirmed by the page. */
   result: 'attempted' | 'confirmed' | 'rejected';
   postNumber?: number;
 }
 
-/** The interaction switches and rates, the extra-wait setting that paces them, and where each action is reported. */
-export interface ActionPolicy extends InteractionPolicy {
-  extraWait: WaitRange & { enabled: boolean };
+/**
+ * The preset's interaction switches and rates, the extra-wait setting that paces them, and where
+ * each action is reported. The kernel counts every report, so the adapter returns nothing.
+ */
+export interface ActionPolicy extends Readonly<InteractionPolicy> {
+  readonly extraWait: Readonly<WaitRange & { enabled: boolean }>;
+  /** Whether a like may be sent now: the preset's like switch, until the site's daily like limit turns it off. Asked before every like. */
+  liking(): boolean;
   onAction(report: ActionReport): void;
-}
-
-export interface ActionResult {
-  likes: { attempted: number; confirmed: number };
-  replyLikes: { attempted: number; confirmed: number };
-  replies: { attempted: number; confirmed: number };
-  /** Set once likes went unconfirmed twice in a row, the sign of the site's daily like limit. */
-  likeLimitHit: boolean;
 }
 
 /**
@@ -114,7 +113,7 @@ export interface ForumPort {
   collectTopics(category: Category, strategy: TopicStrategy, signal: AbortSignal): Promise<TopicBatch>;
   enterFromList(topic: TopicCandidate, signal: AbortSignal): Promise<TopicVisit>;
   readTopic(visit: TopicVisit, strategy: ReadStrategy, signal: AbortSignal): Promise<ReadResult>;
-  performActions(policy: ActionPolicy, signal: AbortSignal): Promise<ActionResult>;
+  performActions(policy: ActionPolicy, signal: AbortSignal): Promise<void>;
   returnAndVerify(visit: TopicVisit, signal: AbortSignal): Promise<ReadVerification>;
 }
 

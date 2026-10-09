@@ -5,14 +5,16 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { DiscoLurkCoordinator, isAbortError, RunError } from '@disco-lurk/core';
 import { formatDoctor, runDoctor } from './doctor';
-import { FileCategoryStore } from '@disco-lurk/config';
+import { ConfigFileError, FileCategoryStore } from '@disco-lurk/config';
 import { appDataDir, profilesDir, sitesDir } from './paths';
 import { SidecarLifecycle } from './lifecycle';
-import { serve } from './serve';
 import { bootServer, stdoutShell } from './sidecar';
 import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
 import { installStopHandlers } from './signals';
+import { EnvError, proxyFromEnv, runArgvWithEnv } from './env';
+import { schedule, SCHEDULE_USAGE } from './schedule';
+import { serve } from './serve';
 import { BUILTIN_SITES, findSite } from './sites';
 import {
   buildPlan,
@@ -44,6 +46,7 @@ Usage:
            [--like [--like-rate <%>] [--reply-like-rate <%>] [--max-reply-likes <n≤4>]]
            [--reply --i-understand-auto-reply-risk [--reply-rate <%>]]
            [--extra-wait <min>-<max>|off] [--experiments useNewList,useUnreadList,refreshCategories,smartRanked]
+${SCHEDULE_USAGE}
   lurk doctor [--json] [--port <n>] [--network]
   lurk serve [--host 127.0.0.1] [--port 8080] [--headless] [--origin <url>]... [--ui <dir>] [--data <dir>]
              (remote web UI; a non-loopback --host requires LURK_TOKEN)
@@ -217,7 +220,8 @@ async function run(argv: string[]): Promise<number> {
   for (const line of args.usageWarnings) console.error(`warning: ${line}`);
   const { signal, exitSignal } = installStopHandlers(() => console.error('Stopping… (Ctrl+C again skips the final progress read)'));
   const credentials = credentialsFromEnv(args.site);
-  const env = cliEnv({ channel: args.channel, exitSignal, ...(credentials ? { credentials } : {}) });
+  const proxy = proxyFromEnv(process.env);
+  const env = cliEnv({ channel: args.channel, exitSignal, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) });
   const categories = resolveCategories(args.site, await siteCategories(args.site, env.categories), args.categories);
   const plan = buildPlan(args, categories, newSeed(), new Date(), (code, message) => console.error(`warning ${code}: ${message}`));
   const coordinator = new DiscoLurkCoordinator(env);
@@ -239,7 +243,9 @@ async function main(argv: string[]): Promise<number> {
     case 'login':
       return login(rest);
     case 'run':
-      return run(rest);
+      return run(runArgvWithEnv(rest, process.env));
+    case 'schedule':
+      return schedule(rest);
     case 'doctor':
       return doctor(rest);
     case 'sidecar':
@@ -264,6 +270,7 @@ main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err: unknown) => {
     if (err instanceof UsageError) console.error(`${err.message}\n\n${USAGE}`);
+    else if (err instanceof EnvError || err instanceof ConfigFileError) console.error(err.message);
     else if (err instanceof RunError) console.error(`${err.code}: ${err.message}`);
     else console.error(err);
     process.exit(EXIT.environment);

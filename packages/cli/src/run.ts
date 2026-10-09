@@ -319,6 +319,7 @@ export async function signIn(auth: AuthSession, signal: AbortSignal, log: (line:
 export interface CliEnvOptions {
   channel: BrowserChannel;
   credentials?: Credentials;
+  proxy?: string;
   exitSignal?: AbortSignal;
 }
 
@@ -338,7 +339,7 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
       const { siteId } = parseProfileId(profileId);
       const site = findSite(siteId);
       if (!site) throw new UsageError(`Unknown site ${siteId}`);
-      return { profile: { id: profileId, siteId, channel: opts.channel }, site };
+      return { profile: { id: profileId, siteId, channel: opts.channel, ...(opts.proxy ? { proxy: opts.proxy } : {}) }, site };
     },
     open(req) {
       return openDiscourseForum({
@@ -351,6 +352,7 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
         warn: req.warn,
         onTimings: req.timings,
         replyTemplates: templates,
+        ...(req.profile.proxy ? { proxy: req.profile.proxy } : {}),
         ...(opts.credentials ? { credentials: opts.credentials } : {}),
       });
     },

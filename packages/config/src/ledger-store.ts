@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { MapLedger, type LedgerStore, type ProfileId, type VisitLedger, type VisitRecord } from '@disco-lurk/core';
 import { z } from 'zod';
 import { writeJsonAtomic } from './category-store';
@@ -27,20 +26,18 @@ const fileSchema = z
 export const LEDGER_RETENTION_DAYS = 30;
 
 /**
- * One visit ledger per Profile at `<ledgersDir>/<siteId>/<name>.json`. Records older than the
+ * One visit ledger file per Profile, at the path `pathOf` gives it. Records older than the
  * retention period are dropped on load and on save, so the file stays bounded.
  */
 export class FileLedgerStore implements LedgerStore {
   constructor(
-    private readonly ledgersDir: string,
+    private readonly pathOf: (profileId: ProfileId) => string,
     private readonly now: () => number = Date.now,
     private readonly retentionDays = LEDGER_RETENTION_DAYS,
   ) {}
 
   path(profileId: ProfileId): string {
-    const [siteId, name] = profileId.split('/');
-    if (!siteId || !name) throw new Error(`Invalid profile id ${profileId}`);
-    return join(this.ledgersDir, siteId, `${name}.json`);
+    return this.pathOf(profileId);
   }
 
   async open(profileId: ProfileId): Promise<VisitLedger> {

@@ -1,7 +1,7 @@
 import {
   isAbortError,
   LOGIN_WAIT_MS,
-  pauseBetween,
+  pauseWithin,
   RunError,
   throwIfAborted,
   untilAbort,
@@ -24,9 +24,10 @@ import {
   type TopicListSource,
   type TopicStrategy,
   type TopicVisit,
+  type WaitRange,
 } from '@disco-lurk/core';
 import { PageActionSurface, performActions, templatePicker, type Composer, type LikeButton } from './actions';
-import { LOGIN_POLL_MS, pollUntil, usernameFromUrl, waitForCurrentUser } from './auth';
+import { LOGIN_POLL_MS, pollUntil, usernameFromUrl, waitForCurrentUser, waitUntil } from './auth';
 import { expectedMiss, type LoadState, type ReadOnlyPage } from './page';
 import { categoryLinks, floorCounterFromText, parseDocument, parseTopicList, type CategoryLink, type FloorReading } from './parse';
 import { parseConnect } from './progress/connect-linuxdo';
@@ -62,6 +63,10 @@ const TIMEOUTS = {
   visibilityPollMs: 2_000,
 } as const;
 const TITLE_LOG_CHARS = 50;
+/** A person glances over a list or the categories page once it appears. */
+const GLANCE = { minSec: 1, maxSec: 2 };
+/** Time on the list after a topic, in which the site flushes the topic's last /topics/timings. */
+const LAST_FLUSH = { minSec: 2, maxSec: 3 };
 
 export interface Credentials {
   username: string;
@@ -167,7 +172,7 @@ class VisibilityGate {
     warn('page-hidden', 'The browser window is hidden; the site counts no reading while it is. Bringing it to the front and waiting');
     await untilAbort(page.bringToFront(), signal);
     const { clock, sleeper } = deps;
-    await pollUntil({ intervalMs: TIMEOUTS.visibilityPollMs, timeoutMs: Number.POSITIVE_INFINITY, clock, sleeper }, async () => ((await page.visibilityState()) === 'visible' ? true : null), signal);
+    await waitUntil({ intervalMs: TIMEOUTS.visibilityPollMs, timeoutMs: Number.POSITIVE_INFINITY, clock, sleeper }, async () => (await page.visibilityState()) === 'visible', signal);
     const seconds = Math.round((deps.clock.monotonic() - since) / 1000);
     warn('page-visible', `The browser window is visible again after ${seconds} s; reading continues`);
   }
@@ -234,8 +239,8 @@ export class DiscourseForum implements ForumPort {
     return new URL(path, this.site.baseUrl).href;
   }
 
-  private pause(minSec: number, maxSec: number, signal: AbortSignal): Promise<void> {
-    return pauseBetween(this.opts.deps, minSec, maxSec, signal);
+  private pause(range: WaitRange, signal: AbortSignal): Promise<void> {
+    return pauseWithin(this.opts.deps, range, signal);
   }
 
   private async goto(url: string, signal: AbortSignal, waitUntil: LoadState = 'domcontentloaded'): Promise<void> {
@@ -336,7 +341,7 @@ export class DiscourseForum implements ForumPort {
       await this.explainMissingPage();
       return [];
     }
-    await this.pause(1, 2, signal);
+    await this.pause(GLANCE, signal);
     return discoveredCategories(categoryLinks(await this.content(), this.site.baseUrl));
   }
 
@@ -361,8 +366,7 @@ export class DiscourseForum implements ForumPort {
       await this.explainMissingPage();
       return { category, source, topics: [] };
     }
-    // A person glances over the list for 1–2 s once it appears.
-    await this.pause(1, 2, signal);
+    await this.pause(GLANCE, signal);
     const topics: TopicCandidate[] = parseTopicList(await this.content())
       .filter((r) => r.id && r.hasTitleLink)
       .map((r) => ({
@@ -462,8 +466,7 @@ export class DiscourseForum implements ForumPort {
       await this.goto(this.listUrl, signal);
       found = await this.appears(row, TIMEOUTS.returnRowMs, signal, 'visible');
     }
-    // 2–3 s on the list lets the site flush the topic's last /topics/timings.
-    await this.pause(2, 3, signal);
+    await this.pause(LAST_FLUSH, signal);
     if (this.listUrl && !sortKept(this.listUrl, this.opts.page.url())) {
       this.opts.warn('sort-lost', `Back on ${this.opts.page.url()} instead of ${this.listUrl}; reopening the sorted list`);
       await this.goto(this.listUrl, signal);
@@ -515,9 +518,9 @@ export class DiscourseForum implements ForumPort {
       throw new RunError('needs-auth', `${host} asks to authorize access; run once with a headed window (--headed) and approve it there`);
     }
     this.opts.warn('awaiting-authorization', `${host} asks to authorize access; approve it in the browser window (waiting up to ${LOGIN_WAIT_MS / 60_000} minutes)`);
-    const authorized = await pollUntil(
+    const authorized = await waitUntil(
       { intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_WAIT_MS, clock: this.opts.deps.clock, sleeper: this.opts.deps.sleeper },
-      async () => ((await this.count(CONNECT_READY)) > 0 ? true : null),
+      async () => (await this.count(CONNECT_READY)) > 0,
       signal,
     );
     if (!authorized) throw new RunError('needs-auth', `${host} authorization was not given within ${LOGIN_WAIT_MS / 60_000} minutes`);

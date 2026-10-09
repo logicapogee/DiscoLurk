@@ -10,7 +10,7 @@ const now = Date.UTC(2026, 9, 9);
 describe('visit ledger file (§7.2)', () => {
   it('round-trips records per Profile and merges failures across visits', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'lurk-ledger-'));
-    const store = new FileLedgerStore(dir, () => now);
+    const store = new FileLedgerStore((id) => join(dir, `${id}.json`), () => now);
     const ledger = await store.open('linuxdo/default');
     ledger.record({ topicId: '7', lastVisitAt: new Date(now).toISOString(), entered: false, failure: 'click-failed' });
     ledger.record({ topicId: '7', lastVisitAt: new Date(now).toISOString(), entered: true, floors: { from: 1, to: 9 }, verification: 'confirmed' });
@@ -22,7 +22,7 @@ describe('visit ledger file (§7.2)', () => {
 
   it('drops records older than the retention period', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'lurk-ledger-'));
-    const store = new FileLedgerStore(dir, () => now, 30);
+    const store = new FileLedgerStore((id) => join(dir, `${id}.json`), () => now, 30);
     const ledger = await store.open('docofcard/main');
     ledger.record({ topicId: 'old', lastVisitAt: new Date(now - 31 * day).toISOString(), entered: true });
     ledger.record({ topicId: 'new', lastVisitAt: new Date(now - 29 * day).toISOString(), entered: true });
@@ -33,7 +33,7 @@ describe('visit ledger file (§7.2)', () => {
 
   it('names the file when it is not a ledger of this Profile', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'lurk-ledger-'));
-    const store = new FileLedgerStore(dir, () => now);
+    const store = new FileLedgerStore((id) => join(dir, `${id}.json`), () => now);
     await (await store.open('linuxdo/default')).save();
     await writeFile(store.path('linuxdo/default'), JSON.stringify({ schemaVersion: 1, profileId: 'linuxdo/other', records: [] }));
     await expect(store.open('linuxdo/default')).rejects.toThrow(/default\.json is not a valid visit ledger/);

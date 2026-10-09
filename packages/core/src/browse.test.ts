@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { browse } from './browse';
 import { emptyStats, type RunEvent } from './events';
 import { targetReached } from './target';
+import { TimingsTally } from './timings';
 import { FixtureForum, fixtureSite, VirtualTime } from './testing';
 import { EXPERIMENTS_OFF, type BrowseMode, type Category, type RunMode, type RunPlanSnapshot, type TopicCandidate } from './terms';
 
@@ -57,7 +58,7 @@ function setup(runMode: RunMode, opts: { browseMode?: BrowseMode; perCategory?: 
   const controller = new AbortController();
   const p = plan(runMode, opts.browseMode);
   const run = () =>
-    time.drive(browse({ plan: p, forum, deps: time.deps(p.seed), signal: controller.signal, emit: (e) => events.push(e) }));
+    time.drive(browse({ plan: p, forum, deps: time.deps(p.seed), categories: p.preset.categories, timings: new TimingsTally(), signal: controller.signal, emit: (e) => events.push(e) }));
   return { time, forum, events, controller, run };
 }
 
@@ -81,7 +82,7 @@ describe('TARGET-001 target metrics (S03, S04)', () => {
     const forum = new FixtureForum({ site, sleeper: time.sleeper, topics: rows(1), floorsConfirmed: false });
     const p = plan({ kind: 'topics', count: 3 }, 'deep');
     const out = await time.drive(
-      browse({ plan: p, forum, deps: time.deps(p.seed), signal: new AbortController().signal, emit: () => {} }),
+      browse({ plan: p, forum, deps: time.deps(p.seed), categories: p.preset.categories, timings: new TimingsTally(), signal: new AbortController().signal, emit: () => {} }),
     );
     expect(out.end).toBe('target-reached');
     expect(out.stats.confirmed.topics).toBe(3);
@@ -207,7 +208,7 @@ describe('Appendix B: 1–2 s after reading, whatever the extra-wait switch says
     }
     const forum = new Timed({ site, sleeper: time.sleeper, topics: rows(1) });
     const p = plan({ kind: 'topics', count: 3 }, 'quick', extraWait);
-    await time.drive(browse({ plan: p, forum, deps: time.deps(p.seed), signal: new AbortController().signal, emit: () => {} }));
+    await time.drive(browse({ plan: p, forum, deps: time.deps(p.seed), categories: p.preset.categories, timings: new TimingsTally(), signal: new AbortController().signal, emit: () => {} }));
     const gaps = marks.flatMap((m, i) => (m.op === 'read-done' && marks[i + 1]?.op === 'return' ? [marks[i + 1]!.at - m.at] : []));
     expect(gaps.length).toBeGreaterThan(0);
     for (const gap of gaps) {

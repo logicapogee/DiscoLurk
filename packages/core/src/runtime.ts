@@ -1,3 +1,5 @@
+import type { WaitRange } from './terms';
+
 /** Every source of time and randomness is injected so tests can fix them. */
 export interface Clock {
   /** Wall-clock epoch milliseconds; used for timestamps and schedules. */
@@ -105,9 +107,9 @@ export function randomBetween(random: RandomSource, min: number, max: number): n
   return min + random.next() * (max - min);
 }
 
-/** A human-paced wait of a random length between `minSec` and `maxSec` seconds. */
-export function pauseBetween(deps: Pick<RuntimeDeps, 'random' | 'sleeper'>, minSec: number, maxSec: number, signal: AbortSignal): Promise<void> {
-  return deps.sleeper.sleep(randomBetween(deps.random, minSec, maxSec) * 1000, signal);
+/** A human-paced wait of a random length within `range`. */
+export function pauseWithin(deps: Pick<RuntimeDeps, 'random' | 'sleeper'>, range: WaitRange, signal: AbortSignal): Promise<void> {
+  return deps.sleeper.sleep(randomBetween(deps.random, range.minSec, range.maxSec) * 1000, signal);
 }
 
 export function shuffle<T>(items: readonly T[], random: RandomSource): T[] {

@@ -25,6 +25,11 @@ export async function pollUntil<T>(opts: PollOptions, probe: () => Promise<T | n
   }
 }
 
+/** Polls `condition` until it holds; false once the ceiling has passed without it. */
+export async function waitUntil(opts: PollOptions, condition: () => Promise<boolean>, signal: AbortSignal): Promise<boolean> {
+  return (await pollUntil(opts, async () => ((await condition()) ? true : null), signal)) ?? false;
+}
+
 export interface LoginWaitOptions extends Partial<PollOptions> {
   signal: AbortSignal;
 }
@@ -41,13 +46,13 @@ export async function waitForCurrentUser(page: ReadOnlyPage, opts: LoginWaitOpti
   // A navigation in progress destroys the execution context; that poll simply counts as "not yet".
   const present = () =>
     page.count(SELECTORS.currentUser).then(
-      (n) => (n > 0 ? true : null),
+      (n) => n > 0,
       (err: unknown) => {
-        if (expectedMiss(err)) return null;
+        if (expectedMiss(err)) return false;
         throw err;
       },
     );
-  return (await pollUntil({ intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_WAIT_MS, ...poll }, present, signal)) ?? false;
+  return waitUntil({ intervalMs: LOGIN_POLL_MS, timeoutMs: LOGIN_WAIT_MS, ...poll }, present, signal);
 }
 
 const USER_PATH = /\/u\/([^/?#]+)/;

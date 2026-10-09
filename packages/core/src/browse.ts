@@ -1,8 +1,8 @@
-import { emptyStats, toFailure, type RunEvent, type RunFailure, type RunStats } from './events';
+import { addActionReport, emptyStats, toFailure, type RunEvent, type RunFailure, type RunStats } from './events';
 import { rankTopics, type VisitLedger } from './ledger';
 import { sampleTopics, selectCandidates } from './picking';
 import type { ActionPolicy, ActionReport, ForumPort, ReadResult, TopicStrategy, TopicVisit } from './ports';
-import { isAbortError, pauseBetween, shuffle, throwIfAborted, type RuntimeDeps } from './runtime';
+import { isAbortError, pauseWithin, shuffle, throwIfAborted, type RuntimeDeps } from './runtime';
 import { targetReached } from './target';
 import type { TimingsTally } from './timings';
 import type { Category, ResolvedPreset, RunMode, RunPlanSnapshot, TopicCandidate, WaitRange } from './terms';
@@ -15,11 +15,11 @@ export interface BrowseInput {
   deps: RuntimeDeps;
   signal: AbortSignal;
   emit: (e: RunEvent) => void;
-  /** The categories to browse; the plan's own when absent. */
-  categories?: readonly Category[];
+  /** The categories to browse, which a run may have refreshed from the plan's. */
+  categories: readonly Category[];
   /** The site's read receipts so far; every stats event carries their sum. */
-  timings?: TimingsTally;
-  /** Every visit is recorded here; the `smartRanked` experiment also reads it. */
+  timings: TimingsTally;
+  /** Every visit is recorded here; the `smartRanked` experiment also reads it. Absent when the Profile's ledger could not be opened. */
   ledger?: VisitLedger;
 }
 
@@ -51,13 +51,6 @@ export function armDeadline(runMode: RunMode, deps: Pick<RuntimeDeps, 'sleeper'>
   return { signal: deadline.signal, disarm: () => disarm.abort() };
 }
 
-/** Adds one action report to the counters its bucket names. */
-export function addActionReport(stats: RunStats, report: ActionReport): void {
-  const counter = report.bucket === 'topic' ? 'likes' : report.bucket === 'reply' ? 'replyLikes' : 'replies';
-  if (report.result === 'attempted') stats.attempted[counter]++;
-  else if (report.result === 'confirmed') stats.confirmed[counter]++;
-}
-
 interface BrowseContext {
   preset: ResolvedPreset;
   forum: ForumPort;
@@ -71,7 +64,7 @@ interface BrowseContext {
   emit: (e: RunEvent) => void;
   stats: RunStats;
   startedAt: number;
-  timings: TimingsTally | undefined;
+  timings: TimingsTally;
   ledger: VisitLedger | undefined;
   policy: ActionPolicy;
   /** Starts as the preset's like switch; the like limit turns it off for the rest of the run. */
@@ -86,33 +79,46 @@ interface BrowseContext {
   repliedTopics: Set<string>;
 }
 
-const at = (ctx: BrowseContext) => new Date(ctx.deps.clock.now()).toISOString();
+const timestamp = (ctx: BrowseContext) => new Date(ctx.deps.clock.now()).toISOString();
 
-const warn = (ctx: BrowseContext, code: string, message: string) => ctx.emit({ type: 'warning', at: at(ctx), code, message });
+const warn = (ctx: BrowseContext, code: string, message: string) => ctx.emit({ type: 'warning', at: timestamp(ctx), code, message });
 
-function tick(ctx: BrowseContext): void {
+/** Brings the measured parts of the stats up to now: elapsed time and the read receipts. */
+function refreshStats(ctx: BrowseContext): void {
   ctx.stats.elapsedMs = ctx.deps.clock.monotonic() - ctx.startedAt;
-  if (ctx.timings) ctx.stats.timings = ctx.timings.snapshot();
+  ctx.stats.timings = ctx.timings.snapshot();
 }
 
-function publish(ctx: BrowseContext): void {
-  tick(ctx);
-  ctx.emit({ type: 'stats', at: at(ctx), stats: structuredClone(ctx.stats) });
+function emitStats(ctx: BrowseContext): void {
+  refreshStats(ctx);
+  ctx.emit({ type: 'stats', at: timestamp(ctx), stats: structuredClone(ctx.stats) });
 }
 
-function snapshot(ctx: BrowseContext): RunStats {
-  tick(ctx);
+function finalStats(ctx: BrowseContext): RunStats {
+  refreshStats(ctx);
   return structuredClone(ctx.stats);
 }
 
 /** A time target is met exactly when its deadline fires; the other modes count progress. */
 function reached(ctx: BrowseContext): boolean {
-  tick(ctx);
+  refreshStats(ctx);
   if (ctx.preset.runMode.kind === 'time') return ctx.deadline.aborted;
   return targetReached(ctx.preset.runMode, ctx.preset.browseMode, ctx.stats);
 }
 
-const pause = (ctx: BrowseContext, range: WaitRange) => pauseBetween(ctx.deps, range.minSec, range.maxSec, ctx.signal);
+/** Thrown by `checkpoint` once the target is met; `browse` turns it into its `target-reached` ending. */
+const TARGET_REACHED = Symbol('target-reached');
+
+/**
+ * Where browsing may end before its next step (collecting a list, entering a topic, pausing): a
+ * stop request throws its abort error, a met target throws `TARGET_REACHED`.
+ */
+function checkpoint(ctx: BrowseContext): void {
+  throwIfAborted(ctx.signal);
+  if (reached(ctx)) throw TARGET_REACHED;
+}
+
+const pause = (ctx: BrowseContext, range: WaitRange) => pauseWithin(ctx.deps, range, ctx.signal);
 
 /**
  * Runs a step under `inTopic`. A time target that runs out mid-step resolves it to null, so the
@@ -128,7 +134,7 @@ async function untilTarget<T>(ctx: BrowseContext, step: (signal: AbortSignal) =>
 }
 
 function onAction(ctx: BrowseContext, report: ActionReport): void {
-  ctx.emit({ type: 'action', at: at(ctx), action: report.action, result: report.result });
+  ctx.emit({ type: 'action', at: timestamp(ctx), action: report.action, result: report.result });
   addActionReport(ctx.stats, report);
   if (report.bucket === 'reply-post' && report.result === 'confirmed' && ctx.topicId !== null && !ctx.repliedTopics.has(ctx.topicId)) {
     ctx.repliedTopics.add(ctx.topicId);
@@ -149,19 +155,19 @@ function onAction(ctx: BrowseContext, report: ActionReport): void {
  */
 async function enter(ctx: BrowseContext, topic: TopicCandidate): Promise<TopicVisit | null> {
   ctx.stats.attempted.topics++;
-  ctx.emit({ type: 'topic', at: at(ctx), topicId: topic.id, phase: 'click' });
+  ctx.emit({ type: 'topic', at: timestamp(ctx), topicId: topic.id, phase: 'click' });
   // A hidden window holds entering until it is visible again, so a time target must be able to end that wait.
   const visit = await untilTarget(ctx, (s) => ctx.forum.enterFromList(topic, s));
   if (!visit) return ctx.forum.showsTopic(topic) ? { topic, entered: true } : null;
   if (!visit.entered) {
-    ctx.emit({ type: 'topic', at: at(ctx), topicId: topic.id, phase: 'click', result: visit.reason });
-    ctx.ledger?.record({ topicId: topic.id, lastVisitAt: at(ctx), entered: false, failure: visit.reason });
-    publish(ctx);
+    ctx.emit({ type: 'topic', at: timestamp(ctx), topicId: topic.id, phase: 'click', result: visit.reason });
+    ctx.ledger?.record({ topicId: topic.id, lastVisitAt: timestamp(ctx), entered: false, failure: visit.reason });
+    emitStats(ctx);
     return null;
   }
   ctx.stats.confirmed.topics++;
-  ctx.emit({ type: 'topic', at: at(ctx), topicId: topic.id, phase: 'entered' });
-  publish(ctx);
+  ctx.emit({ type: 'topic', at: timestamp(ctx), topicId: topic.id, phase: 'entered' });
+  emitStats(ctx);
   return visit;
 }
 
@@ -177,23 +183,23 @@ async function read(ctx: BrowseContext, visit: TopicVisit): Promise<ReadResult |
           stats.attempted.floors += delta;
           if (advance.confirmed) stats.confirmed.floors += delta;
           else stats.estimatedFloors += delta;
-          ctx.emit({ type: 'floor', at: at(ctx), ...advance });
-          publish(ctx);
+          ctx.emit({ type: 'floor', at: timestamp(ctx), ...advance });
+          emitStats(ctx);
           return reached(ctx) ? 'stop' : 'continue';
         },
       },
       s,
     ),
   );
-  ctx.emit({ type: 'topic', at: at(ctx), topicId: visit.topic.id, phase: 'read' });
+  ctx.emit({ type: 'topic', at: timestamp(ctx), topicId: visit.topic.id, phase: 'read' });
   await pause(ctx, AFTER_READING);
   return result;
 }
 
-async function act(ctx: BrowseContext): Promise<void> {
+async function interact(ctx: BrowseContext): Promise<void> {
   throwIfAborted(ctx.signal);
   await untilTarget(ctx, (s) => ctx.forum.performActions(ctx.policy, s, ctx.signal));
-  publish(ctx);
+  emitStats(ctx);
 }
 
 /** Back to the list, which also gives the site its final `/topics/timings` flush. */
@@ -201,29 +207,33 @@ async function leave(ctx: BrowseContext, visit: TopicVisit, readResult: ReadResu
   const topicId = visit.topic.id;
   const verification = await ctx.forum.returnAndVerify(visit, ctx.signal);
   ctx.stats.returns[verification]++;
-  ctx.emit({ type: 'topic', at: at(ctx), topicId, phase: 'returned', result: verification });
+  ctx.emit({ type: 'topic', at: timestamp(ctx), topicId, phase: 'returned', result: verification });
   if (verification === 'still-unread') warn(ctx, 'still-unread', `Topic ${topicId} still shows the new-topic badge; the site may not have counted the visit`);
   const floors = readResult && readResult.startFloor !== null && readResult.endFloor !== null ? { floors: { from: readResult.startFloor, to: readResult.endFloor } } : {};
   if (ctx.ledger) {
-    ctx.ledger.record({ topicId, lastVisitAt: at(ctx), entered: true, verification, ...floors });
+    ctx.ledger.record({ topicId, lastVisitAt: timestamp(ctx), entered: true, verification, ...floors });
     // Saved after every topic, so a crash or a killed process loses at most the topic in progress.
     await ctx.ledger.save().catch((err: unknown) => warn(ctx, 'ledger-save-failed', toFailure(err).message));
   }
-  publish(ctx);
+  emitStats(ctx);
 }
 
-/** One topic from click to return. Returning runs even when the target was met inside the topic. */
-async function visitTopic(ctx: BrowseContext, topic: TopicCandidate): Promise<void> {
+/**
+ * One topic from click to return; true when the topic was entered. Returning runs even when the
+ * target was met inside the topic.
+ */
+async function visitTopic(ctx: BrowseContext, topic: TopicCandidate): Promise<boolean> {
   const visit = await enter(ctx, topic);
-  if (!visit) return;
+  if (!visit) return false;
   ctx.topicId = topic.id;
   try {
     const readResult = reached(ctx) ? null : await read(ctx, visit);
-    if (!reached(ctx) && (ctx.liking || ctx.replying)) await act(ctx);
+    if (!reached(ctx) && (ctx.liking || ctx.replying)) await interact(ctx);
     await leave(ctx, visit, readResult);
   } finally {
     ctx.topicId = null;
   }
+  return true;
 }
 
 function pick(ctx: BrowseContext, topics: TopicCandidate[], unreadPosts: boolean): TopicCandidate[] {
@@ -274,35 +284,33 @@ export async function browse(input: BrowseInput): Promise<BrowseOutcome> {
     browseMode: preset.browseMode,
     lists: [...(experiments.useNewList ? (['new'] as const) : []), ...(experiments.useUnreadList ? (['unread'] as const) : [])],
   };
-  const categories = input.categories ?? preset.categories;
   const { signal } = ctx;
 
   try {
     for (;;) {
       let enteredThisRound = 0;
-      for (const category of shuffle(categories, ctx.deps.random)) {
-        throwIfAborted(signal);
+      for (const category of shuffle(input.categories, ctx.deps.random)) {
+        checkpoint(ctx);
         const batch = await ctx.forum.collectTopics(category, strategy, signal);
         if (batch.topics.length === 0) warn(ctx, 'empty-category', `${category.path} rendered no topic rows`);
         for (const topic of pick(ctx, batch.topics, batch.source === 'unread')) {
-          throwIfAborted(signal);
           // A time target can run out during a pause; no topic is entered after that.
-          if (reached(ctx)) return { end: 'target-reached', stats: snapshot(ctx) };
-          const before = ctx.stats.confirmed.topics;
-          await visitTopic(ctx, topic);
-          if (ctx.stats.confirmed.topics > before) enteredThisRound++;
-          if (reached(ctx)) return { end: 'target-reached', stats: snapshot(ctx) };
-          if (extraWait.enabled) await pause(ctx, BETWEEN_TOPICS);
+          checkpoint(ctx);
+          if (await visitTopic(ctx, topic)) enteredThisRound++;
+          if (extraWait.enabled) {
+            checkpoint(ctx);
+            await pause(ctx, BETWEEN_TOPICS);
+          }
         }
-
-        if (reached(ctx)) return { end: 'target-reached', stats: snapshot(ctx) };
+        checkpoint(ctx);
         if (extraWait.enabled) await pause(ctx, { minSec: extraWait.minSec + 1, maxSec: extraWait.maxSec + 2 });
       }
-      if (enteredThisRound === 0) return { end: 'no-progress', stats: snapshot(ctx) };
+      if (enteredThisRound === 0) return { end: 'no-progress', stats: finalStats(ctx) };
     }
   } catch (err) {
-    if (isAbortError(err)) return { end: 'cancelled', stats: snapshot(ctx) };
-    return { end: 'error', stats: snapshot(ctx), failure: toFailure(err) };
+    if (err === TARGET_REACHED) return { end: 'target-reached', stats: finalStats(ctx) };
+    if (isAbortError(err)) return { end: 'cancelled', stats: finalStats(ctx) };
+    return { end: 'error', stats: finalStats(ctx), failure: toFailure(err) };
   } finally {
     deadline.disarm();
   }

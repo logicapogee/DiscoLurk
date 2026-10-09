@@ -16,3 +16,9 @@ export function appDataDir(platform = process.platform, env = process.env, home 
 export const profilesDir = (base = appDataDir()) => join(base, 'profiles');
 export const sitesDir = (base = appDataDir()) => join(base, 'sites');
 export const ledgersDir = (base = appDataDir()) => join(base, 'ledgers');
+
+/** A Profile's browser data directory, `profiles/<siteId>/<name>`. */
+export const profileDir = (profile: { siteId: string; name: string }, base = appDataDir()) => join(profilesDir(base), profile.siteId, profile.name);
+
+/** A Profile's visit ledger, `ledgers/<siteId>/<name>.json`. */
+export const ledgerFile = (profile: { siteId: string; name: string }, base = appDataDir()) => join(ledgersDir(base), profile.siteId, `${profile.name}.json`);

@@ -59,7 +59,8 @@ function run(p: RunPlanSnapshot, forumOpts: Partial<Omit<FixtureForumOptions, 's
         deps: time.deps(p.seed),
         signal: controller.signal,
         emit: (e) => events.push(e),
-        ...(extra.tally ? { timings: extra.tally } : {}),
+        categories: p.preset.categories,
+        timings: extra.tally ?? new TimingsTally(),
         ...(extra.ledger ? { ledger: extra.ledger } : {}),
       }),
     );

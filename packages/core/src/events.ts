@@ -1,5 +1,5 @@
 import type { LevelSnapshot, MetricKey } from './metrics';
-import type { ReadVerification } from './ports';
+import type { ActionReport, ReadVerification } from './ports';
 
 /** The states a run moves through, ending in `completed`, `failed` or `cancelled`. */
 export type RunState =
@@ -120,6 +120,16 @@ export function stopRequestOf(signal: AbortSignal): StopRequest {
 
 export function emptyCounters(): StatCounters {
   return { topics: 0, floors: 0, likes: 0, replyLikes: 0, replies: 0 };
+}
+
+/** The counter each action bucket lands in. */
+const ACTION_COUNTERS = { topic: 'likes', reply: 'replyLikes', 'reply-post': 'replies' } as const satisfies Record<ActionReport['bucket'], keyof StatCounters>;
+
+/** Adds one action report to the counters its bucket names; a rejection adds to neither. */
+export function addActionReport(stats: RunStats, report: ActionReport): void {
+  const counter = ACTION_COUNTERS[report.bucket];
+  if (report.result === 'attempted') stats.attempted[counter]++;
+  else if (report.result === 'confirmed') stats.confirmed[counter]++;
 }
 
 export function emptyStats(): RunStats {

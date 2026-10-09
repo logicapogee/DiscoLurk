@@ -30,7 +30,7 @@ import {
 } from '@disco-lurk/core';
 import { CATEGORY_PATH, openDiscourseForum, type Credentials } from '@disco-lurk/site-discourse';
 import templatesFile from '../../../data/reply-templates.json';
-import { ledgersDir, profilesDir, sitesDir } from './paths';
+import { ledgerFile, profileDir, sitesDir } from './paths';
 import { BUILTIN_SITES, findSite } from './sites';
 
 /** CLI exit codes. */
@@ -131,7 +131,7 @@ export const DEFAULT_INTERACTION: InteractionPolicy = {
 
 export const DEFAULT_EXTRA_WAIT: WaitRange & { enabled: boolean } = { enabled: true, minSec: 1, maxSec: 3 };
 
-/** The flag a command line must carry to turn on automatic replies; there is no other way to turn them on. */
+/** The flag that acknowledges the reply risk; `--reply` requires it and it sets `reply.riskAcknowledged`. */
 export const REPLY_RISK_FLAG = 'i-understand-auto-reply-risk';
 
 export const REPLY_RISK_NOTICE =
@@ -341,10 +341,9 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
       return { profile: { id: profileId, siteId, channel: opts.channel }, site };
     },
     open(req) {
-      const { siteId, name } = parseProfileId(req.profile.id);
       return openDiscourseForum({
         site: req.site,
-        profileDir: join(profilesDir(), siteId, name),
+        profileDir: profileDir(parseProfileId(req.profile.id)),
         runId: req.runId,
         channel: req.profile.channel,
         headless: req.browserMode === 'headless',
@@ -356,7 +355,7 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
       });
     },
     categories: new FileCategoryStore(sitesDir()),
-    ledgers: new FileLedgerStore(ledgersDir()),
+    ledgers: new FileLedgerStore((profileId) => ledgerFile(parseProfileId(profileId))),
     ...(opts.exitSignal ? { exitSignal: opts.exitSignal } : {}),
   };
 }

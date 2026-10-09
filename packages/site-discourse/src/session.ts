@@ -1,5 +1,5 @@
 import type { Page, Request } from 'playwright-core';
-import { pauseBetween, RunError, untilAbort, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site, type TimingsReceipt } from '@disco-lurk/core';
+import { pauseWithin, RunError, untilAbort, type BrowserChannel, type ForumSession, type RuntimeDeps, type Site, type TimingsReceipt } from '@disco-lurk/core';
 import type { Composer, LikeButton } from './actions';
 import { launchProfile, type BrowserSession } from './browser';
 import { DiscourseForum, titleLinkSelector, type Credentials, type LoginForm, type TitleLinks } from './forum';
@@ -135,8 +135,11 @@ async function loginStep(step: string, action: () => Promise<void>): Promise<voi
   }
 }
 
+/** A person's pause between filling one login field and the next. */
+const BETWEEN_FIELDS = { minSec: 0.5, maxSec: 1 };
+
 export function loginForm(page: Pick<Page, 'locator'>, deps: RuntimeDeps, call: PageCall): LoginForm {
-  const pause = (signal: AbortSignal) => pauseBetween(deps, 0.5, 1, signal);
+  const pause = (signal: AbortSignal) => pauseWithin(deps, BETWEEN_FIELDS, signal);
   const timeout = PAGE_TIMEOUTS.actionMs;
   return {
     submit: (credentials, signal) =>

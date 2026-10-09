@@ -1,5 +1,5 @@
-import { isAbortError, pauseBetween, throwIfAborted, untilAbort, type ActionPolicy, type InterruptibleSleeper, type RandomSource, type RuntimeDeps, type WaitRange } from '@disco-lurk/core';
-import { pollUntil } from './auth';
+import { isAbortError, pauseWithin, throwIfAborted, untilAbort, type ActionPolicy, type InterruptibleSleeper, type RandomSource, type RuntimeDeps, type WaitRange } from '@disco-lurk/core';
+import { pollUntil, waitUntil } from './auth';
 import type { ReadOnlyPage } from './page';
 import { EDITOR_KINDS, editorKindFromCounts, type EditorKind } from './parse';
 import { COMPOSER_OPEN, EDITOR_SELECTORS, LIKED_MARKERS, likeButtonOf, postOf, SELECTORS, UNLIKED_ICON } from './selectors';
@@ -50,7 +50,7 @@ export interface ActionSurface {
   discardComposer(signal: AbortSignal): Promise<boolean>;
 }
 
-/** Field-tested pacing for interactions; none of it shortens when the page is fast. */
+/** Field-tested pacing for interactions, the same however fast the page answers. */
 export const LIKE = { centerMs: 300, after: { minSec: 0.8, maxSec: 1.5 }, confirmMs: 5_000, pollMs: 250 } as const;
 export const REPLY = {
   editorMs: 10_000,
@@ -92,7 +92,7 @@ interface ActionRun {
 
 const timedOut = (err: unknown) => err instanceof Error && err.name === 'TimeoutError';
 
-const pause = (run: ActionRun, range: WaitRange) => pauseBetween(run.deps, range.minSec, range.maxSec, run.signal);
+const pause = (run: ActionRun, range: WaitRange) => pauseWithin(run.deps, range, run.signal);
 
 async function rest(run: ActionRun): Promise<void> {
   const { extraWait } = run.policy;
@@ -103,9 +103,9 @@ async function rest(run: ActionRun): Promise<void> {
  * Whether `check` holds within `ms`. Only a stop request ends the wait early: a press already
  * sent is confirmed to the end of its window even when the time target runs out meanwhile.
  */
-async function holdsWithin(run: ActionRun, check: () => Promise<boolean>, ms: number, every: number): Promise<boolean> {
+function holdsWithin(run: ActionRun, check: () => Promise<boolean>, ms: number, every: number): Promise<boolean> {
   const { clock, sleeper } = run.deps;
-  return (await pollUntil({ intervalMs: every, timeoutMs: ms, clock, sleeper }, async () => ((await check()) ? true : null), run.stop)) === true;
+  return waitUntil({ intervalMs: every, timeoutMs: ms, clock, sleeper }, check, run.stop);
 }
 
 /**
@@ -153,15 +153,15 @@ async function like(run: ActionRun, postNumber: number, bucket: 'topic' | 'reply
   }
   throwIfAborted(run.signal);
   policy.onAction({ action: 'like', bucket, result: 'attempted', postNumber });
-  let confirmed = false;
+  let liked = false;
   try {
     await surface.pressLike(postNumber);
-    confirmed = await holdsWithin(run, async () => (await surface.likeState(postNumber)) === 'liked', LIKE.confirmMs, LIKE.pollMs);
+    liked = await holdsWithin(run, async () => (await surface.likeState(postNumber)) === 'liked', LIKE.confirmMs, LIKE.pollMs);
   } catch (err) {
     if (!timedOut(err)) throw err;
     ctx.warn('like-timeout', `Pressing floor ${postNumber}'s like button timed out`);
   }
-  policy.onAction({ action: 'like', bucket, result: confirmed ? 'confirmed' : 'rejected', postNumber });
+  policy.onAction({ action: 'like', bucket, result: liked ? 'confirmed' : 'rejected', postNumber });
   await pause(run, LIKE.after);
   await rest(run);
 }
@@ -343,6 +343,6 @@ export class PageActionSurface implements ActionSurface {
     if (!(await this.composerOpen())) return true;
     await untilAbort(this.composer.discard(), signal);
     const { clock, sleeper } = this.deps;
-    return (await pollUntil({ intervalMs: DISCARD.pollMs, timeoutMs: DISCARD.verifyMs, clock, sleeper }, async () => ((await this.composerOpen()) ? null : true), signal)) === true;
+    return waitUntil({ intervalMs: DISCARD.pollMs, timeoutMs: DISCARD.verifyMs, clock, sleeper }, async () => !(await this.composerOpen()), signal);
   }
 }

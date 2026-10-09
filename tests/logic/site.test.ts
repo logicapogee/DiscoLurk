@@ -1,4 +1,4 @@
-import { browse, EXPERIMENTS_OFF, type Site, type TopicCandidate } from '@disco-lurk/core';
+import { browse, EXPERIMENTS_OFF, TimingsTally, type Site, type TopicCandidate } from '@disco-lurk/core';
 import { FixtureForum, fixtureSite, VirtualTime } from '@disco-lurk/core/testing';
 import { loadBuiltinSites, validateSite } from '@disco-lurk/config';
 import { progressModuleFor } from '@disco-lurk/site-discourse';
@@ -103,6 +103,8 @@ describe('SITE-001 site configuration (§2.2)', () => {
         deps: time.deps(3),
         signal: new AbortController().signal,
         emit: () => {},
+        categories,
+        timings: new TimingsTally(),
       }),
     );
     expect(out.stats.confirmed.topics).toBe(3);

@@ -1,4 +1,4 @@
-import { pauseBetween, randomBetween, randomInt, type ReadResult, type ReadStrategy, type RuntimeDeps } from '@disco-lurk/core';
+import { pauseWithin, randomBetween, randomInt, type ReadResult, type ReadStrategy, type RuntimeDeps, type WaitRange } from '@disco-lurk/core';
 import type { FloorReading } from './parse';
 
 /** The two things reading needs from a topic page; tests drive the strategies through a scripted one. */
@@ -16,9 +16,9 @@ export interface FloorSurface {
  * Entering a topic waits in two stages: wait for the floor counter for at most `counterCeilingMs`, polling every
  * `pollMs`; then, whether it appeared or not, pause `extraSec` before reading.
  */
-export const ENTRY_WAIT = { counterCeilingMs: 5_000, pollMs: 500, extraSec: [1, 3] } as const;
+export const ENTRY_WAIT = { counterCeilingMs: 5_000, pollMs: 500, extraSec: { minSec: 1, maxSec: 3 } } as const;
 export const DEEP = {
-  dwellSec: [2, 4],
+  dwellSec: { minSec: 2, maxSec: 4 },
   stepPx: [600, 1200],
   settleMs: 500,
   stuckLimit: 3,
@@ -27,8 +27,8 @@ export const DEEP = {
   maxScrolls: 200,
   shortTopicFloors: 10,
 } as const;
-export const TRADITIONAL = { durationSec: [8, 15], stepPx: [150, 400], intervalSec: [1, 3] } as const;
-export const QUICK = { floors: [3, 5], dwellSec: [1, 2], stepPx: [400, 800], settleMs: 300, maxScrolls: 10, blindScrolls: 3 } as const;
+export const TRADITIONAL = { durationSec: [8, 15], stepPx: [150, 400], intervalSec: { minSec: 1, maxSec: 3 } } as const;
+export const QUICK = { floors: [3, 5], dwellSec: { minSec: 1, maxSec: 2 }, stepPx: [400, 800], settleMs: 300, maxScrolls: 10, blindScrolls: 3 } as const;
 
 interface Tracker {
   result: ReadResult;
@@ -76,9 +76,9 @@ function tracker(start: FloorReading | null, strategy: ReadStrategy): Tracker {
  */
 export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, deps: RuntimeDeps, signal: AbortSignal): Promise<ReadResult> {
   const sleep = (ms: number) => deps.sleeper.sleep(ms, signal);
-  const pause = (range: readonly [number, number]) => pauseBetween(deps, range[0], range[1], signal);
+  const pause = (range: WaitRange) => pauseWithin(deps, range, signal);
   // Every dwell is reading time the site only counts on a visible page.
-  const dwell = async (range: readonly [number, number]) => {
+  const dwell = async (range: WaitRange) => {
     await surface.whenVisible(signal);
     await pause(range);
   };

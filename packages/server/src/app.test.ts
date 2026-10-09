@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   DiscoLurkCoordinator,
+  LOGIN_WAIT_MS,
   seededRandom,
   systemClock,
   systemSleeper,
@@ -12,15 +13,17 @@ import {
   type Category,
   type CategoryStore,
   type InterruptibleSleeper,
+  type LevelSnapshot,
   type RunEvent,
 } from '@disco-lurk/core';
 import { FixtureForum, fixtureSite } from '@disco-lurk/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { createApp, defaultPreset, isNewer, type LurkApp, type ShellChannel } from './app';
-import type { ActiveRun, LoginView, RunRecord, ScheduleList, ServerFrame, Settings, StoredPreset } from './contract';
+import type { ActiveRun, LoginView, RunRecord, ScheduleHistoryEntry, ScheduleList, ServerFrame, Settings, StoredPreset } from './contract';
 import { startServer, type LurkServer } from './server';
 import { RunHistory } from './store';
+import { existsSync, readFileSync } from 'node:fs';
 
 /** Every kernel wait shrinks to a few milliseconds, so a fixture run takes real but short time. */
 const fastSleeper: InterruptibleSleeper = { sleep: (ms, signal) => systemSleeper.sleep(Math.min(ms, 3), signal) };
@@ -49,6 +52,8 @@ interface Harness {
   auth: { next: (mode: AuthMode) => Promise<AuthResult> };
   dataDir: string;
   shutdowns: () => number;
+  /** The browser form of every session the kernel opened, in order. */
+  opens: string[];
 }
 
 let current: Harness | undefined;
@@ -59,8 +64,17 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(opts: { headlessOnly?: boolean } = {}): Promise<Harness> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'lurk-app-'));
+interface BootOptions {
+  headlessOnly?: boolean;
+  /** Reuses a data directory, as a restarted sidecar does. */
+  dataDir?: string;
+  /** Answers the progress page; the fixture site then reports one. */
+  progress?: (kind: 'initial' | 'final') => LevelSnapshot | null;
+}
+
+async function boot(opts: BootOptions = {}): Promise<Harness> {
+  const dataDir = opts.dataDir ?? mkdtempSync(join(tmpdir(), 'lurk-app-'));
+  const runSite = opts.progress ? { ...site, progressSource: 'trust-level-docofcard' as const } : site;
   const profilesDir = join(dataDir, 'profiles');
   const locks = new Map<string, number>();
   const shell: Harness['shell'] = { notices: [], settings: [], tokens: [], active: [] };
@@ -72,13 +86,17 @@ async function boot(opts: { headlessOnly?: boolean } = {}): Promise<Harness> {
   };
   const auth: Harness['auth'] = { next: async () => ({ status: 'authenticated', username: 'alice' }) };
   let app: LurkApp;
+  const opens: string[] = [];
   const coordinator = new DiscoLurkCoordinator({
     deps: { clock: systemClock, random: seededRandom(1), sleeper: fastSleeper },
     categories: new MemoryCategories(),
-    resolveProfile: async (id) => ({ profile: await app.services.profiles.resolve(id), site }),
-    open: async () => {
+    resolveProfile: async (id) => ({ profile: await app.services.profiles.resolve(id), site: runSite }),
+    open: async (req) => {
+      opens.push(req.browserMode);
+      const progress = opts.progress;
       const forum = new FixtureForum({
-        site,
+        site: runSite,
+        ...(progress ? { progress: async (kind: 'initial' | 'final') => progress(kind) } : {}),
         sleeper: fastSleeper,
         topics: (path, call) => Array.from({ length: 3 }, (_, i) => ({ id: `${path}-${call}-${i}`, title: 't', unread: true, pinned: false })),
         latency: { collect: 2, enter: 2, dwell: 2, back: 2 },
@@ -94,8 +112,9 @@ async function boot(opts: { headlessOnly?: boolean } = {}): Promise<Harness> {
     dataDir,
     profilesDir,
     coordinator,
-    sites: [site],
+    sites: [runSite],
     categories: new MemoryCategories(),
+    sleeper: fastSleeper,
     lockHolder: async (dir) => locks.get(dir) ?? null,
     doctor: async () => ({ checks: [] }),
     shutdown: async () => void shutdowns++,
@@ -109,7 +128,7 @@ async function boot(opts: { headlessOnly?: boolean } = {}): Promise<Harness> {
   const token = randomBytes(32).toString('base64url');
   const server = await startServer({ host: '127.0.0.1', port: 0, token, version: '1.2.3', clock: systemClock, routes: app.routes, hub: app.hub, loopbackFailureDelayMs: 1 });
   app.bindTokenRotation((t) => server.rotateToken(t));
-  current = { base: `http://127.0.0.1:${server.port}`, token, app, server, shell, locks, auth, dataDir, shutdowns: () => shutdowns };
+  current = { base: `http://127.0.0.1:${server.port}`, token, app, server, shell, locks, auth, dataDir, shutdowns: () => shutdowns, opens };
   return current;
 }
 
@@ -180,16 +199,18 @@ describe('server API', () => {
     expect((await call('GET', '/sites/nope/default-preset')).status).toBe(404);
   });
 
-  it('persists presets and requires an explicit confirmation to turn automatic replies on', async () => {
+  it('persists presets and turns automatic replies on only with their risk acknowledged', async () => {
     const h = await boot();
     const call = api(h);
     expect((await call('PUT', '/presets/p1', { preset: preset() })).status).toBe(200);
-    const replying = preset({ interaction: { ...preset().interaction, reply: { enabled: true, rate: 5 } } });
-    const refused = await call<{ error: string }>('PUT', '/presets/p1', { preset: replying });
+    const replying = (riskAcknowledged: boolean) => preset({ interaction: { ...preset().interaction, reply: { enabled: true, rate: 5, riskAcknowledged } } });
+    const refused = await call<{ error: string }>('PUT', '/presets/p1', { preset: replying(false) });
     expect(refused.status).toBe(428);
     expect(refused.body.error).toBe('reply-confirmation-required');
     expect((await call<StoredPreset[]>('GET', '/presets')).body[0]!.interaction.reply.enabled).toBe(false);
-    expect((await call('PUT', '/presets/p1', { preset: replying, confirmReply: true })).status).toBe(200);
+    expect((await call('PUT', '/presets/p1', { preset: replying(false), confirmReply: true })).status).toBe(422);
+    expect((await call('PUT', '/presets/p1', { preset: replying(true) })).status).toBe(200);
+    expect((await call('PUT', '/presets/p1', { preset: { ...preset(), interaction: { ...preset().interaction, like: { ...preset().interaction.like, maxReplies: 5 } } } })).status).toBe(422);
     expect((await call('PUT', '/presets/p1', { preset: { ...preset(), runMode: { kind: 'topics', min: 5, max: 2 } } })).status).toBe(422);
     expect((await call('PUT', '/presets/other', { preset: preset() })).status).toBe(422);
 
@@ -249,6 +270,35 @@ describe('server API', () => {
     ws.ws.close();
   });
 
+  it('leaves replies off for a stored preset whose risk was never acknowledged', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    // Written past the endpoint, as a hand-edited presets.json would be.
+    await h.app.services.presets.put(preset({ interaction: { ...preset().interaction, reply: { enabled: true, rate: 100, riskAcknowledged: false } } }));
+    const run = await call<ActiveRun>('POST', '/runs', { presetId: 'p1' });
+    expect(run.status).toBe(202);
+    expect(run.body.plan.preset.interaction.reply).toMatchObject({ enabled: false, riskAcknowledged: false });
+    await call('POST', '/runs/stop');
+  });
+
+  it('forwards levels events and keeps them in the run log', async () => {
+    const snapshot = (n: number): LevelSnapshot => ({ source: 'trust-level-docofcard', metrics: [{ label: '已读帖子', key: 'postsRead', current: n, required: 500 }] });
+    let reads = 0;
+    const h = await boot({ progress: () => snapshot(100 + 10 * reads++) });
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset({ runMode: { kind: 'topics', min: 1, max: 1 }, browseMode: 'quick' }) });
+    const ws = await events(h);
+    const run = await call<ActiveRun>('POST', '/runs', { presetId: 'p1' });
+    await ws.until((f) => f.type === 'run' && f.run.runId === run.body.runId && f.run.result !== undefined);
+    const kinds = ws.frames.flatMap((f) => (f.type === 'event' && f.event.type === 'levels' ? [f.event.kind] : []));
+    expect(kinds).toEqual(['initial', 'final']);
+    const log = await call<string>('GET', `/runs/${run.body.runId}/log?types=levels`);
+    expect(log.body.trim().split('\n').map((l) => (JSON.parse(l) as RunEvent).type)).toEqual(['levels', 'levels']);
+    ws.ws.close();
+  });
+
   it('records a run that was in progress when the previous sidecar died as failed', async () => {
     const h = await boot();
     const call = api(h);
@@ -287,8 +337,9 @@ describe('server API', () => {
     const call = api(h);
     await withProfile(h);
     const ws = await events(h);
-    h.auth.next = async (mode) => (mode === 'headed-wait' ? { status: 'needs-auth' } : { status: 'authenticated', username: 'alice' });
-    // Only the recheck signs in; the health check after it runs headless and passes too.
+    const modes: AuthMode[] = [];
+    h.auth.next = async (mode) => (modes.push(mode), mode === 'headed-wait' ? { status: 'needs-auth' } : { status: 'authenticated', username: 'alice' });
+    // Only the recheck signs in; the health check after it runs in that same headed window.
     const loginFrame = (phase: string) => (f: ServerFrame) => f.type === 'login' && f.login.phase === phase;
     expect((await call<LoginView>('POST', '/profiles/fx/main/login')).status).toBe(202);
     await ws.until(loginFrame('needs-auth'));
@@ -300,6 +351,8 @@ describe('server API', () => {
     expect(done.login).toMatchObject({ username: 'alice', health: { status: 'ready', username: 'alice' } });
     const profiles = await call<Array<{ status: string; busy: boolean }>>('GET', '/profiles');
     expect(profiles.body[0]).toMatchObject({ status: 'ready', busy: false });
+    expect(h.opens).toEqual(['headed']);
+    expect(modes).toEqual(['headed-wait', 'headless-check', 'headless-check']);
     ws.ws.close();
   });
 
@@ -310,14 +363,16 @@ describe('server API', () => {
     h.auth.next = (_mode) => new Promise(() => {});
     const ws = await events(h);
     await call('POST', '/profiles/fx/main/login');
-    await ws.until((f) => f.type === 'login' && f.login.phase === 'waiting');
+    const waiting = (await ws.until((f) => f.type === 'login' && f.login.phase === 'waiting')) as Extract<ServerFrame, { type: 'login' }>;
+    // The countdown the UI shows ends when the adapter's own wait gives up.
+    expect(Math.abs(waiting.login.deadline! - Date.now() - LOGIN_WAIT_MS)).toBeLessThan(5_000);
     const closed = await call<LoginView>('POST', '/profiles/fx/main/login/close');
     expect(closed.body.phase).toBe('closed');
     expect((await call<Array<{ busy: boolean }>>('GET', '/profiles')).body[0]!.busy).toBe(false);
     ws.ws.close();
   });
 
-  it('defines schedules over the kernel scheduler, in memory', async () => {
+  it('keeps schedules in files across restarts: cron, pause, resume, run history and preset copies', async () => {
     const h = await boot();
     const call = api(h);
     await withProfile(h);
@@ -338,12 +393,22 @@ describe('server API', () => {
     };
     const saved = await call<ScheduleList>('PUT', '/schedules/s1', spec);
     expect(saved.status).toBe(200);
-    expect(saved.body.persisted).toBe(false);
+    expect(saved.body.available).toBe(true);
     expect(saved.body.schedules[0]!.spec.id).toBe('s1');
-    const cron = await call<{ error: string }>('PUT', '/schedules/s1', { ...spec, trigger: { kind: 'cron', expression: '0 8 * * *' } });
-    expect(cron.status).toBe(422);
-    expect(cron.body.error).toBe('cron-unsupported');
+    const cron = await call<ScheduleList>('PUT', '/schedules/s1', { ...spec, trigger: { kind: 'cron', expression: '0 8 * * *' } });
+    expect(cron.status).toBe(200);
+    expect(cron.body.schedules[0]!.next?.plannedAt).toMatch(/T00:00:00\.000Z$/);
+    const bad = await call<{ error: string }>('PUT', '/schedules/s1', { ...spec, trigger: { kind: 'cron', expression: '61 * * * *' } });
+    expect(bad.body.error).toBe('invalid-trigger');
     expect((await call('PUT', '/schedules/s1', { ...spec, timezone: 'Mars/Base' })).status).toBe(422);
+
+    // The definition and a copy of its preset are what `lurk schedule` reads too.
+    const book = () => JSON.parse(readFileSync(join(h.dataDir, 'schedules', 'schedules.json'), 'utf8'));
+    expect(book().schedules.map((s: { id: string }) => s.id)).toEqual(['s1']);
+    expect(book().presets[0]).toMatchObject({ id: 'p1', browseMode: 'deep' });
+    await call('PUT', '/presets/p1', { preset: preset({ browseMode: 'quick' }) });
+    expect(book().presets[0]).toMatchObject({ id: 'p1', browseMode: 'quick' });
+    expect((await call<{ error: string }>('DELETE', '/presets/p1')).body.error).toBe('preset-in-use');
 
     const ws = await events(h);
     const fired = await call<{ runId: string }>('POST', '/schedules/s1/trigger');
@@ -353,10 +418,34 @@ describe('server API', () => {
     expect(again.body.error).toBe('skipped-overlap');
     await call('POST', '/runs/stop');
     await ws.until((f) => f.type === 'run' && f.run.runId === fired.body.runId && f.run.result !== undefined);
-    expect((await call<unknown[]>('GET', '/schedules/s1/history')).body).toHaveLength(2);
+    const history = async () => (await call<ScheduleHistoryEntry[]>('GET', '/schedules/s1/history')).body;
+    await expect.poll(async () => (await history())[0]?.ended?.stopCause).toBe('user');
+    expect((await history()).map((e) => e.outcome)).toEqual(['started', 'skipped']);
     expect((await call<ScheduleList>('POST', '/schedules/s1/pause')).body.schedules[0]!.paused).toBe(true);
-    expect((await call<ScheduleList>('DELETE', '/schedules/s1')).body.schedules).toEqual([]);
+    expect((await call<{ error: string }>('POST', '/schedules/s1/trigger')).body.error).toBe('skipped-paused');
+    expect((await call<ScheduleList>('POST', '/schedules/s1/resume')).body.schedules[0]!.paused).toBe(false);
+    await call('POST', '/schedules/s1/pause');
     ws.ws.close();
+
+    // While this app owns the schedules, a second process sees them as unavailable.
+    const other = createApp(appDepsOf(h));
+    await other.start();
+    const otherRoutes = other.routes.find((r) => r.method === 'GET' && r.path === '/schedules')!;
+    expect((await otherRoutes.handle({ params: {}, query: new URLSearchParams(), body: undefined, ip: '127.0.0.1' })).body).toMatchObject({ available: false });
+
+    // A restart over the same directory reads the schedule, its paused state and its history back.
+    await h.app.close();
+    await h.server.close();
+    current = undefined;
+    const restarted = await boot({ dataDir: h.dataDir });
+    const after = await api(restarted)<ScheduleList>('GET', '/schedules');
+    await expect.poll(async () => (await api(restarted)<ScheduleList>('GET', '/schedules')).body.schedules.length).toBe(1);
+    expect(after.body.available).toBe(true);
+    const view = (await api(restarted)<ScheduleList>('GET', '/schedules')).body.schedules[0]!;
+    expect(view).toMatchObject({ paused: true, spec: { trigger: { kind: 'cron' } } });
+    expect((await api(restarted)<ScheduleHistoryEntry[]>('GET', '/schedules/s1/history')).body).toHaveLength(3);
+    expect((await api(restarted)<ScheduleList>('DELETE', '/schedules/s1')).body.schedules).toEqual([]);
+    expect(existsSync(join(h.dataDir, 'schedules', '.lurk-lock'))).toBe(true);
   });
 
   it('saves settings, tells the shell and rotates the token', async () => {

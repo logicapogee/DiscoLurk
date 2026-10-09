@@ -40,6 +40,19 @@ describe('guard: no write paths to a site', () => {
     expect(importers.filter((f) => !allowed.includes(f))).toEqual([]);
   });
 
+  it('keeps the server and the UI away from the browser: they reach sites only through the kernel', () => {
+    const BROWSER_IMPORT = /from\s+'(playwright-core|@disco-lurk\/site-discourse)(\/[^']*)?'/;
+    const importers = ['packages/server', 'packages/ui']
+      .flatMap((dir) => [...sources(join(root, dir))])
+      .filter((file) => BROWSER_IMPORT.test(readFileSync(file, 'utf8')))
+      .map((file) => relative(root, file));
+    expect(importers).toEqual([]);
+    for (const pkg of ['packages/server/package.json', 'packages/ui/package.json']) {
+      const deps = Object.keys((JSON.parse(readFileSync(join(root, pkg), 'utf8')) as { dependencies?: Record<string, string> }).dependencies ?? {});
+      expect(deps.filter((d) => d === 'playwright-core' || d === '@disco-lurk/site-discourse')).toEqual([]);
+    }
+  });
+
   it('sends every click and keystroke from a named narrow input in session.ts, or from the development commands', () => {
     const WRITE_CALL = /\.(click|dblclick|fill|type|press|tap|dispatchEvent|setInputFiles|setChecked|selectOption)\(/;
     const calls = [...sources(join(root, 'packages'))].flatMap((file) =>
@@ -64,6 +77,8 @@ describe('guard: no write paths to a site', () => {
       /^packages\/site-discourse\/src\/actions\.ts: await surface\.fill\(kind, text, run\.signal\);/,
       /^packages\/cli\/src\/selftest\.ts: /,
       /^packages\/cli\/src\/capture\.ts: await link\.click\(\);/,
+      // The log export's download link in the app's own page; the UI never runs inside a site page.
+      /^packages\/ui\/src\/components\/log\.tsx: a\.click\(\);/,
     ];
     expect(calls.filter((c) => !allowed.some((a) => a.test(c)))).toEqual([]);
   });

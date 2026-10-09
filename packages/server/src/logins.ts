@@ -1,20 +1,14 @@
-import { isAbortError, toFailure, type AuthResult, type AuthSession, type Clock, type ProfileHealth, type ProfileId, type RunCoordinator } from '@disco-lurk/core';
+import { isAbortError, LOGIN_WAIT_MS, toFailure, type AuthResult, type AuthSession, type Clock, type ProfileHealth, type ProfileId, type RunCoordinator } from '@disco-lurk/core';
 import type { LoginView } from './contract';
 import type { ProfileGate } from './runs';
 import { EventHub, HttpError } from './server';
-
-/**
- * How long one headed wait lasts. The adapter's own poll decides when it gives up; this value only
- * drives the countdown the UI shows, so it must match that poll's ceiling.
- */
-export const LOGIN_WAIT_MS = 300_000;
 
 export interface LoginManagerDeps {
   coordinator: RunCoordinator;
   gate: ProfileGate;
   hub: EventHub;
   clock: Clock;
-  /** The health check right after a sign-in; stores the result and refreshes discovered categories. */
+  /** Stores the health read right after a sign-in and refreshes discovered categories. */
   afterSignIn(health: ProfileHealth): Promise<void>;
 }
 
@@ -99,17 +93,19 @@ export class LoginManager {
     this.publish(l, { phase: result.status === 'challenge-detected' ? 'challenge-detected' : 'needs-auth' });
   }
 
+  /** The health check runs in the signed-in window, the same way `lurk login` verifies a sign-in. */
   private async signedIn(l: Login, username: string | undefined) {
-    await l.session?.close().catch(() => {});
-    l.session = null;
+    const session = l.session!;
     this.publish(l, { phase: 'checking-health', ...(username ? { username } : {}) });
     try {
-      const health = await this.deps.coordinator.inspect(l.view.profileId);
+      const health = await session.inspect();
       await this.deps.afterSignIn(health);
       this.publish(l, { phase: 'done', ...(username ? { username } : {}), health });
     } catch (err) {
       this.publish(l, { phase: 'done', ...(username ? { username } : {}), message: describe(err) });
     } finally {
+      l.session = null;
+      await session.close().catch(() => {});
       l.release();
     }
   }

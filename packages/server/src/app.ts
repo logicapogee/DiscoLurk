@@ -1,8 +1,9 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { Category, CategoryStore, Clock, ProfileId, RunCoordinator, RunEvent, Site, StopRequest } from '@disco-lurk/core';
-import type { PresetSave, ProfileCreate, ProfilePatch, ScheduleList, ServerInfo, Settings, SiteView, StoredPreset, UpdateInfo } from './contract';
+import { systemSleeper, type Category, type CategoryStore, type Clock, type InterruptibleSleeper, type ProfileId, type RunCoordinator, type RunEvent, type Site, type StopRequest } from '@disco-lurk/core';
+import type { ScheduleBook } from '@disco-lurk/config';
+import type { PresetSave, ProfileCreate, ProfilePatch, ServerInfo, Settings, SiteView, StoredPreset, UpdateInfo } from './contract';
 import { LoginManager } from './logins';
 import { ProfileGate, RunManager, SiteCatalog, type Notify } from './runs';
 import { ScheduleService } from './schedules';
@@ -26,7 +27,9 @@ export interface LatestRelease {
 export interface AppDeps {
   version: string;
   clock: Clock;
-  /** `<appData>/disco-lurk`: presets, settings, Profile metadata and run history live here. */
+  /** Paces the schedule loop; the system sleeper unless a test drives time. */
+  sleeper?: InterruptibleSleeper;
+  /** `<appData>/disco-lurk`: presets, settings, Profile metadata, run history and schedules live here. */
   dataDir: string;
   profilesDir: string;
   coordinator: RunCoordinator;
@@ -45,6 +48,9 @@ export interface AppDeps {
   releasePage?: string;
   newSeed?(): number;
   log?(message: string): void;
+  /** Schedules from outside `schedules.json`, such as `lurk serve`'s LURK_* schedule. */
+  extraSchedules?(): Promise<ScheduleBook>;
+  scheduleIntervalMs?: number;
   /** Whether the process that marked a run open still lives; tests stand in a dead one. */
   processAlive?(pid: number): boolean;
 }
@@ -52,7 +58,7 @@ export interface AppDeps {
 export interface LurkApp {
   routes: Route[];
   hub: EventHub;
-  /** Loads stored state and starts the schedule timer. */
+  /** Loads stored state, takes charge of the schedules and starts planning them. */
   start(): Promise<void>;
   /** Rotation needs the server, which is created from these routes. */
   bindTokenRotation(rotate: (token: string) => void): void;
@@ -77,7 +83,7 @@ export function defaultPreset(site: Site, categories: readonly Category[]): Stor
     categoryPaths: categories.filter((c) => c.enabledByDefault).map((c) => c.path),
     interaction: {
       like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 },
-      reply: { enabled: false, rate: 5 },
+      reply: { enabled: false, rate: 5, riskAcknowledged: false },
     },
     extraWait: { enabled: true, minSec: 1, maxSec: 3 },
     samplePerCategory: { min: 3, max: 8 },
@@ -94,7 +100,7 @@ export function isNewer(latest: string, current: string): boolean {
   return false;
 }
 
-const EVENT_TYPES: ReadonlySet<RunEvent['type']> = new Set(['state', 'topic', 'floor', 'action', 'timings', 'stats', 'warning', 'error']);
+const EVENT_TYPES: ReadonlySet<RunEvent['type']> = new Set(['state', 'topic', 'floor', 'action', 'timings', 'stats', 'levels', 'warning', 'error']);
 
 export function createApp(deps: AppDeps): LurkApp {
   const log = deps.log ?? (() => {});
@@ -126,6 +132,7 @@ export function createApp(deps: AppDeps): LurkApp {
     newSeed: deps.newSeed ?? (() => randomInt(0, 2 ** 31)),
     notify,
     onActiveChange: (n) => deps.shell?.activeRuns(n),
+    log,
   });
   const afterHealth = async (health: Parameters<ProfileRegistry['setHealth']>[0]) => {
     await profiles.setHealth(health);
@@ -134,7 +141,19 @@ export function createApp(deps: AppDeps): LurkApp {
     hub.publish({ type: 'profiles-changed' });
   };
   const logins = new LoginManager({ coordinator: deps.coordinator, gate, hub, clock: deps.clock, afterSignIn: afterHealth });
-  const schedules = new ScheduleService({ clock: deps.clock, presets, catalog, runs, gate, displayAvailable: deps.displayAvailable, log });
+  const schedules = new ScheduleService({
+    clock: deps.clock,
+    sleeper: deps.sleeper ?? systemSleeper,
+    dataDir: deps.dataDir,
+    presets,
+    catalog,
+    runs,
+    gate,
+    displayAvailable: () => !deps.headlessOnly && deps.displayAvailable(),
+    log,
+    ...(deps.extraSchedules ? { extraSchedules: deps.extraSchedules } : {}),
+    ...(deps.scheduleIntervalMs !== undefined ? { intervalMs: deps.scheduleIntervalMs } : {}),
+  });
   let rotate: ((token: string) => void) | null = null;
 
   const profileIdOf = (p: Record<string, string>): ProfileId => {
@@ -304,12 +323,11 @@ export function createApp(deps: AppDeps): LurkApp {
         const save: PresetSave = parseBody(presetSaveSchema, body);
         if (save.preset.id !== params.id) throw new HttpError(422, 'id-mismatch', 'The preset id must match the URL');
         catalog.site(save.preset.siteId);
-        // Automatic replies post under the user's name, so turning them on takes an explicit confirmation.
-        const before = presets.get(save.preset.id);
-        if (save.preset.interaction.reply.enabled && !before?.interaction.reply.enabled && save.confirmReply !== true) {
-          throw new HttpError(428, 'reply-confirmation-required', '开启自动回复需要确认风险');
-        }
+        // Automatic replies post under the user's name; the kernel also turns them off without this.
+        const reply = save.preset.interaction.reply;
+        if (reply.enabled && !reply.riskAcknowledged) throw new HttpError(428, 'reply-confirmation-required', '开启自动回复需要确认风险');
         await presets.put(save.preset);
+        await schedules.presetSaved(save.preset);
         return ok(save.preset);
       },
     },
@@ -317,6 +335,8 @@ export function createApp(deps: AppDeps): LurkApp {
       method: 'DELETE',
       path: '/presets/:id',
       handle: async ({ params }) => {
+        const users = await schedules.usersOf(params.id!);
+        if (users.length > 0) throw new HttpError(409, 'preset-in-use', `Preset ${params.id} is run by schedule ${users.join(', ')}`);
         if (!(await presets.remove(params.id!))) throw new HttpError(404, 'unknown-preset', `Unknown preset ${params.id}`);
         return { status: 204 };
       },
@@ -436,11 +456,7 @@ export function createApp(deps: AppDeps): LurkApp {
       },
     },
 
-    {
-      method: 'GET',
-      path: '/schedules',
-      handle: async () => ok({ persisted: false, schedules: schedules.list() } satisfies ScheduleList),
-    },
+    { method: 'GET', path: '/schedules', handle: async () => ok(schedules.list()) },
     {
       method: 'PUT',
       path: '/schedules/:id',
@@ -448,20 +464,13 @@ export function createApp(deps: AppDeps): LurkApp {
         const spec = parseBody(scheduleSpecSchema, body);
         if (spec.id !== params.id) throw new HttpError(422, 'id-mismatch', 'The schedule id must match the URL');
         await requireProfile(spec.profileId);
-        return ok({ persisted: false, schedules: await schedules.upsert(spec) } satisfies ScheduleList);
+        return ok(await schedules.upsert(spec));
       },
     },
-    {
-      method: 'DELETE',
-      path: '/schedules/:id',
-      handle: async ({ params }) => ok({ persisted: false, schedules: await schedules.remove(params.id!) } satisfies ScheduleList),
-    },
+    { method: 'DELETE', path: '/schedules/:id', handle: async ({ params }) => ok(await schedules.remove(params.id!)) },
     { method: 'POST', path: '/schedules/:id/trigger', handle: async ({ params }) => ok({ runId: await schedules.trigger(params.id!) }, 202) },
-    {
-      method: 'POST',
-      path: '/schedules/:id/pause',
-      handle: async ({ params }) => ok({ persisted: false, schedules: await schedules.pause(params.id!) } satisfies ScheduleList),
-    },
+    { method: 'POST', path: '/schedules/:id/pause', handle: async ({ params }) => ok(await schedules.pause(params.id!)) },
+    { method: 'POST', path: '/schedules/:id/resume', handle: async ({ params }) => ok(await schedules.resume(params.id!)) },
     { method: 'GET', path: '/schedules/:id/history', handle: async ({ params }) => ok(schedules.history(params.id!)) },
   ];
 
@@ -475,15 +484,17 @@ export function createApp(deps: AppDeps): LurkApp {
       if (lost > 0) log(`history: ${lost} run(s) were in progress when the previous sidecar stopped; recorded as failed`);
       await catalog.refreshAll().catch((err: unknown) => log(`category load failed: ${String(err)}`));
       deps.shell?.settings(settings.get());
-      schedules.start();
+      await schedules.start();
     },
     bindTokenRotation(fn) {
       rotate = fn;
     },
     async close(reason = 'app-exit') {
-      schedules.stop();
+      await schedules.stop();
       runs.stopAll(reason);
       await Promise.all([runs.settle(), logins.closeAll()]);
+      // Released after the runs ended, so the scheduler has recorded how each one finished.
+      await schedules.close();
     },
   };
 }

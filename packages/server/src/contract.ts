@@ -30,7 +30,6 @@ export interface ProfileView {
   name: string;
   channel: BrowserChannel;
   proxy?: string;
-  executablePath?: string;
   /** `locked` while this sidecar or another process holds the Profile. */
   status: ProfileStatus | 'unknown';
   /** The last health check, if one ran. */
@@ -60,10 +59,12 @@ export interface StoredPreset extends RunPreset {
   browserMode: BrowserMode;
 }
 
+/**
+ * Automatic replies post under the user's name: a preset with `interaction.reply.enabled` is
+ * accepted only with `interaction.reply.riskAcknowledged`, which the UI sets after its risk dialog.
+ */
 export interface PresetSave {
   preset: StoredPreset;
-  /** Required whenever `interaction.reply.enabled` is true: automatic replies post as the user. */
-  confirmReply?: boolean | undefined;
 }
 
 export interface ActiveRun {
@@ -117,9 +118,21 @@ export interface UpdateInfo {
 }
 
 export interface ScheduleList {
-  /** Specs live in memory until schedules are persisted to disk. */
-  persisted: false;
+  /** False while another process (a running `lurk serve`) owns the schedules; `reason` says which. */
+  available: boolean;
+  reason?: string;
   schedules: ScheduleView[];
+}
+
+/** One schedule's run history, oldest first; `ended` is set once a started run has finished. */
+export interface ScheduleHistoryEntry {
+  at: string;
+  snapshotId: string;
+  cause: 'planned' | 'run-on-start' | 'misfire' | 'manual';
+  outcome: 'started' | 'skipped' | 'missed';
+  reason?: string;
+  runId?: RunId;
+  ended?: { at: string; outcome: RunResult['outcome']; stopCause: RunResult['stopCause']; failure?: string };
 }
 
 export type ScheduleSave = ScheduleSpec;

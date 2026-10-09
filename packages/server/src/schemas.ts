@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ProfileCreate, ProfilePatch, StoredPreset } from './contract';
-import type { ScheduleSpec } from '@disco-lurk/core';
+import { MAX_REPLY_LIKES, type ScheduleSpec } from '@disco-lurk/core';
 import { HttpError } from './server';
 
 const percent = z.number().int().min(0).max(100);
@@ -27,8 +27,8 @@ export const storedPresetSchema = z
     runMode: runModeSchema,
     categoryPaths: z.array(z.string().regex(/^\/c\/[^\s]+\/\d+$/)),
     interaction: z.object({
-      like: z.object({ enabled: z.boolean(), topicRate: percent, replyRate: percent, maxReplies: z.number().int().min(0).max(20) }),
-      reply: z.object({ enabled: z.boolean(), rate: percent }),
+      like: z.object({ enabled: z.boolean(), topicRate: percent, replyRate: percent, maxReplies: z.number().int().min(0).max(MAX_REPLY_LIKES) }),
+      reply: z.object({ enabled: z.boolean(), rate: percent, riskAcknowledged: z.boolean() }),
     }),
     extraWait: z
       .object({ enabled: z.boolean(), minSec: z.number().min(0).max(60), maxSec: z.number().min(0).max(60) })
@@ -40,7 +40,7 @@ export const storedPresetSchema = z
   .strict()
   .refine((p) => p.profileId === null || p.profileId.startsWith(`${p.siteId}/`), { message: 'the Profile must belong to the preset site', path: ['profileId'] });
 
-export const presetSaveSchema = z.object({ preset: storedPresetSchema, confirmReply: z.boolean().optional() }).strict();
+export const presetSaveSchema = z.object({ preset: storedPresetSchema }).strict();
 
 export const settingsPatchSchema = z
   .object({

@@ -1,7 +1,7 @@
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ERROR_CODES, type RunPreset, type ScheduleSpec } from '@disco-lurk/core';
-import { validateTrigger, type SchedulerState, type ScheduleStore } from '@disco-lurk/scheduler';
+import { PlanScheduler, validateTrigger, type SchedulerDeps, type SchedulerState, type ScheduleStore } from '@disco-lurk/scheduler';
 import { z } from 'zod';
 import { writeJsonAtomic } from './category-store';
 import { categorySchema } from './site';
@@ -77,7 +77,7 @@ export const scheduleSpecSchema = z
 const interactionSchema = z
   .object({
     like: z.object({ enabled: z.boolean(), topicRate: percent, replyRate: percent, maxReplies: z.number().int().min(0) }).strict(),
-    reply: z.object({ enabled: z.boolean(), rate: percent }).strict(),
+    reply: z.object({ enabled: z.boolean(), rate: percent, riskAcknowledged: z.boolean() }).strict(),
   })
   .strict();
 
@@ -314,4 +314,37 @@ export async function acquireSchedulerLock(dir: string, isAlive: (pid: number) =
     }
   }
   throw new SchedulerLockedError(dir, -1);
+}
+
+export interface OpenSchedulerOptions {
+  /** `<appData>/disco-lurk`; definitions, state and the lock live in its `schedules` directory. */
+  dataDir: string;
+  deps: Omit<SchedulerDeps, 'store'>;
+  isAlive?: (pid: number) => boolean;
+}
+
+export interface OpenedScheduler {
+  scheduler: PlanScheduler;
+  book: FileScheduleBook;
+  dir: string;
+  /** Gives up the state lock; runs the scheduler started are the caller's to stop first. */
+  close(): Promise<void>;
+}
+
+export const schedulesDirOf = (dataDir: string) => join(dataDir, 'schedules');
+
+/**
+ * The one way a process takes charge of the schedules: it owns the state lock, plans and fires
+ * from `state.json`, and reads definitions from `schedules.json`. Throws `SchedulerLockedError`
+ * while another process owns them.
+ */
+export async function openScheduler(opts: OpenSchedulerOptions): Promise<OpenedScheduler> {
+  const dir = schedulesDirOf(opts.dataDir);
+  const lock = await acquireSchedulerLock(dir, opts.isAlive);
+  return {
+    scheduler: new PlanScheduler({ ...opts.deps, store: new FileScheduleStore(dir) }),
+    book: new FileScheduleBook(dir),
+    dir,
+    close: () => lock.release(),
+  };
 }

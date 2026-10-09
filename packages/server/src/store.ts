@@ -102,8 +102,6 @@ export class PresetStore {
 interface ProfileMeta {
   channel: BrowserChannel;
   proxy?: string;
-  /** Only ever set by editing profiles.json by hand on the host; the API cannot write it. */
-  executablePath?: string;
   health?: ProfileHealth;
 }
 
@@ -168,7 +166,6 @@ export class ProfileRegistry {
         name,
         channel: m.channel,
         ...(m.proxy ? { proxy: m.proxy } : {}),
-        ...(m.executablePath ? { executablePath: m.executablePath } : {}),
         status: isBusy || holder !== null ? 'locked' : (m.health?.status ?? 'unknown'),
         ...(m.health ? { health: m.health } : {}),
         busy: isBusy,
@@ -185,7 +182,6 @@ export class ProfileRegistry {
       siteId,
       channel: m.channel,
       ...(m.proxy ? { proxy: m.proxy } : {}),
-      ...(m.executablePath ? { executablePath: m.executablePath } : {}),
     };
   }
 

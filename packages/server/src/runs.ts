@@ -84,6 +84,7 @@ export interface RunManagerDeps {
   newSeed(): number;
   notify: Notify;
   onActiveChange?(count: number): void;
+  log?(message: string): void;
 }
 
 interface Live {
@@ -94,7 +95,8 @@ interface Live {
 
 const NEEDS_LOGIN_STATES = new Set(['awaiting_login', 'needs_auth']);
 
-export function planFor(preset: StoredPreset, categories: readonly Category[], seed: number, nowMs: number): RunPlanSnapshot {
+/** `warn` hears what the kernel turned off, such as replies whose risk was not acknowledged. */
+export function planFor(preset: StoredPreset, categories: readonly Category[], seed: number, nowMs: number, warn?: (code: string, message: string) => void): RunPlanSnapshot {
   if (!preset.profileId) throw new HttpError(422, 'no-profile', `Preset ${preset.id} has no Profile`);
   const at = new Date(nowMs).toISOString();
   return {
@@ -102,7 +104,7 @@ export function planFor(preset: StoredPreset, categories: readonly Category[], s
     siteId: preset.siteId,
     profileId: preset.profileId,
     browserMode: preset.browserMode,
-    preset: resolvePreset(preset, categories, seededRandom(seed)),
+    preset: resolvePreset(preset, categories, seededRandom(seed), warn),
     seed,
     plannedAt: at,
     materializedAt: at,
@@ -128,12 +130,17 @@ export class RunManager {
   }
 
   startPreset(preset: StoredPreset): ActiveRun {
-    const plan = planFor(preset, this.deps.catalog.categories(preset.siteId), this.deps.newSeed(), this.deps.clock.now());
+    const plan = planFor(preset, this.deps.catalog.categories(preset.siteId), this.deps.newSeed(), this.deps.clock.now(), (code, message) =>
+      this.deps.log?.(`preset ${preset.id}: ${code}: ${message}`),
+    );
     return this.launch(plan, preset.name);
   }
 
-  /** Starts a fixed snapshot; the scheduler calls this with snapshots it materialized earlier. */
-  launch(plan: RunPlanSnapshot, presetName: string): ActiveRun {
+  /**
+   * Starts a fixed snapshot; the scheduler calls this with snapshots it materialized earlier and
+   * hears through `onEnded` how each ended, once its record is written.
+   */
+  launch(plan: RunPlanSnapshot, presetName: string, onEnded?: (result: RunResult) => Promise<void>): ActiveRun {
     if (this.live.has(plan.id)) throw new HttpError(409, 'run-exists', `Run ${plan.id} is already running`);
     const release = this.deps.gate.claim(plan.profileId, `run ${plan.id}`);
     const controller = new AbortController();
@@ -179,6 +186,7 @@ export class RunManager {
         this.deps.onActiveChange?.(this.live.size);
         this.announce(presetName, result);
       }
+      await onEnded?.(result).catch((err: unknown) => this.deps.log?.(`run ${plan.id}: recording its end for the scheduler failed: ${String(err)}`));
     };
     const done = this.deps.coordinator.run(plan, controller.signal, emit).then(finish, (err: unknown) =>
       // The coordinator turns every run failure into a result; reaching here is a bug worth a record.

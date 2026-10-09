@@ -37,6 +37,9 @@ describe('LoginManager closing', () => {
     const { opening, log, gate, phases, logins } = setup();
     logins.start('fx/main');
     const closing = logins.close('fx/main');
+    await new Promise((r) => setTimeout(r, 0));
+    // Chrome is still starting on this Profile, so nobody else may claim it yet.
+    expect(gate.isBusy('fx/main')).toBe(true);
     opening.resolve(session(log));
     expect((await closing).phase).toBe('closed');
     expect(log).toEqual(['session closed']);

@@ -70,7 +70,10 @@ export class LoginManager {
         return;
       }
       // The window opened after the sign-in was closed: nobody is left to use it.
-      if (l.closed) return void (await session.close().catch(() => {}));
+      if (l.closed) {
+        await session.close().catch(() => {});
+        return release();
+      }
       l.session = session;
       await this.waitOnce(l);
     })();
@@ -118,12 +121,18 @@ export class LoginManager {
     }
   }
 
+  /**
+   * The Profile is released by whoever closes its browser: here when a window is open, otherwise
+   * by the opening step in `start`, which closes the window that is still on its way.
+   */
   private async finish(l: Login, phase: 'closed' | 'failed', message?: string) {
     l.wait?.abort();
     const session = l.session;
     l.session = null;
-    await session?.close().catch(() => {});
-    l.release();
+    if (session) {
+      await session.close().catch(() => {});
+      l.release();
+    }
     this.publish(l, { phase, ...(message ? { message } : {}) });
   }
 

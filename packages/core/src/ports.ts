@@ -133,6 +133,11 @@ export interface ForumPort {
 export interface AuthSession {
   recheck(): Promise<AuthResult>;
   continueWaiting(signal: AbortSignal): Promise<AuthResult>;
+  /**
+   * The health check on the signed-in window itself, without a second browser: a headless start
+   * right after a headed sign-in can meet a challenge page the person never saw.
+   */
+  inspect(): Promise<ProfileHealth>;
   /** Releases the browser and the Profile lock. */
   close(): Promise<void>;
 }

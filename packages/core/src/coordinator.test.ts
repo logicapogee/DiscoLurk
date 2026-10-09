@@ -71,7 +71,7 @@ interface Setup {
   /** A headed sign-in that completes at this virtual instant. */
   signInAt?: number;
   forum?: Partial<Omit<FixtureForumOptions, 'site' | 'sleeper'>>;
-  open?: () => never;
+  open?: () => void;
   exit?: AbortController;
   ledgers?: CoordinatorEnv['ledgers'];
 }
@@ -403,6 +403,28 @@ describe('AUTH-001 (kernel side) AuthSession', () => {
     expect((await session.continueWaiting(new AbortController().signal)).status).toBe('authenticated');
     await session.close();
     expect(modes).toEqual(['headless-check', 'headed-wait']);
+    expect(t.closed()).toBe(1);
+  });
+
+  it('checks health on the signed-in window itself: no second browser, the window stays open', async () => {
+    const modes: AuthMode[] = [];
+    let opens = 0;
+    const t = setup({
+      open: () => opens++,
+      forum: {
+        auth: async (mode) => {
+          modes.push(mode);
+          return { status: 'authenticated', username: 'me' };
+        },
+      },
+    });
+    const session = await t.coordinator.beginAuth('fixture/main');
+    expect(await session.continueWaiting(new AbortController().signal)).toMatchObject({ status: 'authenticated' });
+    expect(await session.inspect()).toMatchObject({ profileId: 'fixture/main', status: 'ready', username: 'me' });
+    expect(opens).toBe(1);
+    expect(modes).toEqual(['headed-wait', 'headless-check']);
+    expect(t.closed()).toBe(0);
+    await session.close();
     expect(t.closed()).toBe(1);
   });
 });

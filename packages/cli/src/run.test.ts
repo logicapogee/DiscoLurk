@@ -209,6 +209,7 @@ describe('lurk login (§11.1)', () => {
   function session(answer: () => Promise<AuthResult>) {
     const calls: string[] = [];
     const auth: AuthSession = {
+      inspect: async () => ({ profileId: 'linuxdo/default', status: 'ready', checkedAt: '2026-10-09T00:00:00.000Z' }),
       recheck: async () => {
         calls.push('recheck');
         return { status: 'authenticated' };

@@ -293,28 +293,38 @@ export class DiscoLurkCoordinator implements RunCoordinator {
   }
 
   async inspect(profileId: ProfileId): Promise<ProfileHealth> {
-    const checkedAt = () => new Date(this.env.deps.clock.now()).toISOString();
     const { profile, site } = await this.env.resolveProfile(profileId);
     let session: ForumSession;
     try {
       session = await this.env.open({ site, profile, browserMode: 'headless', runId: `inspect-${this.env.deps.clock.now()}`, warn: () => {}, timings: () => {} });
     } catch (err) {
       const locked = err instanceof RunError && err.code === 'profile-locked';
-      return { profileId, status: locked ? 'locked' : 'broken', checkedAt: checkedAt() };
+      return { profileId, status: locked ? 'locked' : 'broken', checkedAt: this.checkedAt() };
     }
-    const signal = AbortSignal.any([AbortSignal.timeout(TIMEOUTS.inspectMs), session.closed]);
     try {
-      const auth = await session.forum.ensureAuthenticated(checkMode(site, 'headless'), signal);
-      if (auth.status !== 'authenticated') return { profileId, status: 'needs-auth', checkedAt: checkedAt() };
-      // The health check is where a discovered site reads its categories.
-      if (site.categorySource === 'discovered') await this.refreshCategories(site, session.forum, signal, () => {});
-      return { profileId, status: 'ready', ...(auth.username ? { username: auth.username } : {}), checkedAt: checkedAt() };
-    } catch (err) {
-      // A check that ran out of time, lost its browser or met a page failure cannot vouch for the Profile.
-      if (err instanceof RunError || signal.aborted || isAbortError(err)) return { profileId, status: 'broken', checkedAt: checkedAt() };
-      throw err;
+      return await this.healthOf(profileId, site, session, checkMode(site, 'headless'));
     } finally {
       await session.close();
+    }
+  }
+
+  private checkedAt(): string {
+    return new Date(this.env.deps.clock.now()).toISOString();
+  }
+
+  /** The health of a Profile whose browser is already open; the session stays open. */
+  private async healthOf(profileId: ProfileId, site: Site, session: ForumSession, mode: AuthMode): Promise<ProfileHealth> {
+    const signal = AbortSignal.any([AbortSignal.timeout(TIMEOUTS.inspectMs), session.closed]);
+    try {
+      const auth = await session.forum.ensureAuthenticated(mode, signal);
+      if (auth.status !== 'authenticated') return { profileId, status: 'needs-auth', checkedAt: this.checkedAt() };
+      // The health check is where a discovered site reads its categories.
+      if (site.categorySource === 'discovered') await this.refreshCategories(site, session.forum, signal, () => {});
+      return { profileId, status: 'ready', ...(auth.username ? { username: auth.username } : {}), checkedAt: this.checkedAt() };
+    } catch (err) {
+      // A check that ran out of time, lost its browser or met a page failure cannot vouch for the Profile.
+      if (err instanceof RunError || signal.aborted || isAbortError(err)) return { profileId, status: 'broken', checkedAt: this.checkedAt() };
+      throw err;
     }
   }
 
@@ -324,6 +334,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     return {
       recheck: () => session.forum.ensureAuthenticated('headless-check', AbortSignal.any([AbortSignal.timeout(TIMEOUTS.inspectMs), session.closed])),
       continueWaiting: (signal) => session.forum.ensureAuthenticated('headed-wait', AbortSignal.any([signal, session.closed])),
+      inspect: () => this.healthOf(profileId, site, session, 'headless-check'),
       close: () => session.close(),
     };
   }

@@ -232,6 +232,9 @@ importers:
       '@disco-lurk/core':
         specifier: workspace:*
         version: link:../core
+      '@disco-lurk/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       zod:
         specifier: 4.6.5
         version: 4.6.5

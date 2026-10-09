@@ -5,6 +5,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@disco-lurk/core": "workspace:*",
+    "@disco-lurk/scheduler": "workspace:*",
     "zod": "4.6.5"
   }
 }

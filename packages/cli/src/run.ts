@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import { FileCategoryStore, FileLedgerStore, validateReplyTemplates } from '@disco-lurk/config';
 import {
+  DEFAULT_EXTRA_WAIT,
+  DEFAULT_INTERACTION,
+  DEFAULT_RUN_MODE,
+  DEFAULT_SAMPLE,
   EXPERIMENTS_OFF,
+  LIMITS,
   isAbortError,
   MAX_REPLY_LIKES,
   reportedTopicsShortfall,
@@ -49,8 +54,7 @@ export function parseProfileId(profileId: string): { siteId: string; name: strin
   return { siteId, name };
 }
 
-/** The longest time target: one day. */
-export const MAX_RUN_MINUTES = 24 * 60;
+export const MAX_RUN_MINUTES = LIMITS.timeModeMax;
 
 /** Run mode syntax: `endless`, `topics:<n>`, `topics:<min>-<max>`, `time:<minutes>`. */
 export function parseRunMode(raw: string): RunModeSpec {
@@ -92,7 +96,7 @@ const COMMON = {
   channel: { type: 'string', default: 'chrome' },
 } as const satisfies ParseArgsOptionsConfig;
 
-function parseOrUsageError<O extends ParseArgsOptionsConfig>(argv: string[], options: O) {
+export function parseOrUsageError<O extends ParseArgsOptionsConfig>(argv: string[], options: O) {
   try {
     return parseArgs({ args: argv, strict: true, options }).values;
   } catch (err) {
@@ -123,13 +127,12 @@ export interface RunArgs extends LoginArgs {
   usageWarnings: string[];
 }
 
-/** The default RunPreset's interaction settings: likes and replies off, at the field-tested rates. */
-export const DEFAULT_INTERACTION: InteractionPolicy = {
-  like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 },
-  reply: { enabled: false, rate: 5, riskAcknowledged: false },
-};
-
-export const DEFAULT_EXTRA_WAIT: WaitRange & { enabled: boolean } = { enabled: true, minSec: 1, maxSec: 3 };
+/** A run mode in `--run-mode` syntax; `parseRunMode` reads it back. */
+export function runModeArg(m: RunModeSpec): string {
+  if (m.kind === 'endless') return 'endless';
+  if (m.kind === 'time') return `time:${m.minutes}`;
+  return m.min === m.max ? `topics:${m.min}` : `topics:${m.min}-${m.max}`;
+}
 
 /** The flag that acknowledges the reply risk; `--reply` requires it and it sets `reply.riskAcknowledged`. */
 export const REPLY_RISK_FLAG = 'i-understand-auto-reply-risk';
@@ -138,14 +141,14 @@ export const REPLY_RISK_NOTICE =
   'Automatic replies post real messages under your account. Sites may detect and penalise automated replies. ' +
   `Add --${REPLY_RISK_FLAG} to confirm that you accept this risk.`;
 
-function parsePercent(raw: string | undefined, flag: string, fallback: number): number {
+export function parsePercent(raw: string | undefined, flag: string, fallback: number): number {
   if (raw === undefined) return fallback;
   const n = Number(raw);
   if (!/^\d+(\.\d+)?$/.test(raw) || n < 0 || n > 100) throw new UsageError(`--${flag} must be a percentage from 0 to 100`);
   return n;
 }
 
-function parseCount(raw: string | undefined, flag: string, fallback: number): number {
+export function parseCount(raw: string | undefined, flag: string, fallback: number): number {
   if (raw === undefined) return fallback;
   if (!/^\d+$/.test(raw)) throw new UsageError(`--${flag} must be a whole number`);
   return Number(raw);
@@ -156,7 +159,7 @@ export function parseExtraWait(raw: string | undefined): WaitRange & { enabled: 
   if (raw === undefined) return { ...DEFAULT_EXTRA_WAIT };
   if (raw === 'off') return { ...DEFAULT_EXTRA_WAIT, enabled: false };
   const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(raw);
-  if (!m || Number(m[1]) > Number(m[2])) throw new UsageError('--extra-wait must be <min>-<max> in seconds, or off');
+  if (!m || Number(m[1]) > Number(m[2]) || Number(m[2]) > LIMITS.extraWaitSec) throw new UsageError(`--extra-wait must be <min>-<max> in seconds (at most ${LIMITS.extraWaitSec}), or off`);
   return { enabled: true, minSec: Number(m[1]), maxSec: Number(m[2]) };
 }
 
@@ -176,7 +179,7 @@ export function parseRunArgs(argv: string[]): RunArgs {
   const v = parseOrUsageError(argv, {
     ...COMMON,
     'browse-mode': { type: 'string', default: 'deep' },
-    'run-mode': { type: 'string', default: 'endless' },
+    'run-mode': { type: 'string', default: runModeArg(DEFAULT_RUN_MODE) },
     categories: { type: 'string' },
     headed: { type: 'boolean' },
     headless: { type: 'boolean' },
@@ -258,7 +261,7 @@ export function buildPlan(args: RunArgs, categories: Category[], seed: number, n
     categoryPaths: categories.map((c) => c.path),
     interaction: args.interaction,
     extraWait: args.extraWait,
-    samplePerCategory: { min: 3, max: 8 },
+    samplePerCategory: { ...DEFAULT_SAMPLE },
     experiments: args.experiments,
   };
   return {
@@ -318,7 +321,8 @@ export async function signIn(auth: AuthSession, signal: AbortSignal, log: (line:
 
 export interface CliEnvOptions {
   channel: BrowserChannel;
-  credentials?: Credentials;
+  /** Fixed credentials, or the ones for each site a run opens. */
+  credentials?: Credentials | ((site: Site) => Credentials | undefined);
   proxy?: string;
   exitSignal?: AbortSignal;
 }
@@ -331,6 +335,10 @@ export function replyTemplates(file: { templates: string[] } = templatesFile): s
 }
 
 export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
+  const credentialsOf = (site: Site) => {
+    const c = typeof opts.credentials === 'function' ? opts.credentials(site) : opts.credentials;
+    return c ? { credentials: c } : {};
+  };
   const deps = systemDeps();
   const templates = replyTemplates();
   return {
@@ -353,7 +361,7 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
         onTimings: req.timings,
         replyTemplates: templates,
         ...(req.profile.proxy ? { proxy: req.profile.proxy } : {}),
-        ...(opts.credentials ? { credentials: opts.credentials } : {}),
+        ...credentialsOf(req.site),
       });
     },
     categories: new FileCategoryStore(sitesDir()),

@@ -6,6 +6,9 @@ import type { Clock } from '@disco-lurk/core';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { bearer, clientAddress, TOKEN_REQUIREMENT, TokenGuard, tokenStrongEnough } from './auth';
 import { HEARTBEAT_MS, type ServerFrame } from './contract';
+import { EventHub, HttpError } from './hub';
+
+
 
 /** The shell's webview origin (Windows serves it over http://tauri.localhost). */
 export const TAURI_ORIGINS = ['tauri://localhost', 'http://tauri.localhost'] as const;
@@ -22,16 +25,6 @@ const CLOSE_GRACE_MS = 500;
 
 /** `goingAway` (1001) tells the UI the server shut down on purpose, so it stops reconnecting. */
 export const WS_CLOSE = { goingAway: 1001, authFailed: 4401, authTimeout: 4408, tokenRotated: 4001 } as const;
-
-export class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message?: string,
-  ) {
-    super(message ?? code);
-  }
-}
 
 export interface Reply {
   status: number;
@@ -58,23 +51,6 @@ export interface Route {
   /** False only for `/health`; everything else needs the bearer token. */
   auth?: boolean;
   handle(ctx: RouteContext): Promise<Reply>;
-}
-
-export type FrameListener = (frame: ServerFrame, encoded: string) => void;
-
-/** Frames published here reach every authenticated WebSocket. */
-export class EventHub {
-  private listeners = new Set<FrameListener>();
-
-  subscribe(fn: FrameListener): () => void {
-    this.listeners.add(fn);
-    return () => this.listeners.delete(fn);
-  }
-
-  /** `encoded` is the frame's JSON when the caller already has it, so it is serialized once. */
-  publish(frame: ServerFrame, encoded = JSON.stringify(frame)): void {
-    for (const fn of this.listeners) fn(frame, encoded);
-  }
 }
 
 export interface ServerOptions {

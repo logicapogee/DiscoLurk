@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { MapLedger, type LedgerStore, type ProfileId, type VisitLedger, type VisitRecord } from '@disco-lurk/core';
 import { z } from 'zod';
-import { writeJsonAtomic } from './category-store';
+import { writeJsonAtomic } from './json-file';
 
 const recordSchema = z
   .object({

@@ -2,7 +2,7 @@ import type { AuthSession, RunCoordinator } from '@disco-lurk/core';
 import { describe, expect, it } from 'vitest';
 import { LoginManager } from './logins';
 import { ProfileGate } from './runs';
-import { EventHub } from './server';
+import { EventHub } from './hub';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;

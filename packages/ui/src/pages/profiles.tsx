@@ -1,14 +1,12 @@
 import type { BrowserChannel } from '@disco-lurk/core';
 import type { LoginView, ProfileView } from '@disco-lurk/server/contract';
 import { useEffect, useState } from 'preact/hooks';
-import { ApiError } from '../api';
 import { ConfirmDialog } from '../components/dialog';
 import { Field, Notice, Select } from '../components/fields';
-import { apiMessage, copy } from '../copy';
+import { copy, errorText } from '../copy';
 import { dateTime } from '../format';
 import { useStore } from '../store';
 
-const errorText = (err: unknown) => (err instanceof ApiError ? apiMessage(err.code, err.message) : copy.common.error(err instanceof Error ? err.message : String(err)));
 const OPEN_PHASES = new Set(['opening', 'waiting', 'needs-auth', 'challenge-detected', 'checking-health']);
 
 function LoginPanel(props: { login: LoginView; onAction(a: 'recheck' | 'continue' | 'close'): void }) {

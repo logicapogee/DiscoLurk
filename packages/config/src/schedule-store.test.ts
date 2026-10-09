@@ -3,7 +3,8 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describeSchedulerContract, preset, spec } from '@disco-lurk/scheduler/contract';
 import { describe, expect, it } from 'vitest';
-import { acquireSchedulerLock, ConfigFileError, FileScheduleBook, FileScheduleStore, SchedulerLockedError } from './schedule-store';
+import { ConfigFileError } from './json-file';
+import { acquireSchedulerLock, FileScheduleBook, FileScheduleStore, SchedulerLockedError } from './schedule-store';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'lurk-sched-'));
 
@@ -113,3 +114,30 @@ describe('acquireSchedulerLock', () => {
     await lock.release();
   });
 });
+
+describe('FileScheduleBook edits', () => {
+  it('adds a schedule with its preset and drops a preset no schedule runs any more', async () => {
+    const b = new FileScheduleBook(tmp());
+    await b.withSchedule(spec({ id: 'a', presetId: 'p', profileId: 'linuxdo/main' }), { ...preset(1, 2), id: 'p' });
+    await b.withSchedule(spec({ id: 'b', presetId: 'p', profileId: 'linuxdo/main' }), { ...preset(3, 4), id: 'p' });
+    expect((await b.load()).presets).toEqual([expect.objectContaining({ id: 'p', runMode: { kind: 'topics', min: 3, max: 4 } })]);
+    expect(await b.withoutSchedule('a')).toMatchObject({ id: 'a' });
+    expect((await b.load()).presets).toHaveLength(1);
+    await b.withoutSchedule('b');
+    expect(await b.load()).toEqual({ schedules: [], presets: [] });
+    expect(await b.withoutSchedule('b')).toBeNull();
+  });
+
+  it('reads a file another process replaced, and keeps answering from the parsed copy otherwise', async () => {
+    const dir = tmp();
+    const b = new FileScheduleBook(dir);
+    await b.withSchedule(spec({ id: 'a', presetId: 'p', profileId: 'linuxdo/main' }), { ...preset(1, 2), id: 'p' });
+    const loaded = await b.load();
+    loaded.schedules.length = 0;
+    expect((await b.load()).schedules).toHaveLength(1);
+    // Another writer (the CLI) replaces the file.
+    await new FileScheduleBook(dir).withSchedule(spec({ id: 'c', presetId: 'p', profileId: 'linuxdo/main' }), { ...preset(1, 2), id: 'p' });
+    expect((await b.load()).schedules.map((s) => s.id)).toEqual(['a', 'c']);
+  });
+});
+

@@ -1,14 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { parseArgs } from 'node:util';
-import type { ScheduleBook } from '@disco-lurk/config';
+import { FileCategoryStore, type ScheduleBook } from '@disco-lurk/config';
 import { TAURI_ORIGINS, type ServerFrame } from '@disco-lurk/server';
-import { envSchedule, envWarnings, proxyFromEnv, serveEnv, siteFromEnv } from './env';
+import { envWarnings, proxyFromEnv, serveEnv, siteFromEnv } from './env';
 import { SidecarLifecycle } from './lifecycle';
 import { appDataDir } from './paths';
-import { credentialsFromEnv, EXIT, resolveCategories, UsageError } from './run';
-import { CategoryCache, systemTimezone } from './schedule';
+import { credentialsFromEnv, EXIT, parseOrUsageError, siteCategories, UsageError } from './run';
+import { envSchedule, systemTimezone } from './schedule';
 import { bootServer } from './sidecar';
 
 export interface ServeArgs {
@@ -29,24 +28,15 @@ function defaultUiDir(): string | undefined {
 }
 
 export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): ServeArgs {
-  let values;
-  try {
-    ({ values } = parseArgs({
-      args: argv,
-      strict: true,
-      options: {
-        host: { type: 'string', default: '127.0.0.1' },
-        port: { type: 'string', default: env.LURK_PORT?.trim() || '8080' },
-        headless: { type: 'boolean', default: false },
-        origin: { type: 'string', multiple: true },
-        ui: { type: 'string' },
-        data: { type: 'string' },
-        'trusted-proxy': { type: 'string', multiple: true },
-      },
-    }));
-  } catch (err) {
-    throw new UsageError((err as Error).message);
-  }
+  const values = parseOrUsageError(argv, {
+    host: { type: 'string', default: '127.0.0.1' },
+    port: { type: 'string', default: env.LURK_PORT?.trim() || '8080' },
+    headless: { type: 'boolean', default: false },
+    origin: { type: 'string', multiple: true },
+    ui: { type: 'string' },
+    data: { type: 'string' },
+    'trusted-proxy': { type: 'string', multiple: true },
+  });
   const port = Number(values.port);
   if (!/^\d+$/.test(values.port) || port > 65535) throw new UsageError(`Invalid --port ${values.port}`);
   const ui = values.ui ?? env.LURK_UI_DIR;
@@ -78,18 +68,26 @@ export function serveToken(host: string, env: NodeJS.ProcessEnv): { token: strin
 }
 
 /**
- * The LURK_* schedule as a definition the scheduler reads beside `schedules.json`; its categories
- * are resolved against the site's list on every read, as that list can change after a sign-in.
+ * The LURK_* schedule as a definition the scheduler reads beside `schedules.json`. Its categories
+ * resolve against the site's list, which a sign-in can change, so the schedule is rebuilt only
+ * when that list differs from the one it was built from. The variables are checked at once,
+ * before any category is known.
  */
 export function envSchedules(env: NodeJS.ProcessEnv, dataDir: string): (() => Promise<ScheduleBook>) | undefined {
-  const fromEnv = envSchedule(env, systemTimezone());
-  if (!fromEnv) return undefined;
+  const timezone = systemTimezone();
+  const { LURK_CATEGORIES: _categories, ...withoutCategories } = env;
+  if (!envSchedule(withoutCategories, timezone)) return undefined;
   const site = siteFromEnv(env);
-  const categories = new CategoryCache(join(dataDir, 'sites'));
+  const store = new FileCategoryStore(join(dataDir, 'sites'));
+  let built: { key: string; book: ScheduleBook } | null = null;
   return async () => {
-    await categories.refresh([site.id]);
-    const preset = { ...fromEnv.preset, categoryPaths: resolveCategories(site, categories.known(site.id), fromEnv.categoryTokens).map((c) => c.path) };
-    return { schedules: [fromEnv.spec], presets: [preset] };
+    const known = await siteCategories(site, store);
+    const key = JSON.stringify(known);
+    if (built?.key !== key) {
+      const { spec, preset } = envSchedule(env, timezone, () => known)!;
+      built = { key, book: { schedules: [spec], presets: [preset] } };
+    }
+    return structuredClone(built.book);
   };
 }
 

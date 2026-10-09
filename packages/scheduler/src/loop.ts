@@ -8,7 +8,46 @@ export interface DriveOptions {
   sleeper: InterruptibleSleeper;
   intervalMs: number;
   signal: AbortSignal;
+  /** Cuts a sleep short so changed definitions are applied at once. */
+  waker?: LoopWaker;
+  /** Runs after every step, e.g. to publish what the step changed. */
+  afterStep?(): void;
   log(message: string): void;
+}
+
+/**
+ * Wakes the scheduler loop. Writers of the definitions call `wake()` instead of reconciling
+ * themselves, so only the loop ever applies them; the promise settles once a full step has run
+ * after the wake.
+ */
+export class LoopWaker {
+  private ctrl = new AbortController();
+  private waiting: Array<() => void> = [];
+
+  wake(): Promise<void> {
+    const done = new Promise<void>((resolve) => this.waiting.push(resolve));
+    this.ctrl.abort();
+    return done;
+  }
+
+  /** Aborts when `wake()` is called during the current sleep. */
+  get signal(): AbortSignal {
+    return this.ctrl.signal;
+  }
+
+  /** Called as a step starts: the wakes so far are answered when it ends. */
+  beginStep(): () => void {
+    if (this.ctrl.signal.aborted) this.ctrl = new AbortController();
+    const answered = this.waiting;
+    this.waiting = [];
+    return () => answered.forEach((resolve) => resolve());
+  }
+
+  /** Answers every wake; the loop has stopped. */
+  release(): void {
+    this.waiting.forEach((resolve) => resolve());
+    this.waiting = [];
+  }
 }
 
 /**
@@ -25,7 +64,25 @@ export async function driveScheduler(opts: DriveOptions): Promise<void> {
     if (message !== reported) opts.log(message);
     reported = message;
   };
-  while (!opts.signal.aborted) {
+  const waker = opts.waker ?? new LoopWaker();
+  try {
+    while (!opts.signal.aborted) {
+      const answer = waker.beginStep();
+      await step();
+      opts.afterStep?.();
+      answer();
+      try {
+        await opts.sleeper.sleep(opts.intervalMs, AbortSignal.any([opts.signal, waker.signal]));
+      } catch (err) {
+        if (!isAbortError(err)) throw err;
+        if (opts.signal.aborted) return;
+      }
+    }
+  } finally {
+    waker.release();
+  }
+
+  async function step(): Promise<void> {
     let failed = false;
     let specs: ScheduleSpec[] | null = null;
     try {
@@ -55,11 +112,5 @@ export async function driveScheduler(opts: DriveOptions): Promise<void> {
       }
     }
     if (!failed) reported = null;
-    try {
-      await opts.sleeper.sleep(opts.intervalMs, opts.signal);
-    } catch (err) {
-      if (isAbortError(err)) return;
-      throw err;
-    }
   }
 }

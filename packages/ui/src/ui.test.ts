@@ -47,7 +47,16 @@ const preset: StoredPreset = {
   samplePerCategory: { min: 3, max: 8 },
 };
 
-const settings: Settings = { notifications: true, closeToTray: true, updateCheck: false, currentPresetId: 'linuxdo-default', language: 'zh-CN' };
+const settings: Settings = {
+  notifications: true,
+  notifyOnStart: true,
+  updateCheck: false,
+  currentPresetId: 'linuxdo-default',
+  language: 'zh-CN',
+  historyLimit: 200,
+  ledgerDays: 30,
+  reading: { samplePerCategory: { min: 3, max: 8 }, extraWait: { enabled: true, minSec: 1, maxSec: 3 } },
+};
 
 function activeRun(over: Partial<ActiveRun> = {}): ActiveRun {
   const plan: RunPlanSnapshot = {
@@ -77,7 +86,7 @@ function fakeApi() {
   return api;
 }
 
-function mount(api: ReturnType<typeof fakeApi>, page: () => ReturnType<typeof h> = () => h(RunPage, {})) {
+function mount(api: ReturnType<typeof fakeApi>, page: () => ReturnType<typeof h> = () => h(RunPage, {}), patch: Partial<State> = {}) {
   const state: State = {
     info: { version: '0.1.0', headlessOnly: false, platform: 'darwin' } satisfies ServerInfo,
     stream: 'open',
@@ -87,9 +96,12 @@ function mount(api: ReturnType<typeof fakeApi>, page: () => ReturnType<typeof h>
     settings,
     runs: {},
     events: {},
+    live: {},
     logins: {},
     history: [],
+    schedules: { available: true, schedules: [] },
     update: null,
+    ...patch,
   };
   const store = new Store(api as unknown as Api, state);
   render(h(StoreContext.Provider, { value: store }, page()));
@@ -233,18 +245,20 @@ describe('schedules page', () => {
         { at, snapshotId: 'p2', cause: 'planned', outcome: 'skipped', reason: 'paused' },
       ]),
     };
-    mount(api as never, () => h(SchedulesPage, {}));
+    const store = mount(api as never, () => h(SchedulesPage, {}), { schedules: view(true) });
     fireEvent.click(await screen.findByRole('button', { name: copy.schedules.resume }));
     await waitFor(() => expect(api.resumeSchedule).toHaveBeenCalledWith('s1'));
     await screen.findByRole('button', { name: copy.schedules.pause });
     fireEvent.click(screen.getByRole('button', { name: copy.schedules.history }));
     await screen.findByText(/计划 已跳过（已暂停）/);
     expect(screen.getByText(/计划 已开始 → /).textContent).toContain(copy.stopCauses.target!);
+    // A change made elsewhere (the tray, another tab, the loop) arrives as a `schedules` frame.
+    store.apply({ type: 'schedules', list: view(true) });
+    await screen.findByRole('button', { name: copy.schedules.resume });
   });
 
   it('is read-only while another process owns the schedules', async () => {
-    const api = { ...fakeApi(), schedules: vi.fn(async (): Promise<ScheduleList> => ({ available: false, reason: 'owned by process 42', schedules: [] })) };
-    mount(api as never, () => h(SchedulesPage, {}));
+    mount(fakeApi(), () => h(SchedulesPage, {}), { schedules: { available: false, reason: 'owned by process 42', schedules: [] } });
     await screen.findByText(copy.schedules.notOwned('owned by process 42'));
     expect(screen.queryByRole('button', { name: copy.schedules.create })).toBeNull();
   });
@@ -313,7 +327,11 @@ describe('store events', () => {
     try {
       const store = mount(fakeApi());
       store.apply({ type: 'event', runId: 'run-1', event: warning(1) });
-      store.apply({ type: 'run', run: activeRun({ state: 'completed', result: { outcome: 'completed', stopCause: 'target', baseline: 'not-applicable', levels: { initial: null, final: null }, stats: emptyStats() } }) });
+      const result = { outcome: 'completed', stopCause: 'target', baseline: 'not-applicable', levels: { initial: null, final: null }, stats: emptyStats() } as const;
+      const run = activeRun({ state: 'completed', result });
+      store.apply({ type: 'run', run, record: { runId: run.runId, presetId: run.presetId, presetName: run.presetName, plan: run.plan, startedAt: run.startedAt, endedAt: run.startedAt, result } });
+      // The ended run's record goes straight into history.
+      expect(store.state.history.map((r) => r.runId)).toEqual(['run-1']);
       vi.advanceTimersByTime(FINISHED_EVENTS_TTL_MS - 1);
       expect(store.state.events['run-1']).toHaveLength(1);
       vi.advanceTimersByTime(1);

@@ -41,6 +41,7 @@ export interface SchedulerState {
 
 export interface ScheduleStore {
   load(): Promise<SchedulerState | null>;
+  /** Serializes `state` before returning, so later changes to it never reach the stored copy. */
   save(state: SchedulerState): Promise<void>;
 }
 

@@ -1,13 +1,11 @@
-import type { ScheduleSpec, ScheduleView } from '@disco-lurk/core';
+import type { ScheduleSpec } from '@disco-lurk/core';
 import type { ScheduleHistoryEntry, ScheduleList } from '@disco-lurk/server/contract';
 import { useEffect, useState } from 'preact/hooks';
-import { ApiError } from '../api';
+import { LIMITS } from '@disco-lurk/core';
 import { Field, Notice, NumberInput, Segmented, Select, Toggle } from '../components/fields';
-import { apiMessage, copy } from '../copy';
+import { attempt, copy, errorText, type Message } from '../copy';
 import { dateTime, runModeText } from '../format';
 import { useStore } from '../store';
-
-const errorText = (err: unknown) => (err instanceof ApiError ? apiMessage(err.code, err.message) : copy.common.error(err instanceof Error ? err.message : String(err)));
 
 function blankSpec(profileId: string, presetId: string): ScheduleSpec {
   return {
@@ -58,7 +56,7 @@ function ScheduleHistory(props: { id: string }) {
   );
 }
 
-function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleView[]): void; onCancel(): void }) {
+function ScheduleForm(props: { initial: ScheduleSpec; onSaved(): void; onCancel(): void }) {
   const [state, store] = useStore();
   const [spec, setSpec] = useState(props.initial);
   const [error, setError] = useState('');
@@ -72,7 +70,8 @@ function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleVie
     e.preventDefault();
     setError('');
     try {
-      props.onSaved((await store.api.saveSchedule({ ...spec, name: spec.name.trim() || (preset?.name ?? spec.id) })).schedules);
+      store.set({ schedules: await store.api.saveSchedule({ ...spec, name: spec.name.trim() || (preset?.name ?? spec.id) }) });
+      props.onSaved();
     } catch (err) {
       setError(errorText(err));
     }
@@ -81,7 +80,7 @@ function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleVie
   return (
     <form class="panel" onSubmit={save}>
       <Field label={copy.schedules.name}>
-        <input type="text" aria-label={copy.schedules.name} value={spec.name} maxLength={60} onInput={(e) => set({ name: (e.currentTarget as HTMLInputElement).value })} />
+        <input type="text" aria-label={copy.schedules.name} value={spec.name} maxLength={LIMITS.nameLength} onInput={(e) => set({ name: (e.currentTarget as HTMLInputElement).value })} />
       </Field>
       <Field label={copy.schedules.preset}>
         <Select
@@ -122,7 +121,7 @@ function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleVie
         ) : (
           <div class="sub">
             <label>
-              {copy.schedules.runs} <NumberInput label={copy.schedules.runs} value={t.runs} min={1} max={24} onChange={(runs) => set({ trigger: { ...t, runs } })} />
+              {copy.schedules.runs} <NumberInput label={copy.schedules.runs} value={t.runs} min={1} max={LIMITS.runsPerDay} onChange={(runs) => set({ trigger: { ...t, runs } })} />
             </label>
             <label>
               {copy.schedules.window}
@@ -131,10 +130,10 @@ function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleVie
               <input type="time" aria-label={`${copy.schedules.window} end`} value={t.end} onInput={(e) => set({ trigger: { ...t, end: (e.currentTarget as HTMLInputElement).value } })} />
             </label>
             <label>
-              {copy.schedules.jitter} <NumberInput label={copy.schedules.jitter} value={t.jitterMinutes} min={0} max={120} onChange={(jitterMinutes) => set({ trigger: { ...t, jitterMinutes } })} />
+              {copy.schedules.jitter} <NumberInput label={copy.schedules.jitter} value={t.jitterMinutes} min={0} max={LIMITS.jitterMin} onChange={(jitterMinutes) => set({ trigger: { ...t, jitterMinutes } })} />
             </label>
             <label>
-              {copy.schedules.minGap} <NumberInput label={copy.schedules.minGap} value={t.minGapMinutes} min={0} max={720} onChange={(minGapMinutes) => set({ trigger: { ...t, minGapMinutes } })} />
+              {copy.schedules.minGap} <NumberInput label={copy.schedules.minGap} value={t.minGapMinutes} min={0} max={LIMITS.minGapMin} onChange={(minGapMinutes) => set({ trigger: { ...t, minGapMinutes } })} />
             </label>
           </div>
         )}
@@ -148,7 +147,7 @@ function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleVie
             onChange={(policy) => set({ misfire: { ...spec.misfire, policy } })}
           />
           <label>
-            {copy.schedules.grace} <NumberInput label={copy.schedules.grace} value={spec.misfire.graceMinutes} min={0} max={1440} onChange={(graceMinutes) => set({ misfire: { ...spec.misfire, graceMinutes } })} />
+            {copy.schedules.grace} <NumberInput label={copy.schedules.grace} value={spec.misfire.graceMinutes} min={0} max={LIMITS.graceMinutes} onChange={(graceMinutes) => set({ misfire: { ...spec.misfire, graceMinutes } })} />
           </label>
         </div>
       </Field>
@@ -182,29 +181,18 @@ function ScheduleForm(props: { initial: ScheduleSpec; onSaved(views: ScheduleVie
 
 export function SchedulesPage() {
   const [state, store] = useStore();
-  const [list, setList] = useState<ScheduleList>({ available: true, schedules: [] });
+  const list = state.schedules;
   const views = list.schedules;
-  const setViews = (schedules: ScheduleView[]) => setList({ ...list, schedules });
   const [editing, setEditing] = useState<ScheduleSpec | null>(null);
   const [shownHistory, setShownHistory] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<Message | null>(null);
 
-  useEffect(() => {
-    store.api.schedules().then(
-      (l) => setList(l),
-      (err: unknown) => setMessage({ kind: 'error', text: errorText(err) }),
-    );
-  }, []);
-
-  const act = async (fn: () => Promise<ScheduleList | void>) => {
-    setMessage(null);
-    try {
+  // The list arrives with every `schedules` frame; an answer here only makes the change show at once.
+  const act = (fn: () => Promise<ScheduleList | void>) =>
+    attempt(async () => {
       const l = await fn();
-      if (l) setList(l);
-    } catch (err) {
-      setMessage({ kind: 'error', text: errorText(err) });
-    }
-  };
+      if (l) store.set({ schedules: l });
+    }, setMessage);
   const firstPreset = state.presets.find((p) => p.profileId);
 
   return (
@@ -268,10 +256,7 @@ export function SchedulesPage() {
         <ScheduleForm
           initial={editing}
           onCancel={() => setEditing(null)}
-          onSaved={(v) => {
-            setViews(v);
-            setEditing(null);
-          }}
+          onSaved={() => setEditing(null)}
         />
       ) : !list.available ? null : firstPreset ? (
         <button type="button" class="primary" onClick={() => setEditing(blankSpec(firstPreset.profileId!, firstPreset.id))}>

@@ -5,7 +5,8 @@ import { connect, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { EventHub, LOOPBACK_FAILURE_DELAY_MS, startServer, WS_AUTH_TIMEOUT_MS, WS_CLOSE, WS_MAX_PAYLOAD, type LurkServer, type Route } from './server';
+import { EventHub } from './hub';
+import { LOOPBACK_FAILURE_DELAY_MS, startServer, WS_AUTH_TIMEOUT_MS, WS_CLOSE, WS_MAX_PAYLOAD, type LurkServer, type Route } from './server';
 
 const token = () => randomBytes(32).toString('base64url');
 

@@ -5,8 +5,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { checkCredentialsEnv, ENV_SCHEDULE_ID, EnvError, envSchedule, envWarnings, proxyFromEnv, runArgvWithEnv, serveEnv } from './env';
+import { checkCredentialsEnv, ENV_SCHEDULE_ID, EnvError, envWarnings, proxyFromEnv, runArgvWithEnv, serveEnv } from './env';
+import { envSchedule } from './schedule';
 import { parseRunArgs } from './run';
+import { findSite } from './sites';
 
 const TOKEN = 'abcdefghijklmnopqrstuvwxyz0123456789-_ABCDE';
 
@@ -89,7 +91,7 @@ describe('lurk serve environment', () => {
   });
 
   it('builds the schedule from the defaults the variable table gives', () => {
-    const s = envSchedule({ LURK_RUNS_PER_DAY: '2' }, 'Asia/Shanghai')!;
+    const s = envSchedule({ LURK_RUNS_PER_DAY: '2' }, 'Asia/Shanghai', (id) => findSite(id)?.builtinCategories ?? [])!;
     expect(s.spec).toMatchObject({
       id: ENV_SCHEDULE_ID,
       profileId: 'linuxdo/default',
@@ -100,7 +102,8 @@ describe('lurk serve environment', () => {
     });
     expect(s.preset).toMatchObject({ siteId: 'linuxdo', browseMode: 'deep', runMode: { kind: 'topics', min: 15, max: 40 } });
     expect(s.preset.interaction.like).toMatchObject({ enabled: false, topicRate: 30 });
-    expect(s.categoryTokens).toBeNull();
+    // No LURK_CATEGORIES: the site's default categories.
+    expect(s.preset.categoryPaths).toEqual((findSite('linuxdo')!.builtinCategories ?? []).filter((c) => c.enabledByDefault).map((c) => c.path));
   });
 
   it('takes every scheduling variable', () => {
@@ -119,6 +122,7 @@ describe('lurk serve environment', () => {
         TZ: 'Europe/Berlin',
       },
       'UTC',
+      () => [{ name: 'bank', path: '/c/bank/6', id: 6, enabledByDefault: true }],
     )!;
     expect(s.spec).toMatchObject({
       profileId: 'docofcard/default',
@@ -128,7 +132,7 @@ describe('lurk serve environment', () => {
     });
     expect(s.preset).toMatchObject({ siteId: 'docofcard', browseMode: 'quick', runMode: { kind: 'time', minutes: 20 } });
     expect(s.preset.interaction.like).toMatchObject({ enabled: true, topicRate: 12 });
-    expect(s.categoryTokens).toEqual(['bank', '/c/card/7']);
+    expect(s.preset.categoryPaths).toEqual(['/c/bank/6', '/c/card/7']);
   });
 
   it.each([
@@ -136,6 +140,8 @@ describe('lurk serve environment', () => {
     [{ LURK_RUNS_PER_DAY: '2', LURK_WINDOW: '7-23' }, /LURK_WINDOW must be HH:MM-HH:MM/],
     [{ LURK_RUNS_PER_DAY: '2', LURK_JITTER_MIN: '-1' }, /LURK_JITTER_MIN must be a whole number/],
     [{ LURK_RUNS_PER_DAY: '2', LURK_RUN_ON_START: 'later' }, /LURK_RUN_ON_START must be true or false/],
+    [{ LURK_RUNS_PER_DAY: '2', LURK_LIKE_RATE: '120' }, /LURK_LIKE_RATE must be a percentage from 0 to 100, not "120"/],
+    [{ LURK_RUNS_PER_DAY: '2', LURK_CATEGORIES: 'nowhere' }, /LURK_\* schedule: Unknown category nowhere/],
   ])('rejects %o', (env, message) => {
     expect(() => envSchedule(env, 'UTC')).toThrow(message);
   });

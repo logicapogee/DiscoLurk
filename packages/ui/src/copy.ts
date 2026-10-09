@@ -1,6 +1,7 @@
 // Every user-facing string of the UI. The app ships in Chinese only.
 import type { ErrorCode, RunEvent, RunState } from '@disco-lurk/core';
 import type { LoginPhase } from '@disco-lurk/server/contract';
+import { ApiError } from './api';
 
 export const copy = {
   app: { name: 'DiscoLurk' },
@@ -321,8 +322,15 @@ export const copy = {
   },
   settings: {
     title: '设置',
-    notifications: '运行结束、失败或需要登录时发送系统通知',
-    closeToTray: '关闭窗口时隐藏到托盘（不退出）',
+    notifications: '运行结束、失败、需要登录或被跳过时发送系统通知',
+    notifyOnStart: '任务开始时也发送通知',
+    reading: '高级阅读参数',
+    readingHint: '新建预设时使用的默认值；已保存的预设不受影响。',
+    retention: '数据保留',
+    historyLimit: '保留的运行历史条数',
+    ledgerDays: '访问账本保留天数',
+    ledgerHint: '账本记录每个话题的访问结果，用于解释跳过原因与智能排序。',
+    days: '天',
     autostart: '开机自启（只显示托盘图标）',
     updateCheck: '启动后在后台检查更新',
     language: '语言',
@@ -364,4 +372,23 @@ export const copy = {
 
 export function apiMessage(code: string, fallback?: string): string {
   return copy.api[code] ?? fallback ?? code;
+}
+
+/** What an error from the API or anything else says to the user. */
+export function errorText(err: unknown): string {
+  if (err instanceof ApiError) return apiMessage(err.code, err.message);
+  return copy.common.error(err instanceof Error ? err.message : String(err));
+}
+
+export type Message = { kind: 'error' | 'ok' | 'info' | 'warn'; text: string };
+
+/** Runs `fn`, clearing the message first and showing the error if it fails; undefined then. */
+export async function attempt<T>(fn: () => Promise<T>, setMessage: (m: Message | null) => void): Promise<T | undefined> {
+  setMessage(null);
+  try {
+    return await fn();
+  } catch (err) {
+    setMessage({ kind: 'error', text: errorText(err) });
+    return undefined;
+  }
 }

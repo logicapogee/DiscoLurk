@@ -85,6 +85,23 @@ export interface WaitRange {
 /** The most reply floors liked per topic. */
 export const MAX_REPLY_LIKES = 4;
 
+/** Upper bounds every entry point (server schemas, UI inputs, CLI) applies to user-set numbers. */
+export const LIMITS = Object.freeze({
+  extraWaitSec: 60,
+  samplePerCategory: 50,
+  /** Topic targets; far beyond any day's browsing. */
+  topicsTarget: 10_000,
+  runsPerDay: 24,
+  jitterMin: 120,
+  minGapMin: 720,
+  graceMinutes: 1440,
+  /** The longest time target: one day. */
+  timeModeMax: 24 * 60,
+  nameLength: 60,
+  historyRuns: 1000,
+  ledgerDays: 365,
+});
+
 export interface InteractionPolicy {
   like: { enabled: boolean; topicRate: number; replyRate: number; maxReplies: number };
   /** Replies stay off unless the user has acknowledged that they post real messages under the account. */
@@ -110,6 +127,19 @@ export const EXPERIMENTS_OFF: Readonly<ExperimentFlags> = Object.freeze({
   refreshCategories: false,
   smartRanked: false,
 });
+
+/** Likes and replies off, at the field-tested rates they use once turned on. */
+export const DEFAULT_INTERACTION: Readonly<InteractionPolicy> = Object.freeze({
+  like: Object.freeze({ enabled: false, topicRate: 30, replyRate: 15, maxReplies: MAX_REPLY_LIKES }),
+  reply: Object.freeze({ enabled: false, rate: 5, riskAcknowledged: false }),
+});
+
+export const DEFAULT_EXTRA_WAIT: Readonly<WaitRange & { enabled: boolean }> = Object.freeze({ enabled: true, minSec: 1, maxSec: 3 });
+
+export const DEFAULT_SAMPLE: Readonly<{ min: number; max: number }> = Object.freeze({ min: 3, max: 8 });
+
+/** Runs end by themselves unless `endless` is chosen explicitly. */
+export const DEFAULT_RUN_MODE: Readonly<RunModeSpec> = Object.freeze({ kind: 'topics', min: 15, max: 40 });
 
 /** What a run does: browse mode, target, categories, interactions and waits. */
 export interface RunPreset {

@@ -89,6 +89,9 @@ export class PlanScheduler implements Scheduler {
     return this.state;
   }
 
+  /** The state as last written; an unchanged state is not written again. */
+  private saved: string | null = null;
+
   private persist(): Promise<void> {
     const now = this.deps.clock.now();
     for (const s of Object.values(this.state!.schedules)) {
@@ -97,7 +100,10 @@ export class PlanScheduler implements Scheduler {
       const oldest = new Date(now - PLAN_RETENTION_MS).toISOString().slice(0, 10);
       s.generatedDays = s.generatedDays.filter((d) => d >= oldest);
     }
-    return this.deps.store.save(structuredClone(this.state!));
+    const json = JSON.stringify(this.state);
+    if (json === this.saved) return Promise.resolve();
+    this.saved = json;
+    return this.deps.store.save(this.state!);
   }
 
   private iso(ms = this.deps.clock.now()): string {

@@ -23,7 +23,7 @@ import WebSocket from 'ws';
 import { createApp, defaultPreset, isNewer, type LurkApp, type ShellChannel } from './app';
 import type { ActiveRun, LoginView, RunRecord, ScheduleHistoryEntry, ScheduleList, ServerFrame, Settings, StoredPreset } from './contract';
 import { startServer, type LurkServer } from './server';
-import { RunHistory } from './store';
+import { DEFAULT_SETTINGS, RunHistory } from './store';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 /** Every kernel wait shrinks to a few milliseconds, so a fixture run takes real but short time. */
@@ -173,11 +173,12 @@ async function events(h: Harness) {
 }
 
 const preset = (over: Partial<StoredPreset> = {}): StoredPreset => ({
-  ...defaultPreset(site, categories),
+  ...defaultPreset(site, categories, DEFAULT_SETTINGS.reading),
   id: 'p1',
   name: '测试',
   profileId: 'fx/main',
   browserMode: 'headless',
+  runMode: { kind: 'endless' },
   extraWait: { enabled: false, minSec: 1, maxSec: 3 },
   ...over,
 });
@@ -195,7 +196,7 @@ describe('server API', () => {
     expect(sites.body.map((s) => s.site.id)).toEqual(['fx']);
     expect(sites.body[0]!.categories).toHaveLength(2);
     const d = await call<StoredPreset>('GET', '/sites/fx/default-preset');
-    expect(d.body).toMatchObject({ browseMode: 'deep', runMode: { kind: 'endless' }, categoryPaths: ['/c/a/1'] });
+    expect(d.body).toMatchObject({ browseMode: 'deep', runMode: { kind: 'topics', min: 15, max: 40 }, categoryPaths: ['/c/a/1'] });
     expect(d.body.interaction.like.enabled).toBe(false);
     expect(d.body.interaction.reply.enabled).toBe(false);
     expect((await call('GET', '/sites/nope/default-preset')).status).toBe(404);
@@ -379,6 +380,44 @@ describe('server API', () => {
     expect((await call('PUT', '/presets/p1', { preset: preset({ siteId: 'fy', profileId: null }) })).status).toBe(200);
   });
 
+  it('pushes run state as run frames, the ended run with its record, Profiles and schedules as lists', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset({ runMode: { kind: 'topics', min: 1, max: 1 } }) });
+    const ws = await events(h);
+    const runId = (await call<ActiveRun>('POST', '/runs', { presetId: 'p1' })).body.runId;
+    await ws.until((f) => f.type === 'run' && f.run.runId === runId && f.run.state === 'browsing');
+    const ended = (await ws.until((f) => f.type === 'run' && f.run.runId === runId && f.record !== undefined)) as Extract<ServerFrame, { type: 'run' }>;
+    expect(ended.record).toMatchObject({ runId, result: { outcome: ended.run.result!.outcome } });
+    const seqs = ws.frames.flatMap((f) => (f.type === 'event' && f.runId === runId ? [f.event.seq] : []));
+    expect(seqs).toEqual(seqs.map((_, i) => i + 1));
+
+    const before = ws.frames.length;
+    await call('POST', '/profiles/fx/main/inspect');
+    const profileFrames = ws.frames.slice(before).filter((f) => f.type === 'profiles-changed');
+    expect(profileFrames).toHaveLength(1);
+    expect(profileFrames[0]).toMatchObject({ profiles: [{ id: 'fx/main', health: { status: 'ready' } }] });
+
+    await call('PUT', '/schedules/s1', {
+      id: 's1',
+      name: 'n',
+      profileId: 'fx/main',
+      presetId: 'p1',
+      enabled: true,
+      browserMode: 'headless',
+      timezone: 'UTC',
+      trigger: { kind: 'cron', expression: '0 8 * * *' },
+      misfire: { policy: 'skip', graceMinutes: 30 },
+      overlap: 'skip',
+      unavailableDisplay: 'skip',
+      runOnStart: false,
+    });
+    await call('POST', '/schedules/s1/pause');
+    await ws.until((f) => f.type === 'schedules' && f.list.schedules[0]?.paused === true);
+    ws.ws.close();
+  });
+
   it('answers 409 when another process holds the Profile lock', async () => {
     const h = await boot();
     const call = api(h);
@@ -512,9 +551,11 @@ describe('server API', () => {
   it('saves settings, tells the shell and rotates the token', async () => {
     const h = await boot();
     const call = api(h);
-    const put = await call<Settings>('PUT', '/settings', { closeToTray: false, notifications: false });
-    expect(put.body).toMatchObject({ closeToTray: false, notifications: false, updateCheck: true });
-    expect(h.shell.settings.at(-1)?.closeToTray).toBe(false);
+    const put = await call<Settings>('PUT', '/settings', { notifyOnStart: false, notifications: false, historyLimit: 50 });
+    expect(put.body).toMatchObject({ notifyOnStart: false, notifications: false, updateCheck: true, historyLimit: 50 });
+    expect(h.shell.settings.at(-1)?.notifyOnStart).toBe(false);
+    expect((await call('PUT', '/settings', { closeToTray: false })).status).toBe(422);
+    expect((await call('PUT', '/settings', { reading: { samplePerCategory: { min: 1, max: 51 }, extraWait: { enabled: true, minSec: 1, maxSec: 3 } } })).status).toBe(422);
     expect((await call('PUT', '/settings', { language: 'en' })).status).toBe(422);
 
     const rotated = await call<{ token: string }>('POST', '/token/rotate');

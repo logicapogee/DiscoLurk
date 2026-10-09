@@ -1,25 +1,11 @@
 import { createWriteStream, type WriteStream } from 'node:fs';
 import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { processAlive, writeJsonAtomic } from '@disco-lurk/config';
-import { emptyStats, type BrowserChannel, type Profile, type ProfileHealth, type ProfileId, type RunStats } from '@disco-lurk/core';
+import { JsonFile, processAlive, runPresetSchema, siteSchema } from '@disco-lurk/config';
+import { DEFAULT_EXTRA_WAIT, DEFAULT_SAMPLE, emptyStats, type Profile, type ProfileHealth, type ProfileId, type RunStats, type Site } from '@disco-lurk/core';
+import { z } from 'zod';
 import type { LoggedEvent, ProfileCreate, ProfilePatch, ProfileView, RunRecord, Settings, StoredPreset } from './contract';
-import { HttpError } from './server';
-
-async function readJson<T>(path: string): Promise<T | null> {
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch (err) {
-    throw new Error(`${path} is not valid JSON (${(err as Error).message}); fix or delete it`);
-  }
-}
+import { HttpError } from './hub';
 
 /** Writes are queued so two quick saves land in call order and never share a temp file. */
 class Serial {
@@ -31,47 +17,66 @@ class Serial {
   }
 }
 
+export const HISTORY_LIMIT = 200;
+export const LEDGER_DAYS = 30;
+
 export const DEFAULT_SETTINGS: Settings = {
   notifications: true,
-  closeToTray: true,
+  notifyOnStart: true,
   updateCheck: true,
   currentPresetId: null,
   language: 'zh-CN',
+  historyLimit: HISTORY_LIMIT,
+  ledgerDays: LEDGER_DAYS,
+  reading: { samplePerCategory: { ...DEFAULT_SAMPLE }, extraWait: { ...DEFAULT_EXTRA_WAIT } },
 };
 
-export class SettingsStore {
-  private value: Settings = { ...DEFAULT_SETTINGS };
-  private serial = new Serial();
+// Keys a future version no longer knows are dropped on load rather than failing it.
+const settingsFileSchema = z.object({ schemaVersion: z.literal(1), settings: z.record(z.string(), z.unknown()) });
 
-  constructor(private readonly path: string) {}
+export class SettingsStore {
+  private value: Settings = structuredClone(DEFAULT_SETTINGS);
+  private readonly file: JsonFile<typeof settingsFileSchema>;
+
+  constructor(path: string) {
+    this.file = new JsonFile(path, settingsFileSchema, 'settings file');
+  }
 
   async load(): Promise<Settings> {
-    const file = await readJson<{ schemaVersion: 1; settings: Partial<Settings> }>(this.path);
-    this.value = { ...DEFAULT_SETTINGS, ...(file?.settings ?? {}) };
+    const stored = (await this.file.load())?.settings ?? {};
+    const known = Object.fromEntries(Object.entries(stored).filter(([k]) => k in DEFAULT_SETTINGS));
+    this.value = { ...structuredClone(DEFAULT_SETTINGS), ...(known as Partial<Settings>) };
     return this.get();
   }
 
   get(): Settings {
-    return { ...this.value };
+    return structuredClone(this.value);
   }
 
   async update(patch: Partial<Settings>): Promise<Settings> {
-    this.value = { ...this.value, ...patch };
+    this.value = { ...this.value, ...structuredClone(patch) };
     const snapshot = this.get();
-    await this.serial.run(() => writeJsonAtomic(this.path, { schemaVersion: 1, settings: snapshot }));
+    await this.file.save({ schemaVersion: 1, settings: { ...snapshot } });
     return snapshot;
   }
 }
 
+/** Stored presets as written; the bounds the UI offers are checked when one is saved, not on load. */
+const storedPresetFileSchema = z.object({
+  schemaVersion: z.literal(1),
+  presets: z.array(runPresetSchema.extend({ name: z.string(), profileId: z.string().nullable(), browserMode: z.enum(['headed', 'headless']) })),
+});
+
 export class PresetStore {
   private presets = new Map<string, StoredPreset>();
-  private serial = new Serial();
+  private readonly file: JsonFile<typeof storedPresetFileSchema>;
 
-  constructor(private readonly path: string) {}
+  constructor(path: string) {
+    this.file = new JsonFile(path, storedPresetFileSchema, 'preset file');
+  }
 
   async load(): Promise<void> {
-    const file = await readJson<{ schemaVersion: 1; presets: StoredPreset[] }>(this.path);
-    this.presets = new Map((file?.presets ?? []).map((p) => [p.id, p]));
+    this.presets = new Map(((await this.file.load())?.presets ?? []).map((p) => [p.id, p]));
   }
 
   list(): StoredPreset[] {
@@ -84,8 +89,7 @@ export class PresetStore {
   }
 
   private persist(): Promise<void> {
-    const presets = this.list();
-    return this.serial.run(() => writeJsonAtomic(this.path, { schemaVersion: 1, presets }));
+    return this.file.save({ schemaVersion: 1, presets: this.list() });
   }
 
   async put(preset: StoredPreset): Promise<void> {
@@ -100,11 +104,41 @@ export class PresetStore {
   }
 }
 
-interface ProfileMeta {
-  channel: BrowserChannel;
-  proxy?: string;
-  health?: ProfileHealth;
+/** Discourse sites the user added, kept beside the built-in ones. */
+const sitesFileSchema = z.object({ schemaVersion: z.literal(1), sites: z.array(siteSchema) });
+
+export class SiteStore {
+  private sites: Site[] = [];
+  private readonly file: JsonFile<typeof sitesFileSchema>;
+
+  constructor(path: string) {
+    this.file = new JsonFile(path, sitesFileSchema, 'sites file');
+  }
+
+  async load(): Promise<Site[]> {
+    this.sites = ((await this.file.load())?.sites ?? []) as Site[];
+    return this.list();
+  }
+
+  list(): Site[] {
+    return structuredClone(this.sites);
+  }
+
+  async add(site: Site): Promise<void> {
+    this.sites = [...this.sites.filter((s) => s.id !== site.id), structuredClone(site)];
+    await this.file.save({ schemaVersion: 1, sites: this.sites });
+  }
 }
+
+const profileMetaSchema = z.object({
+  channel: z.enum(['chrome', 'msedge']),
+  proxy: z.string().exactOptional(),
+  health: z
+    .object({ profileId: z.string(), status: z.enum(['ready', 'needs-auth', 'locked', 'recovering', 'broken']), username: z.string().exactOptional(), checkedAt: z.string() })
+    .exactOptional(),
+});
+type ProfileMeta = z.output<typeof profileMetaSchema>;
+const profilesFileSchema = z.object({ schemaVersion: z.literal(1), profiles: z.record(z.string(), profileMetaSchema) });
 
 /** Reports the live process holding a Profile directory, or null when none does. */
 export type LockHolder = (profileDir: string) => Promise<number | null>;
@@ -116,19 +150,20 @@ export type LockHolder = (profileDir: string) => Promise<number | null>;
  */
 export class ProfileRegistry {
   private meta: Record<ProfileId, ProfileMeta> = {};
-  private serial = new Serial();
+  private readonly file: JsonFile<typeof profilesFileSchema>;
 
   constructor(
-    private readonly metaPath: string,
+    metaPath: string,
     private readonly profilesDir: string,
     private readonly backupsDir: string,
     private readonly siteIds: () => string[],
     private readonly lockHolder: LockHolder,
-  ) {}
+  ) {
+    this.file = new JsonFile(metaPath, profilesFileSchema, 'Profile file');
+  }
 
   async load(): Promise<void> {
-    const file = await readJson<{ schemaVersion: 1; profiles: Record<ProfileId, ProfileMeta> }>(this.metaPath);
-    this.meta = file?.profiles ?? {};
+    this.meta = (await this.file.load())?.profiles ?? {};
   }
 
   dirOf(profileId: ProfileId): string {
@@ -137,8 +172,7 @@ export class ProfileRegistry {
   }
 
   private persist(): Promise<void> {
-    const profiles = structuredClone(this.meta);
-    return this.serial.run(() => writeJsonAtomic(this.metaPath, { schemaVersion: 1, profiles }));
+    return this.file.save({ schemaVersion: 1, profiles: this.meta });
   }
 
   private async ids(): Promise<ProfileId[]> {
@@ -204,6 +238,12 @@ export class ProfileRegistry {
     await this.persist();
   }
 
+  /** The last health check of the Profile, if one ran. */
+  health(profileId: ProfileId): ProfileHealth | undefined {
+    const h = this.meta[profileId]?.health;
+    return h ? structuredClone(h) : undefined;
+  }
+
   async setHealth(health: ProfileHealth): Promise<void> {
     this.meta[health.profileId] = { ...(this.meta[health.profileId] ?? { channel: 'chrome' }), health };
     await this.persist();
@@ -232,8 +272,6 @@ export function splitProfileId(profileId: ProfileId): { siteId: string; name: st
   if (!siteId || !name || rest.length > 0 || !NAME.test(name)) throw new HttpError(400, 'invalid-profile-id', `Invalid Profile id ${profileId}`);
   return { siteId, name };
 }
-
-export const HISTORY_LIMIT = 200;
 
 const safeName = (runId: string) => runId.replace(/[^A-Za-z0-9_-]/g, '_');
 
@@ -291,7 +329,7 @@ export class RunHistory {
 
   constructor(
     private readonly dir: string,
-    private readonly limit = HISTORY_LIMIT,
+    private readonly limitOf: number | (() => number) = HISTORY_LIMIT,
     private readonly log: (message: string) => void = () => {},
   ) {}
 
@@ -320,6 +358,11 @@ export class RunHistory {
           return [];
         }
       });
+  }
+
+  /** Runs kept; it can change while the app runs, as a setting. */
+  private get limit(): number {
+    return typeof this.limitOf === 'number' ? this.limitOf : this.limitOf();
   }
 
   list(limit = this.limit): RunRecord[] {

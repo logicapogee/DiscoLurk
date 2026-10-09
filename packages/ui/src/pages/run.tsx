@@ -1,19 +1,13 @@
-import { MAX_REPLY_LIKES, type BrowseMode, type BrowserMode, type RunModeSpec } from '@disco-lurk/core';
+import type { BrowseMode, BrowserMode } from '@disco-lurk/core';
 import type { ActiveRun, StoredPreset } from '@disco-lurk/server/contract';
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { ApiError } from '../api';
-import { Field, Notice, NumberInput, Segmented, Select, Toggle } from '../components/fields';
-import { ReplyRiskDialog } from '../components/dialog';
+import { Field, Notice, Segmented, Select } from '../components/fields';
 import { LogPanel } from '../components/log';
+import { ExtraWaitField, InteractionField, RunModeField, SampleField } from '../components/preset-fields';
 import { LevelTable, StatsPanel } from '../components/stats';
-import { apiMessage, copy } from '../copy';
-import { duration, lastStats, levelsOf, remainingText, runModeSpecText, runModeText } from '../format';
+import { apiMessage, attempt, copy, errorText, type Message } from '../copy';
+import { duration, remainingText, runModeSpecText, runModeText } from '../format';
 import { useStore } from '../store';
-
-function errorText(err: unknown): string {
-  if (err instanceof ApiError) return apiMessage(err.code, err.message);
-  return copy.common.error(err instanceof Error ? err.message : String(err));
-}
 
 /** The run to show for a preset: the one running now, else the newest that finished. */
 function runFor(runs: Record<string, ActiveRun>, presetId: string): ActiveRun | undefined {
@@ -27,8 +21,7 @@ export function RunPage() {
   const current = state.presets.find((p) => p.id === state.settings.currentPresetId);
   const [siteId, setSiteId] = useState(current?.siteId ?? state.sites[0]?.site.id ?? '');
   const [draft, setDraft] = useState<StoredPreset | null>(null);
-  const [askReply, setAskReply] = useState(false);
-  const [message, setMessage] = useState<{ kind: 'error' | 'ok' | 'info'; text: string } | null>(null);
+  const [message, setMessage] = useState<Message | null>(null);
   const [pending, setPending] = useState<'start' | 'refresh' | null>(null);
   const [proxy, setProxy] = useState('');
   const [naming, setNaming] = useState<string | null>(null);
@@ -41,7 +34,8 @@ export function RunPage() {
   const run = draft ? runFor(state.runs, draft.id) : undefined;
   const running = run !== undefined && !run.result;
   const events = run ? (state.events[run.runId] ?? []) : [];
-  const stats = run?.result?.stats ?? lastStats(events);
+  const live = run ? state.live[run.runId] : undefined;
+  const stats = run?.result?.stats ?? live?.stats;
 
   // Picks the preset to edit when the site changes: the current one, any saved one, or the default.
   useEffect(() => {
@@ -73,15 +67,6 @@ export function RunPage() {
 
   const update = (patch: Partial<StoredPreset>) => setDraft({ ...draft, ...patch });
   const interaction = draft.interaction;
-  const setLike = (patch: Partial<StoredPreset['interaction']['like']>) => update({ interaction: { ...interaction, like: { ...interaction.like, ...patch } } });
-  const setReply = (patch: Partial<StoredPreset['interaction']['reply']>) => update({ interaction: { ...interaction, reply: { ...interaction.reply, ...patch } } });
-  const setRunMode = (runMode: RunModeSpec) => update({ runMode });
-
-  const toggleReply = (on: boolean) => {
-    // Turning replies on waits for the risk dialog; cancelling leaves them off.
-    if (on) setAskReply(true);
-    else setReply({ enabled: false, riskAcknowledged: false });
-  };
 
   const save = async (d: StoredPreset) => {
     const saved = await api.savePreset(d);
@@ -90,29 +75,21 @@ export function RunPage() {
   };
 
   const start = async () => {
-    setMessage(null);
     if (!draft.profileId) return setMessage({ kind: 'error', text: apiMessage('no-profile') });
     setPending('start');
-    try {
-      const saved = await save(draft);
-      const started = await api.startRun(saved.id);
+    await attempt(async () => {
+      const started = await api.startRun((await save(draft)).id);
       store.set({ runs: { ...store.state.runs, [started.runId]: started } });
-    } catch (err) {
-      setMessage({ kind: 'error', text: errorText(err) });
-    } finally {
-      setPending(null);
-    }
+    }, setMessage);
+    setPending(null);
   };
 
-  const stop = async () => {
-    if (!run) return;
-    try {
+  const stop = () =>
+    run &&
+    attempt(async () => {
       const v = await api.stopRun(run.runId);
       store.set({ runs: { ...store.state.runs, [v.runId]: v } });
-    } catch (err) {
-      setMessage({ kind: 'error', text: errorText(err) });
-    }
-  };
+    }, setMessage);
 
   const refreshCategories = async () => {
     if (!draft.profileId) return setMessage({ kind: 'error', text: apiMessage('no-profile') });
@@ -131,12 +108,10 @@ export function RunPage() {
 
   const saveProxy = async () => {
     if (!profile || proxy === (profile.proxy ?? '')) return;
-    try {
+    await attempt(async () => {
       await api.patchProfile(profile.id, { proxy: proxy.trim() || null });
       await store.refreshProfiles();
-    } catch (err) {
-      setMessage({ kind: 'error', text: errorText(err) });
-    }
+    }, setMessage);
   };
 
   // An inline name field: WKWebView has no window.prompt.
@@ -144,12 +119,8 @@ export function RunPage() {
     setNaming(null);
     if (!name.trim()) return;
     const id = `${siteId}-${Date.now().toString(36)}`;
-    try {
-      const saved = await save({ ...draft, id, name: name.trim() });
-      setDraft(saved);
-    } catch (err) {
-      setMessage({ kind: 'error', text: errorText(err) });
-    }
+    const saved = await attempt(() => save({ ...draft, id, name: name.trim() }), setMessage);
+    if (saved) setDraft(saved);
   };
 
   const elapsedMs = run ? (run.result?.stats.elapsedMs ?? Date.now() - Date.parse(run.startedAt)) : 0;
@@ -168,15 +139,6 @@ export function RunPage() {
   return (
     <div class="page run-page">
       <h1>{copy.run.title}</h1>
-      {askReply && (
-        <ReplyRiskDialog
-          onConfirm={() => {
-            setAskReply(false);
-            setReply({ enabled: true, riskAcknowledged: true });
-          }}
-          onCancel={() => setAskReply(false)}
-        />
-      )}
       <div class="columns">
         <form class="panel settings-form" onSubmit={(e) => e.preventDefault()} aria-label={copy.run.title}>
           <fieldset disabled={locked}>
@@ -256,58 +218,13 @@ export function RunPage() {
                 ))}
               </div>
             </Field>
-            <Field label={copy.run.runMode} hint={draft.runMode.kind === 'topics' ? copy.run.topicsHint[draft.browseMode] : undefined}>
-              <Segmented
-                label={copy.run.runMode}
-                value={draft.runMode.kind}
-                options={(['endless', 'topics', 'time'] as const).map((k) => ({ value: k, label: copy.run.runModes[k] }))}
-                onChange={(k) => setRunMode(k === 'endless' ? { kind: 'endless' } : k === 'topics' ? { kind: 'topics', min: 50, max: 50 } : { kind: 'time', minutes: 30 })}
-              />
-              {draft.runMode.kind === 'topics' && (
-                <div class="row">
-                  <NumberInput label={`${copy.run.topicsRange} min`} value={draft.runMode.min} min={1} max={10000} onChange={(min) => setRunMode({ kind: 'topics', min, max: Math.max(min, (draft.runMode as { max: number }).max) })} />
-                  <span>{copy.common.to}</span>
-                  <NumberInput label={`${copy.run.topicsRange} max`} value={draft.runMode.max} min={draft.runMode.min} max={10000} onChange={(max) => setRunMode({ kind: 'topics', min: (draft.runMode as { min: number }).min, max })} />
-                </div>
-              )}
-              {draft.runMode.kind === 'time' && (
-                <NumberInput label={copy.run.timeMinutes} value={draft.runMode.minutes} min={1} max={1440} suffix={copy.common.minutes} onChange={(minutes) => setRunMode({ kind: 'time', minutes })} />
-              )}
-            </Field>
+            <RunModeField value={draft.runMode} browseMode={draft.browseMode} onChange={(runMode) => update({ runMode })} />
             <Field label={copy.run.browseMode}>
               <Segmented label={copy.run.browseMode} value={draft.browseMode} options={(['deep', 'quick'] as BrowseMode[]).map((m) => ({ value: m, label: copy.run.browseModes[m] }))} onChange={(browseMode) => update({ browseMode })} />
             </Field>
             <Field label={copy.run.interaction}>
-              <Toggle label={copy.run.like} checked={interaction.like.enabled} onChange={(enabled) => setLike({ enabled })} />
-              {interaction.like.enabled && (
-                <div class="sub">
-                  <label>
-                    {copy.run.likeRate} <NumberInput label={copy.run.likeRate} value={interaction.like.topicRate} min={0} max={100} suffix="%" onChange={(topicRate) => setLike({ topicRate })} />
-                  </label>
-                  <label>
-                    {copy.run.replyLikeRate} <NumberInput label={copy.run.replyLikeRate} value={interaction.like.replyRate} min={0} max={100} suffix="%" onChange={(replyRate) => setLike({ replyRate })} />
-                  </label>
-                  <label>
-                    {copy.run.replyLikeMax} <NumberInput label={copy.run.replyLikeMax} value={interaction.like.maxReplies} min={0} max={MAX_REPLY_LIKES} onChange={(maxReplies) => setLike({ maxReplies })} />
-                  </label>
-                </div>
-              )}
-              <Toggle label={copy.run.reply} checked={interaction.reply.enabled} onChange={toggleReply} />
-              {interaction.reply.enabled && (
-                <div class="sub">
-                  <label>
-                    {copy.run.replyRate} <NumberInput label={copy.run.replyRate} value={interaction.reply.rate} min={0} max={100} suffix="%" onChange={(rate) => setReply({ rate })} />
-                  </label>
-                </div>
-              )}
-              <Toggle label={copy.run.extraWait} checked={draft.extraWait.enabled} onChange={(enabled) => update({ extraWait: { ...draft.extraWait, enabled } })} />
-              {draft.extraWait.enabled && (
-                <div class="sub">
-                  <NumberInput label={`${copy.run.extraWaitRange} min`} value={draft.extraWait.minSec} min={0} max={60} suffix={copy.common.seconds} onChange={(minSec) => update({ extraWait: { ...draft.extraWait, minSec, maxSec: Math.max(minSec, draft.extraWait.maxSec) } })} />
-                  <span>{copy.common.to}</span>
-                  <NumberInput label={`${copy.run.extraWaitRange} max`} value={draft.extraWait.maxSec} min={draft.extraWait.minSec} max={60} suffix={copy.common.seconds} onChange={(maxSec) => update({ extraWait: { ...draft.extraWait, maxSec } })} />
-                </div>
-              )}
+              <InteractionField value={interaction} onChange={(i) => update({ interaction: i })} />
+              <ExtraWaitField value={draft.extraWait} onChange={(extraWait) => update({ extraWait })} />
             </Field>
             <Field label={copy.run.browser} hint={headlessOnly ? copy.run.headlessOnlyHint : undefined}>
               <Segmented
@@ -319,13 +236,7 @@ export function RunPage() {
             </Field>
             <details class="advanced">
               <summary>{copy.run.advanced}</summary>
-              <Field label={copy.run.sample}>
-                <div class="row">
-                  <NumberInput label={`${copy.run.sample} min`} value={draft.samplePerCategory.min} min={1} max={50} onChange={(min) => update({ samplePerCategory: { min, max: Math.max(min, draft.samplePerCategory.max) } })} />
-                  <span>{copy.common.to}</span>
-                  <NumberInput label={`${copy.run.sample} max`} value={draft.samplePerCategory.max} min={draft.samplePerCategory.min} max={50} onChange={(max) => update({ samplePerCategory: { ...draft.samplePerCategory, max } })} />
-                </div>
-              </Field>
+              <SampleField value={draft.samplePerCategory} onChange={(samplePerCategory) => update({ samplePerCategory })} />
             </details>
           </fieldset>
         </form>
@@ -382,7 +293,7 @@ export function RunPage() {
             </div>
           )}
           {stats && <StatsPanel stats={stats} />}
-          {run && <LevelTable levels={run.result?.levels ?? levelsOf(events)} baseline={run.result?.baseline ?? null} stats={stats} events={events} />}
+          {run && <LevelTable levels={run.result?.levels ?? live?.levels ?? { initial: null, final: null }} baseline={run.result?.baseline ?? null} stats={stats} events={events} />}
         </div>
       </div>
       {run && <LogPanel api={api} runId={run.runId} events={events} />}

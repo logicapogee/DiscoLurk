@@ -7,3 +7,4 @@ export * from './logins';
 export * from './schedules';
 export * from './app';
 export * from './schemas';
+export * from './hub';

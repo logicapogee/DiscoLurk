@@ -1,7 +1,7 @@
 import { isAbortError, LOGIN_WAIT_MS, toFailure, type AuthResult, type AuthSession, type Clock, type ProfileHealth, type ProfileId, type RunCoordinator } from '@disco-lurk/core';
 import type { LoginView } from './contract';
 import type { ProfileGate } from './runs';
-import { EventHub, HttpError } from './server';
+import { EventHub, HttpError } from './hub';
 
 export interface LoginManagerDeps {
   coordinator: RunCoordinator;

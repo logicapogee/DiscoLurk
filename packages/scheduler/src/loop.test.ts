@@ -2,7 +2,7 @@ import { seededRandom, type ScheduleSpec } from '@disco-lurk/core';
 import { VirtualTime } from '@disco-lurk/core/testing';
 import { describe, expect, it } from 'vitest';
 import { at, preset, spec } from './contract';
-import { driveScheduler } from './loop';
+import { driveScheduler, LoopWaker } from './loop';
 import { PlanScheduler } from './scheduler';
 import { MemoryScheduleStore } from './store';
 
@@ -103,6 +103,53 @@ describe('driveScheduler', () => {
     expect(started).toEqual(['good']);
     expect(scheduler.history('bad').at(-1)).toMatchObject({ outcome: 'skipped', reason: 'start-failed' });
     expect(logs).toEqual(['scheduler: schedule bad: Profile linuxdo/bad is in use']);
+  });
+
+  it('applies definitions at once when woken, and answers the wake after that step', async () => {
+    const { time, started, scheduler } = setup();
+    const ctrl = new AbortController();
+    const waker = new LoopWaker();
+    let specs: ScheduleSpec[] = [];
+    let wokenAt: number | null = null;
+    time.at(60_000, () => {
+      specs = [spec({ trigger: { kind: 'cron', expression: '30 7 * * *' } })];
+      void waker.wake().then(() => {
+        wokenAt = time.clock.now();
+        expect(scheduler.views().map((v) => v.spec.id)).toEqual(['s1']);
+      });
+    });
+    time.at(2 * 3_600_000, () => ctrl.abort());
+    await time.drive(driveScheduler({ scheduler, loadSpecs: async () => specs, sleeper: time.sleeper, intervalMs: 30 * 60_000, signal: ctrl.signal, waker, log: () => {} }));
+    // Woken a minute in, well before the half-hour step would have read the change.
+    expect(wokenAt).toBe(at('2026-10-08', '06:59') + 60_000);
+    expect(started).toEqual([new Date(at('2026-10-08', '07:30')).toISOString()]);
+  });
+});
+
+describe('PlanScheduler persistence', () => {
+  it('writes the state only when a step changed it', async () => {
+    const time = new VirtualTime(at('2026-10-08', '06:00'));
+    const store = new MemoryScheduleStore();
+    let saves = 0;
+    const counting = { load: () => store.load(), save: (s: Parameters<MemoryScheduleStore['save']>[0]) => (saves++, store.save(s)) };
+    const scheduler = new PlanScheduler({
+      clock: time.clock,
+      random: seededRandom(3),
+      store: counting,
+      newId: () => 'id',
+      loadPreset: () => ({ preset: preset(5, 5), categories: [] }),
+      siteOf: () => 'linuxdo',
+      profileBusy: () => false,
+      displayAvailable: () => true,
+      startRun: () => 'run',
+    });
+    await scheduler.reconcile([spec({ trigger: { kind: 'cron', expression: '0 8 * * *' } })]);
+    const afterReconcile = saves;
+    expect(afterReconcile).toBeGreaterThan(0);
+    for (let i = 0; i < 5; i++) await scheduler.tick();
+    expect(saves).toBe(afterReconcile);
+    await scheduler.pause('s1');
+    expect(saves).toBe(afterReconcile + 1);
   });
 });
 

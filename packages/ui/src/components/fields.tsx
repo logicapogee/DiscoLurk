@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useId } from 'preact/hooks';
+import { copy } from '../copy';
 
 export function Field(props: { label: string; hint?: string | undefined; children: ComponentChildren }) {
   return (
@@ -59,6 +60,31 @@ export function NumberInput(props: {
       />
       {props.suffix && <span class="suffix">{props.suffix}</span>}
     </span>
+  );
+}
+
+/**
+ * A min–max pair: raising the minimum past the maximum pulls the maximum along, and the maximum
+ * never goes below the minimum.
+ */
+export function RangeInput(props: {
+  label: string;
+  value: { min: number; max: number };
+  lo: number;
+  hi: number;
+  step?: number;
+  suffix?: string;
+  disabled?: boolean;
+  onChange(value: { min: number; max: number }): void;
+}) {
+  const { min, max } = props.value;
+  const common = { step: props.step ?? 1, ...(props.suffix ? { suffix: props.suffix } : {}), ...(props.disabled ? { disabled: true } : {}) };
+  return (
+    <div class="row">
+      <NumberInput label={`${props.label} min`} value={min} min={props.lo} max={props.hi} {...common} onChange={(v) => props.onChange({ min: v, max: Math.max(v, max) })} />
+      <span>{copy.common.to}</span>
+      <NumberInput label={`${props.label} max`} value={max} min={min} max={props.hi} {...common} onChange={(v) => props.onChange({ min, max: v })} />
+    </div>
   );
 }
 

@@ -64,9 +64,10 @@ function TokenForm(props: { error?: string | undefined; onSubmit(token: string):
 }
 
 function Shell(props: { conn: SidecarConnection | null; notice?: string | undefined; onLogout?: (() => void) | undefined; onTokenRotated(token: string): void }) {
-  const [state] = useStore();
+  // The shell redraws for its badges and the connection notice only, never for each run event.
+  const [state] = useStore((s) => ({ running: Object.values(s.runs).filter((r) => !r.result).length, newer: s.update?.newer === true, stream: s.stream }));
   const [page, setPage] = useState<Page>('run');
-  const running = Object.values(state.runs).filter((r) => !r.result).length;
+  const running = state.running;
   return (
     <div class="shell">
       <nav class="sidebar" aria-label="主导航">
@@ -75,7 +76,7 @@ function Shell(props: { conn: SidecarConnection | null; notice?: string | undefi
           <button key={p} type="button" class={`nav${p === page ? ' on' : ''}`} aria-current={p === page ? 'page' : undefined} onClick={() => setPage(p)}>
             {copy.nav[p]}
             {p === 'run' && running > 0 && <span class="count">{running}</span>}
-            {p === 'about' && state.update?.newer && <span class="count">新</span>}
+            {p === 'about' && state.newer && <span class="count">新</span>}
           </button>
         ))}
         {props.onLogout && (

@@ -105,12 +105,20 @@ export interface LoginView {
 }
 
 export interface Settings {
+  /** Native notifications for runs that end, fail, need a sign-in or are skipped. */
   notifications: boolean;
-  closeToTray: boolean;
+  /** Also notify when a run starts; only applies while `notifications` is on. */
+  notifyOnStart: boolean;
   updateCheck: boolean;
   /** The preset the tray's start entry runs; the last one started from the UI. */
   currentPresetId: string | null;
   language: 'zh-CN';
+  /** Runs kept in history, with their event logs. */
+  historyLimit: number;
+  /** Days a Profile's visit ledger remembers a topic. */
+  ledgerDays: number;
+  /** What new presets start with for the advanced reading parameters. */
+  reading: { samplePerCategory: { min: number; max: number }; extraWait: { enabled: boolean; minSec: number; maxSec: number } };
 }
 
 export interface UpdateInfo {
@@ -157,9 +165,11 @@ export type ServerFrame =
   | { type: 'auth-ok' }
   | { type: 'heartbeat'; at: string }
   | { type: 'event'; runId: RunId; event: LoggedEvent }
-  | { type: 'run'; run: ActiveRun }
+  /** Every state change of a run; once it has ended, `record` is the history entry it left. */
+  | { type: 'run'; run: ActiveRun; record?: RunRecord }
   | { type: 'login'; login: LoginView }
-  | { type: 'profiles-changed' }
+  | { type: 'profiles-changed'; profiles: ProfileView[] }
+  | { type: 'schedules'; list: ScheduleList }
   | { type: 'settings'; settings: Settings };
 
 export const HEARTBEAT_MS = 15_000;

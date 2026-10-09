@@ -1,8 +1,10 @@
 import type { Settings } from '@disco-lurk/server/contract';
 import { useEffect, useState } from 'preact/hooks';
 import type { DoctorReport } from '../api';
-import { Field, Notice, Select, Toggle } from '../components/fields';
-import { copy } from '../copy';
+import { LIMITS } from '@disco-lurk/core';
+import { Field, Notice, NumberInput, Select, Toggle } from '../components/fields';
+import { ExtraWaitField, SampleField } from '../components/preset-fields';
+import { copy, errorText } from '../copy';
 import { platform } from '../platform';
 import { useStore } from '../store';
 
@@ -45,7 +47,7 @@ export function SettingsPage(props: { onTokenRotated(token: string): void }) {
     try {
       store.set({ settings: await store.api.saveSettings(patch) });
     } catch (err) {
-      setError(copy.common.error(err instanceof Error ? err.message : String(err)));
+      setError(errorText(err));
     }
   };
 
@@ -56,7 +58,7 @@ export function SettingsPage(props: { onTokenRotated(token: string): void }) {
       // The desktop shell learns the new token itself; only a remote user needs to see it.
       if (!platform.desktop) setRotated(token);
     } catch (err) {
-      setError(copy.common.error(err instanceof Error ? err.message : String(err)));
+      setError(errorText(err));
     }
   };
 
@@ -66,7 +68,7 @@ export function SettingsPage(props: { onTokenRotated(token: string): void }) {
       {error && <Notice kind="error">{error}</Notice>}
       <section class="panel">
         <Toggle label={copy.settings.notifications} checked={s.notifications} disabled={!platform.desktop} onChange={(notifications) => save({ notifications })} />
-        <Toggle label={copy.settings.closeToTray} checked={s.closeToTray} disabled={!platform.desktop} onChange={(closeToTray) => save({ closeToTray })} />
+        <Toggle label={copy.settings.notifyOnStart} checked={s.notifyOnStart} disabled={!platform.desktop || !s.notifications} onChange={(notifyOnStart) => save({ notifyOnStart })} />
         <Toggle
           label={copy.settings.autostart}
           checked={autostart === true}
@@ -77,6 +79,27 @@ export function SettingsPage(props: { onTokenRotated(token: string): void }) {
         {!platform.desktop && <p class="hint">{copy.settings.desktopOnly}</p>}
         <Field label={copy.settings.language}>
           <Select label={copy.settings.language} value="zh-CN" disabled options={[{ value: 'zh-CN', label: copy.settings.languageZh }]} onChange={() => {}} />
+        </Field>
+      </section>
+      <section class="panel">
+        <div class="panel-head">
+          <h3>{copy.settings.reading}</h3>
+        </div>
+        <p class="hint">{copy.settings.readingHint}</p>
+        <SampleField value={s.reading.samplePerCategory} onChange={(samplePerCategory) => save({ reading: { ...s.reading, samplePerCategory } })} />
+        <Field label={copy.run.extraWait}>
+          <ExtraWaitField value={s.reading.extraWait} onChange={(extraWait) => save({ reading: { ...s.reading, extraWait } })} />
+        </Field>
+      </section>
+      <section class="panel">
+        <div class="panel-head">
+          <h3>{copy.settings.retention}</h3>
+        </div>
+        <Field label={copy.settings.historyLimit}>
+          <NumberInput label={copy.settings.historyLimit} value={s.historyLimit} min={10} max={LIMITS.historyRuns} onChange={(historyLimit) => save({ historyLimit })} />
+        </Field>
+        <Field label={copy.settings.ledgerDays} hint={copy.settings.ledgerHint}>
+          <NumberInput label={copy.settings.ledgerDays} value={s.ledgerDays} min={1} max={LIMITS.ledgerDays} suffix={copy.settings.days} onChange={(ledgerDays) => save({ ledgerDays })} />
         </Field>
       </section>
       <section class="panel">

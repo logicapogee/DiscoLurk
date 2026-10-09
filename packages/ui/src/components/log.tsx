@@ -1,5 +1,6 @@
 import type { RunEvent } from '@disco-lurk/core';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import type { LoggedEvent } from '@disco-lurk/server/contract';
 import type { Api } from '../api';
 import { copy } from '../copy';
 import { clockTime, eventText } from '../format';
@@ -28,7 +29,7 @@ async function exportLog(api: Api, runId: string, types: string[]): Promise<stri
   return '';
 }
 
-export function LogPanel(props: { api: Api; runId: string; events: readonly RunEvent[] }) {
+export function LogPanel(props: { api: Api; runId: string; events: readonly LoggedEvent[] }) {
   const [types, setTypes] = useState<Set<RunEvent['type']>>(new Set(DEFAULT_TYPES));
   const [note, setNote] = useState('');
   const box = useRef<HTMLDivElement>(null);
@@ -71,8 +72,8 @@ export function LogPanel(props: { api: Api; runId: string; events: readonly RunE
       {note && <div class="hint">{note}</div>}
       <div class="log" ref={box} role="log" aria-live="polite">
         {tail.length === 0 && <div class="muted">{copy.log.empty}</div>}
-        {tail.map((e, i) => (
-          <div key={i} class={`line ${level(e)}`}>
+        {tail.map((e) => (
+          <div key={e.seq} class={`line ${level(e)}`}>
             <span class="time">{clockTime(e.at)}</span>
             <span class="kind">{copy.log.types[e.type]}</span>
             <span>{eventText(e)}</span>

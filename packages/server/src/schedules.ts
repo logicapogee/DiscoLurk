@@ -8,10 +8,10 @@ import {
   type TriggerCause,
 } from '@disco-lurk/core';
 import { openScheduler, SchedulerLockedError, type OpenedScheduler, type ScheduleBook } from '@disco-lurk/config';
-import { driveScheduler, ScheduleSkipped, validateTrigger, type HistoryEntry } from '@disco-lurk/scheduler';
+import { driveScheduler, LoopWaker, ScheduleSkipped, validateTrigger, type HistoryEntry } from '@disco-lurk/scheduler';
 import type { ScheduleList, StoredPreset } from './contract';
+import { HttpError, type EventHub } from './hub';
 import type { ProfileGate, RunManager, SiteCatalog } from './runs';
-import { HttpError } from './server';
 import { splitProfileId, type PresetStore } from './store';
 
 export const SCHEDULE_TICK_MS = 30_000;
@@ -26,6 +26,7 @@ export interface ScheduleServiceDeps {
   catalog: SiteCatalog;
   runs: RunManager;
   gate: ProfileGate;
+  hub: EventHub;
   displayAvailable(): boolean;
   /** Schedules defined outside the file, such as `lurk serve`'s LURK_* schedule; read on every step. */
   extraSchedules?(): Promise<ScheduleBook>;
@@ -34,16 +35,17 @@ export interface ScheduleServiceDeps {
 }
 
 /** The run settings a schedule copies out of a UI preset; where and how it runs belong to the schedule. */
-function runPresetOf(p: StoredPreset): RunPreset {
+export function runPresetOf(p: StoredPreset): RunPreset {
   const { name: _n, profileId: _p, browserMode: _b, ...preset } = structuredClone(p);
   return preset;
 }
 
 /**
- * The schedule endpoints over the scheduler `openScheduler` hands out: definitions in
- * `schedules.json` (shared with `lurk schedule`), plans and history in `state.json`. A schedule
- * made here carries a copy of its UI preset in that file, kept current whenever the preset is
- * saved, so the CLI and a later `lurk serve` read the same definition.
+ * The schedules over the scheduler `openScheduler` hands out: definitions in `schedules.json`
+ * (shared with `lurk schedule`), plans and history in `state.json`. A schedule made in the UI
+ * carries a copy of its preset in that file, kept current whenever the preset is saved, so the
+ * CLI and a later `lurk serve` read the same definition. Only the loop applies definitions;
+ * writers wake it and wait for that step.
  */
 export class ScheduleService {
   private opened: OpenedScheduler | null = null;
@@ -51,11 +53,16 @@ export class ScheduleService {
   private presetsInUse: RunPreset[] = [];
   private loop: Promise<void> | null = null;
   private readonly loopStop = new AbortController();
+  private readonly waker = new LoopWaker();
 
   constructor(private readonly deps: ScheduleServiceDeps) {}
 
-  /** Takes the state lock and starts the loop; another owner leaves the endpoints answering 409. */
-  async start(): Promise<void> {
+  /**
+   * Takes the state lock; another owner leaves the service answering 409. With `loop` the
+   * schedules are planned and fired until `stop()`; without it (a one-off CLI command) the
+   * current definitions are only adopted.
+   */
+  async start(opts: { loop?: boolean } = {}): Promise<void> {
     let seq = 0;
     try {
       this.opened = await openScheduler({
@@ -67,14 +74,14 @@ export class ScheduleService {
           loadPreset: (presetId) => {
             const preset = this.presetsInUse.find((p) => p.id === presetId);
             if (!preset) throw new Error(`Preset ${presetId} does not exist`);
-            return { preset, categories: this.deps.catalog.categories(preset.siteId) };
+            return { preset, categories: this.deps.catalog.categoriesFor(preset) };
           },
           siteOf: (profileId) => splitProfileId(profileId).siteId,
           profileBusy: (profileId) => this.deps.gate.isBusy(profileId),
           displayAvailable: this.deps.displayAvailable,
           startRun: (plan) => {
             const name = this.deps.presets.get(plan.preset.presetId)?.name ?? plan.preset.presetId;
-            return this.deps.runs.launch(plan, name, (result) => this.scheduler().finish(plan.id, result)).runId;
+            return this.deps.runs.launch(plan, name, (result) => this.finished(plan.id, result)).runId;
           },
           warn: (code, message) => this.deps.log(`schedule ${code}: ${message}`),
         },
@@ -85,12 +92,18 @@ export class ScheduleService {
       this.deps.log(`schedules: ${this.unavailable}`);
       return;
     }
+    if (opts.loop === false) {
+      await this.opened.scheduler.adopt(await this.loadSpecs());
+      return;
+    }
     this.loop = driveScheduler({
       scheduler: this.opened.scheduler,
       loadSpecs: () => this.loadSpecs(),
       sleeper: this.deps.sleeper,
       intervalMs: this.deps.intervalMs ?? SCHEDULE_TICK_MS,
       signal: this.loopStop.signal,
+      waker: this.waker,
+      afterStep: () => this.publish(),
       log: this.deps.log,
     });
   }
@@ -108,6 +121,15 @@ export class ScheduleService {
     this.opened = null;
   }
 
+  get available(): boolean {
+    return this.opened !== null;
+  }
+
+  /** Why another process owns the schedules, while it does. */
+  get unavailableReason(): string | null {
+    return this.unavailable;
+  }
+
   private owned(): OpenedScheduler {
     if (!this.opened) throw new HttpError(409, 'schedules-unavailable', this.unavailable ?? 'Schedules are not loaded');
     return this.opened;
@@ -115,6 +137,15 @@ export class ScheduleService {
 
   private scheduler() {
     return this.owned().scheduler;
+  }
+
+  private async finished(runId: string, result: Parameters<OpenedScheduler['scheduler']['finish']>[1]): Promise<void> {
+    await this.scheduler().finish(runId, result);
+    this.publish();
+  }
+
+  private publish(): void {
+    this.deps.hub.publish({ type: 'schedules', list: this.list() });
   }
 
   private async loadSpecs(): Promise<ScheduleSpec[]> {
@@ -125,8 +156,11 @@ export class ScheduleService {
     return [...book.schedules.filter((s) => !extraIds.has(s.id)), ...extra.schedules];
   }
 
-  private async reconcile(): Promise<void> {
-    await this.scheduler().reconcile(await this.loadSpecs());
+  /** Has the loop apply the definitions as they are now; settles once it has. */
+  private async applied(): Promise<ScheduleList> {
+    if (this.loop) await this.waker.wake();
+    else await this.scheduler().adopt(await this.loadSpecs());
+    return this.list();
   }
 
   list(): ScheduleList {
@@ -150,26 +184,15 @@ export class ScheduleService {
     } catch (err) {
       throw new HttpError(422, 'invalid-trigger', (err as Error).message);
     }
-    const current = await book.load();
-    await book.save({
-      schedules: [...current.schedules.filter((s) => s.id !== spec.id), structuredClone(spec)],
-      presets: [...current.presets.filter((p) => p.id !== preset.id), runPresetOf(preset)],
-    });
-    await this.reconcile();
-    return this.list();
+    await book.withSchedule(spec, runPresetOf(preset));
+    return this.applied();
   }
 
   async remove(scheduleId: string): Promise<ScheduleList> {
     const { book, scheduler } = this.owned();
-    const current = await book.load();
-    const spec = current.schedules.find((s) => s.id === scheduleId);
-    if (!spec) throw new HttpError(404, 'unknown-schedule', `Unknown schedule ${scheduleId}`);
-    const schedules = current.schedules.filter((s) => s.id !== scheduleId);
-    const presets = current.presets.filter((p) => p.id !== spec.presetId || schedules.some((s) => s.presetId === p.id));
-    await book.save({ schedules, presets });
+    if (!(await book.withoutSchedule(scheduleId))) throw new HttpError(404, 'unknown-schedule', `Unknown schedule ${scheduleId}`);
     await scheduler.remove(scheduleId);
-    await this.reconcile();
-    return this.list();
+    return this.applied();
   }
 
   private known(scheduleId: string): void {
@@ -183,27 +206,23 @@ export class ScheduleService {
     } catch (err) {
       if (err instanceof ScheduleSkipped) throw new HttpError(409, `skipped-${err.reason}`, err.message);
       throw err;
+    } finally {
+      this.publish();
     }
   }
 
-  async pause(scheduleId: string): Promise<ScheduleList> {
+  /** Runs that come due while paused are skipped; resuming only affects runs still ahead. */
+  async control(scheduleId: string, op: 'pause' | 'resume'): Promise<ScheduleList> {
     this.known(scheduleId);
-    await this.scheduler().pause(scheduleId);
-    return this.list();
-  }
-
-  async resume(scheduleId: string): Promise<ScheduleList> {
-    this.known(scheduleId);
-    await this.scheduler().resume(scheduleId);
+    await this.scheduler()[op](scheduleId);
+    this.publish();
     return this.list();
   }
 
   /** A saved UI preset replaces the copy the schedules run, so runs planned from now on use it. */
   async presetSaved(preset: StoredPreset): Promise<void> {
     if (!this.opened) return;
-    const current = await this.opened.book.load();
-    if (!current.presets.some((p) => p.id === preset.id)) return;
-    await this.opened.book.save({ ...current, presets: current.presets.map((p) => (p.id === preset.id ? runPresetOf(preset) : p)) });
+    if (await this.opened.book.replacePreset(runPresetOf(preset))) await this.applied();
   }
 
   /** The schedules that run this preset. */

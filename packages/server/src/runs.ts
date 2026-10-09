@@ -10,12 +10,13 @@ import {
   type RunCoordinator,
   type RunEvent,
   type RunPlanSnapshot,
+  type RunPreset,
   type RunResult,
   type Site,
   type StopRequest,
 } from '@disco-lurk/core';
 import type { ActiveRun, LoggedEvent, RunRecord, StoredPreset } from './contract';
-import { EventHub, HttpError } from './server';
+import { EventHub, HttpError } from './hub';
 import type { RunHistory } from './store';
 
 /**
@@ -59,6 +60,20 @@ export class SiteCatalog {
 
   categories(siteId: string): Category[] {
     return structuredClone(this.cache.get(siteId) ?? []);
+  }
+
+  /**
+   * The site's categories plus any path the preset names that the list does not know yet: a
+   * discovered site can run a preset made before its first discovery, as on the command line.
+   */
+  categoriesFor(preset: Pick<RunPreset, 'siteId' | 'categoryPaths'>): Category[] {
+    const known = this.categories(preset.siteId);
+    const extra = preset.categoryPaths.flatMap((path): Category[] => {
+      if (known.some((c) => c.path === path)) return [];
+      const m = /^\/c\/(?:[^\s]+\/)?([^/\s]+)\/(\d+)$/.exec(path);
+      return m ? [{ name: m[1]!, path, id: Number(m[2]), enabledByDefault: true }] : [];
+    });
+    return [...known, ...extra];
   }
 
   async refresh(siteId: string): Promise<Category[]> {
@@ -125,12 +140,8 @@ export class RunManager {
     return l ? structuredClone(l.view) : undefined;
   }
 
-  busyProfiles(): ProfileId[] {
-    return [...this.live.values()].map((l) => l.view.plan.profileId);
-  }
-
   startPreset(preset: StoredPreset): ActiveRun {
-    const plan = planFor(preset, this.deps.catalog.categories(preset.siteId), this.deps.newSeed(), this.deps.clock.now(), (code, message) =>
+    const plan = planFor(preset, this.deps.catalog.categoriesFor(preset), this.deps.newSeed(), this.deps.clock.now(), (code, message) =>
       this.deps.log?.(`preset ${preset.id}: ${code}: ${message}`),
     );
     return this.launch(plan, preset.name);
@@ -157,17 +168,19 @@ export class RunManager {
     let seq = 0;
     const runIdJson = JSON.stringify(plan.id);
     const emit = (event: RunEvent) => {
+      const logged: LoggedEvent = { seq: ++seq, ...event };
+      const line = JSON.stringify(logged);
+      this.deps.history.appendEvent(plan.id, line);
+      this.deps.hub.publish({ type: 'event', runId: plan.id, event: logged }, `{"type":"event","runId":${runIdJson},"event":${line}}`);
+      // The run's state reaches clients only through `run` frames; the UI never derives it from events.
       if (event.type === 'state') {
         view.state = event.state;
+        this.deps.hub.publish({ type: 'run', run: structuredClone(view) });
         if (NEEDS_LOGIN_STATES.has(event.state) && !askedToSignIn) {
           askedToSignIn = true;
           this.deps.notify('needs-login', '需要登录', `${presetName}：请在浏览器窗口中登录，或在 Profile 页重新登录`);
         }
       }
-      const logged: LoggedEvent = { seq: ++seq, ...event };
-      const line = JSON.stringify(logged);
-      this.deps.history.appendEvent(plan.id, line);
-      this.deps.hub.publish({ type: 'event', runId: plan.id, event: logged }, `{"type":"event","runId":${runIdJson},"event":${line}}`);
     };
     const finish = async (result: RunResult) => {
       view.result = result;
@@ -189,7 +202,7 @@ export class RunManager {
       } finally {
         this.live.delete(plan.id);
         release();
-        this.deps.hub.publish({ type: 'run', run: structuredClone(view) });
+        this.deps.hub.publish({ type: 'run', run: structuredClone(view), record });
         this.deps.onActiveChange?.(this.live.size);
         this.announce(presetName, result);
       }

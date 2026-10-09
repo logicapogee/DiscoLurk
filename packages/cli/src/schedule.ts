@@ -1,35 +1,12 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-import {
-  DiscoLurkCoordinator,
-  seededRandom,
-  stopRequest,
-  systemClock,
-  type Category,
-  type RunEvent,
-  type RunId,
-  type RunPlanSnapshot,
-  type RunPreset,
-  type RunResult,
-  type ScheduleSpec,
-  type SiteId,
-} from '@disco-lurk/core';
-import { acquireSchedulerLock, FileCategoryStore, FileScheduleBook, FileScheduleStore, openScheduler, SchedulerLockedError, schedulesDirOf, type OpenedScheduler, type ScheduleBook } from '@disco-lurk/config';
-import { ScheduleSkipped, type HistoryEntry, type PlanScheduler, type ScheduleState, type SchedulerState } from '@disco-lurk/scheduler';
-import { EnvError, proxyFromEnv } from './env';
-import { appDataDir, sitesDir } from './paths';
-import {
-  cliEnv,
-  createReporter,
-  credentialsFromEnv,
-  EXIT,
-  exitCodeFor,
-  parseProfileId,
-  parseRunArgs,
-  resolveCategories,
-  siteCategories,
-  UsageError,
-} from './run';
-import { findSite } from './sites';
+import { randomUUID } from 'node:crypto';
+import { DEFAULT_SAMPLE, type Category, type RunPlanSnapshot, type RunPreset, type ScheduleSpec, type SiteId } from '@disco-lurk/core';
+import { acquireSchedulerLock, FileScheduleBook, FileScheduleStore, SchedulerLockedError, schedulesDirOf, type ScheduleBook } from '@disco-lurk/config';
+import type { HistoryEntry, ScheduleState, SchedulerState } from '@disco-lurk/scheduler';
+import { HttpError, type RunRecord } from '@disco-lurk/server';
+import { cliServices } from './cli-services';
+import { EnvError, envScheduleArgv } from './env';
+import { appDataDir } from './paths';
+import { createReporter, EXIT, exitCodeFor, parseRunArgs, resolveCategories, UsageError } from './run';
 
 export const schedulesDir = (base = appDataDir()) => schedulesDirOf(base);
 
@@ -39,143 +16,7 @@ export const SCHEDULE_USAGE = `  lurk schedule list [--json]
            [--timezone <IANA>] [--headed|--headless] [--fallback-headless] [--misfire skip|run-once] [--grace <min>]
            [--run-on-start] [--disabled] [lurk run options: --browse-mode --run-mode --categories --like … ]
   lurk schedule remove|pause|resume <id>
-  lurk schedule run-now <id> [--json]`;
-
-/** Sites whose category lists the scheduler resolves presets against; refreshed before each step. */
-export class CategoryCache {
-  private bySite = new Map<SiteId, Category[]>();
-
-  constructor(private readonly dir = sitesDir()) {}
-
-  async refresh(siteIds: Iterable<SiteId>): Promise<void> {
-    const store = new FileCategoryStore(this.dir);
-    for (const id of new Set(siteIds)) {
-      const site = findSite(id);
-      if (site) this.bySite.set(id, await siteCategories(site, store));
-    }
-  }
-
-  /** The preset's categories; a path the site's list does not know yet still counts, as on the command line. */
-  resolve(preset: RunPreset): Category[] {
-    const site = findSite(preset.siteId);
-    if (!site) throw new Error(`Preset ${preset.id} names unknown site ${preset.siteId}`);
-    return resolveCategories(site, this.bySite.get(site.id) ?? [], preset.categoryPaths);
-  }
-
-  known(siteId: SiteId): Category[] {
-    return this.bySite.get(siteId) ?? [];
-  }
-}
-
-export interface HostOptions {
-  /** False when headed browsers cannot be shown, e.g. a container or `serve --headless`. */
-  displayAvailable(): boolean;
-  presets(): RunPreset[];
-  categories: CategoryCache;
-  emit(event: RunEvent, runId: RunId): void;
-  log(message: string): void;
-}
-
-interface ActiveRun {
-  profileId: string;
-  stop: AbortController;
-  done: Promise<RunResult | null>;
-}
-
-/**
- * Takes charge of the schedules for one CLI command (`pause`, `resume`, `run-now`) and runs what
- * the scheduler starts, one run per Profile. `lurk serve` and the desktop app hold the same lock
- * through the server, so these commands work only while neither is running.
- */
-export class SchedulerHost {
-  private readonly runs = new Map<RunId, ActiveRun>();
-  private readonly exit = new AbortController();
-
-  private constructor(private readonly opened: OpenedScheduler) {}
-
-  get scheduler(): PlanScheduler {
-    return this.opened.scheduler;
-  }
-
-  static async open(dataDir: string, opts: HostOptions): Promise<SchedulerHost> {
-    const credentialsEnv = (siteId: SiteId) => {
-      const site = findSite(siteId);
-      return site ? credentialsFromEnv(site) : undefined;
-    };
-    const proxy = proxyFromEnv(process.env);
-    let host: SchedulerHost | undefined;
-    let opened: OpenedScheduler;
-    try {
-      opened = await openScheduler({
-        dataDir,
-        deps: {
-          clock: systemClock,
-          random: seededRandom(randomBytes(4).readUInt32LE()),
-          newId: () => `plan-${randomUUID()}`,
-          loadPreset: (presetId) => {
-            const preset = opts.presets().find((p) => p.id === presetId);
-            if (!preset) throw new Error(`Preset ${presetId} does not exist`);
-            return { preset, categories: opts.categories.resolve(preset) };
-          },
-          siteOf: (profileId) => parseProfileId(profileId).siteId,
-          profileBusy: (profileId) => [...host!.runs.values()].some((r) => r.profileId === profileId),
-          displayAvailable: () => opts.displayAvailable(),
-          startRun: (plan, cause) => host!.start(plan, cause, opts, credentialsEnv(plan.siteId), proxy),
-          warn: (code, message) => opts.log(`warning ${code}: ${message}`),
-        },
-      });
-    } catch (err) {
-      if (err instanceof SchedulerLockedError) {
-        throw new EnvError(
-          `lurk serve or the desktop app is running (process ${err.pid}) and owns the schedules; ` +
-            'pause, resume or run a schedule from its UI or its API (POST /schedules/<id>/pause, /resume, /trigger), or stop it first',
-        );
-      }
-      throw err;
-    }
-    host = new SchedulerHost(opened);
-    return host;
-  }
-
-  private start(plan: RunPlanSnapshot, cause: string, opts: HostOptions, credentials: ReturnType<typeof credentialsFromEnv>, proxy: string | undefined): RunId {
-    const runId = `run-${randomUUID()}`;
-    const env = cliEnv({ channel: 'chrome', exitSignal: this.exit.signal, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) });
-    const stop = new AbortController();
-    opts.log(`run ${runId} (${cause}) for ${plan.profileId}: ${plan.preset.browseMode}, ${JSON.stringify(plan.preset.runMode)}`);
-    const done = new DiscoLurkCoordinator(env)
-      .run(plan, stop.signal, (e) => opts.emit(e, runId))
-      .then(async (result) => {
-        const c = result.stats.confirmed;
-        opts.log(`run ${runId} ended: ${result.outcome} (${result.stopCause})${result.failure ? ` ${result.failure.code}` : ''}, confirmed ${c.topics} topics / ${c.floors} floors`);
-        await this.scheduler.finish(runId, result);
-        return result;
-      })
-      .catch((err: unknown) => {
-        opts.log(`run ${runId} crashed: ${(err as Error).stack ?? String(err)}`);
-        return null;
-      })
-      .finally(() => this.runs.delete(runId));
-    this.runs.set(runId, { profileId: plan.profileId, stop, done });
-    return runId;
-  }
-
-  /** The run's result once it ends; null if it crashed or is unknown. */
-  wait(runId: RunId): Promise<RunResult | null> {
-    return this.runs.get(runId)?.done ?? Promise.resolve(null);
-  }
-
-  stopAll(reason: 'user' | 'app-exit'): void {
-    for (const r of this.runs.values()) r.stop.abort(stopRequest(reason));
-  }
-
-  /** Stops every run, waits for each to record its ending, then gives up the state lock. */
-  async close(): Promise<void> {
-    this.stopAll('app-exit');
-    this.exit.abort();
-    await Promise.all([...this.runs.values()].map((r) => r.done));
-    await this.opened.close();
-  }
-}
+  lurk schedule run-now|trigger <id> [--json]`;
 
 const SCHEDULE_VALUE_FLAGS = ['name', 'id', 'cron', 'runs', 'window', 'jitter', 'min-gap', 'timezone', 'misfire', 'grace'] as const;
 const SCHEDULE_BOOL_FLAGS = ['fallback-headless', 'run-on-start', 'disabled'] as const;
@@ -214,9 +55,8 @@ export const systemTimezone = () => Intl.DateTimeFormat().resolvedOptions().time
 export function buildScheduleFromArgs(argv: readonly string[], known: (siteId: SiteId) => Category[], newId: () => string): { spec: ScheduleSpec; preset: RunPreset } {
   const { flags, runArgv } = splitAddArgs(argv);
   if (!flags.name) throw new UsageError('schedule add needs --name');
-  // A scheduled run must end by itself, so the preset defaults to a topic target instead of endless.
   const given = (flag: string) => runArgv.some((a) => a === `--${flag}` || a.startsWith(`--${flag}=`));
-  const run = parseRunArgs(given('run-mode') ? runArgv : [...runArgv, '--run-mode', 'topics:15-40']);
+  const run = parseRunArgs(runArgv);
   if (run.json) throw new UsageError('--json does not apply to schedule add');
   const id = flags.id ?? newId();
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) throw new UsageError(`Invalid --id ${id}`);
@@ -260,10 +100,25 @@ export function buildScheduleFromArgs(argv: readonly string[], known: (siteId: S
     categoryPaths: categories.map((c) => c.path),
     interaction: run.interaction,
     extraWait: run.extraWait,
-    samplePerCategory: { min: 3, max: 8 },
+    samplePerCategory: { ...DEFAULT_SAMPLE },
     experiments: run.experiments,
   };
   return { spec, preset };
+}
+
+/**
+ * The LURK_* schedule, built by `schedule add`'s own parser from the command line the variables
+ * map to; categories resolve against `known`, the site's list as it is now.
+ */
+export function envSchedule(env: NodeJS.ProcessEnv, defaultTimezone: string, known: (siteId: SiteId) => Category[] = () => []): { spec: ScheduleSpec; preset: RunPreset } | null {
+  const argv = envScheduleArgv(env, defaultTimezone);
+  if (!argv) return null;
+  try {
+    return buildScheduleFromArgs(argv, known, () => argv[1]!);
+  } catch (err) {
+    if (err instanceof UsageError) throw new EnvError(`LURK_* schedule: ${err.message}`);
+    throw err;
+  }
 }
 
 function triggerLine(spec: ScheduleSpec): string {
@@ -321,7 +176,6 @@ export async function schedule(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
   const dir = schedulesDir();
   const book = new FileScheduleBook(dir);
-  const categories = new CategoryCache();
   const idArg = () => {
     const [id, ...more] = rest;
     if (!id || more.length > 0 || id.startsWith('-')) throw new UsageError(`schedule ${sub} takes one schedule id`);
@@ -337,22 +191,16 @@ export async function schedule(argv: string[]): Promise<number> {
     }
     case 'add': {
       const current = await book.load();
-      const site = rest.find((a, i) => rest[i - 1] === '--site') ?? rest.find((a) => a.startsWith('--site='))?.slice(7) ?? process.env.LURK_SITE ?? 'linuxdo';
-      await categories.refresh([site]);
-      const { spec, preset } = buildScheduleFromArgs(rest, (id) => categories.known(id), () => randomUUID().slice(0, 8));
+      const { catalog } = await cliServices.catalogOnly(appDataDir());
+      const { spec, preset } = buildScheduleFromArgs(rest, (id) => catalog.categories(id), () => randomUUID().slice(0, 8));
       if (current.schedules.some((s) => s.id === spec.id)) throw new UsageError(`Schedule ${spec.id} already exists`);
-      await book.save({ schedules: [...current.schedules, spec], presets: [...current.presets.filter((p) => p.id !== preset.id), preset] });
+      await book.withSchedule(spec, preset);
       console.log(`Added schedule ${spec.id} (${triggerLine(spec)}). A running lurk serve picks it up within a minute.`);
       return EXIT.ok;
     }
     case 'remove': {
       const id = idArg();
-      const current = await book.load();
-      const spec = current.schedules.find((s) => s.id === id);
-      if (!spec) throw new UsageError(`No schedule ${id}`);
-      const schedules = current.schedules.filter((s) => s.id !== id);
-      const presets = current.presets.filter((p) => p.id !== spec.presetId || schedules.some((s) => s.presetId === p.id));
-      await book.save({ schedules, presets });
+      if (!(await book.withoutSchedule(id))) throw new UsageError(`No schedule ${id}`);
       // The plan and history go with it when no other process owns them; a running serve simply stops planning it.
       try {
         const lock = await acquireSchedulerLock(dir);
@@ -375,58 +223,65 @@ export async function schedule(argv: string[]): Promise<number> {
     case 'pause':
     case 'resume':
     case 'run-now':
-      return controlSchedule(sub, rest, book, categories);
+    case 'trigger':
+      return controlSchedule(sub === 'trigger' ? 'run-now' : sub, rest, book);
     default:
       throw new UsageError(sub ? `Unknown schedule command ${sub}` : 'schedule needs a command');
   }
 }
 
-async function controlSchedule(sub: 'pause' | 'resume' | 'run-now', rest: string[], book: FileScheduleBook, categories: CategoryCache): Promise<number> {
+/**
+ * Pause, resume and run-now go through the same schedule service as `lurk serve`, holding the
+ * state lock for the command's duration; a run started here is a run like any from the server.
+ */
+async function controlSchedule(sub: 'pause' | 'resume' | 'run-now', rest: string[], book: FileScheduleBook): Promise<number> {
   const json = sub === 'run-now' && rest.includes('--json');
   const args = rest.filter((a) => !(json && a === '--json'));
   const [id, ...more] = args;
   if (!id || more.length > 0 || id.startsWith('-')) throw new UsageError(`schedule ${sub} takes one schedule id${sub === 'run-now' ? ' and optionally --json' : ''}`);
-  const current = await book.load();
-  if (!current.schedules.some((s) => s.id === id)) throw new UsageError(`No schedule ${id}`);
-  await categories.refresh(current.presets.map((p) => p.siteId));
+  if (!(await book.load()).schedules.some((s) => s.id === id)) throw new UsageError(`No schedule ${id}`);
   const reporter = createReporter(json, Date.now());
-  const host = await SchedulerHost.open(appDataDir(), {
-    displayAvailable: () => true,
-    presets: () => current.presets,
-    categories,
-    emit: reporter.event,
-    log: (m) => console.error(m),
-  });
-  const onInterrupt = () => host.stopAll('user');
+  const services = await cliServices.open(appDataDir(), { log: (m) => console.error(m) });
+  const { schedules, runs, hub } = services;
+  if (!schedules.available) {
+    await services.close();
+    throw new EnvError(
+      `lurk serve or the desktop app is running (${schedules.unavailableReason?.match(/process -?\d+/)?.[0] ?? 'another process'}) and owns the schedules; ` +
+        'pause, resume or run a schedule from its UI or its API (POST /schedules/<id>/pause, /resume, /trigger), or stop it first',
+    );
+  }
+  const onInterrupt = () => runs.stopAll('user');
   process.on('SIGINT', onInterrupt);
   try {
-    await host.scheduler.adopt(current.schedules);
-    if (sub === 'pause') {
-      await host.scheduler.pause(id);
-      console.log(`Paused ${id}; runs that come due are skipped and recorded until it is resumed.`);
+    if (sub !== 'run-now') {
+      await schedules.control(id, sub);
+      console.log(sub === 'pause' ? `Paused ${id}; runs that come due are skipped and recorded until it is resumed.` : `Resumed ${id}.`);
       return EXIT.ok;
     }
-    if (sub === 'resume') {
-      await host.scheduler.resume(id);
-      console.log(`Resumed ${id}.`);
-      return EXIT.ok;
-    }
-    let runId: RunId;
+    // Subscribed before the trigger: the run's first events may arrive before it returns. This
+    // process runs nothing else, so every frame belongs to that run.
+    let record: RunRecord | undefined;
+    const unsubscribe = hub.subscribe((f) => {
+      if (f.type === 'event') reporter.event(f.event);
+      if (f.type === 'run' && f.record) record = f.record;
+    });
     try {
-      runId = await host.scheduler.trigger(id, 'manual');
+      await schedules.trigger(id, 'manual');
     } catch (err) {
-      if (err instanceof ScheduleSkipped) {
-        console.error(`Not started: ${err.reason}`);
+      unsubscribe();
+      if (err instanceof HttpError && err.code.startsWith('skipped-')) {
+        console.error(`Not started: ${err.code.slice('skipped-'.length)}`);
         return EXIT.environment;
       }
       throw err;
     }
-    const result = await host.wait(runId);
-    if (!result) return EXIT.environment;
-    reporter.result(result);
-    return exitCodeFor(result);
+    await runs.settle();
+    unsubscribe();
+    if (!record) return EXIT.environment;
+    reporter.result(record.result);
+    return exitCodeFor(record.result);
   } finally {
     process.off('SIGINT', onInterrupt);
-    await host.close();
+    await services.close();
   }
 }

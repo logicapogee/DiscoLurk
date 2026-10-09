@@ -1,5 +1,4 @@
-import type { RunEvent } from '@disco-lurk/core';
-import type { RunRecord } from '@disco-lurk/server/contract';
+import type { LoggedEvent, RunRecord } from '@disco-lurk/server/contract';
 import { useEffect, useState } from 'preact/hooks';
 import { LogPanel } from '../components/log';
 import { LevelTable, StatsPanel } from '../components/stats';
@@ -9,7 +8,7 @@ import { useStore } from '../store';
 
 function Details(props: { record: RunRecord }) {
   const [, store] = useStore();
-  const [events, setEvents] = useState<RunEvent[] | null>(null);
+  const [events, setEvents] = useState<LoggedEvent[] | null>(null);
   useEffect(() => {
     store.api.runEvents(props.record.runId).then(setEvents, () => setEvents([]));
   }, [props.record.runId]);

@@ -4,7 +4,8 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { BrowserChannel, Category, Site } from '@disco-lurk/core';
-import { LOCK_FILE, processAlive, readLock } from '@disco-lurk/site-discourse';
+import { processAlive } from '@disco-lurk/config';
+import { LOCK_FILE, readLock } from '@disco-lurk/site-discourse';
 
 const run = promisify(execFile);
 

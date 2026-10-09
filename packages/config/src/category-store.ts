@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Category, CategoryStore, SiteId } from '@disco-lurk/core';
 import { z } from 'zod';
+import { writeJsonAtomic } from './json-file';
 import { categorySchema } from './site';
 
 const fileSchema = z.object({
@@ -10,15 +10,6 @@ const fileSchema = z.object({
   siteId: z.string(),
   categories: z.array(categorySchema),
 });
-
-/** Temp file + rename, so a crash mid-write leaves the previous file intact. */
-export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  // Unique per write: two writers in one process (or two processes) never share a temp file.
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
-  await rename(tmp, path);
-}
 
 /** A discovered site's category list, one file per site under `<appData>/disco-lurk/sites/<siteId>/`. */
 export class FileCategoryStore implements CategoryStore {

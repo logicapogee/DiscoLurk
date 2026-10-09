@@ -11,6 +11,7 @@ import {
   parseProfileId,
   parseRunArgs,
   parseRunMode,
+  runModeArg,
   REPLY_RISK_NOTICE,
   replyTemplates,
   resolveCategories,
@@ -23,12 +24,12 @@ const linuxdo = findSite('linuxdo')!;
 const docofcard = findSite('docofcard')!;
 
 describe('CLI-001 lurk run arguments (§11.1)', () => {
-  it('defaults to linuxdo, Profile default, deep, endless, headed Chrome, human output', () => {
+  it('defaults to linuxdo, Profile default, deep, 15–40 topics, headed Chrome, human output', () => {
     const args = parseRunArgs([]);
     expect(args).toMatchObject({
       profile: 'default',
       browseMode: 'deep',
-      runMode: { kind: 'endless' },
+      runMode: { kind: 'topics', min: 15, max: 40 },
       categories: null,
       browserMode: 'headed',
       channel: 'chrome',
@@ -68,6 +69,9 @@ describe('CLI-001 lurk run arguments (§11.1)', () => {
 
   it('parses the §9.3 run mode syntax', () => {
     expect(parseRunMode('endless')).toEqual({ kind: 'endless' });
+    for (const m of [{ kind: 'endless' }, { kind: 'time', minutes: 30 }, { kind: 'topics', min: 5, max: 5 }, { kind: 'topics', min: 15, max: 40 }] as const) {
+      expect(parseRunMode(runModeArg(m))).toEqual(m);
+    }
     expect(parseRunMode('topics:30')).toEqual({ kind: 'topics', min: 30, max: 30 });
     expect(parseRunMode('topics:15-40')).toEqual({ kind: 'topics', min: 15, max: 40 });
     expect(parseRunMode('time:30')).toEqual({ kind: 'time', minutes: 30 });

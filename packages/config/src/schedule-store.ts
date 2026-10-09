@@ -1,110 +1,12 @@
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ERROR_CODES, type RunPreset, type ScheduleSpec } from '@disco-lurk/core';
 import { PlanScheduler, validateTrigger, type SchedulerDeps, type SchedulerState, type ScheduleStore } from '@disco-lurk/scheduler';
 import { z } from 'zod';
-import { writeJsonAtomic } from './category-store';
+import { ConfigFileError, JsonFile, readJson } from './json-file';
 import { currentLockOwner, lockOwnerLive, markLockHeld, markLockReleased, type LivenessProbe, type LockOwner } from './process';
+import { experimentsSchema, extraWaitSchema, interactionSchema, runPresetSchema, sampleSchema, scheduleSpecSchema } from './schemas';
 import { categorySchema } from './site';
-
-/** A schedule or preset file that exists but cannot be used; the message names the file. */
-export class ConfigFileError extends Error {
-  constructor(
-    readonly path: string,
-    detail: string,
-  ) {
-    super(`${path}: ${detail}; fix or delete the file`);
-    this.name = 'ConfigFileError';
-  }
-}
-
-function issuesOf(error: z.ZodError): string {
-  return error.issues
-    .slice(0, 5)
-    .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
-    .join('; ');
-}
-
-/** The parsed file, or null when it does not exist. */
-async function readJson(path: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (err) {
-    throw new ConfigFileError(path, `not valid JSON (${(err as Error).message})`);
-  }
-}
-
-const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'expected HH:MM');
-const percent = z.number().min(0).max(100);
-
-const triggerSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('cron'), expression: z.string().min(1) }).strict(),
-  z
-    .object({
-      kind: z.literal('daily-window'),
-      runs: z.number().int().min(1),
-      start: hhmm,
-      end: hhmm,
-      jitterMinutes: z.number().min(0),
-      minGapMinutes: z.number().min(0),
-    })
-    .strict(),
-]);
-
-export const scheduleSpecSchema = z
-  .object({
-    id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/),
-    name: z.string().min(1),
-    profileId: z.string().regex(/^[a-z0-9][a-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_-]*$/),
-    presetId: z.string().min(1),
-    enabled: z.boolean(),
-    browserMode: z.enum(['headed', 'headless']),
-    timezone: z.string().min(1),
-    trigger: triggerSchema,
-    misfire: z.object({ policy: z.enum(['skip', 'run-once']), graceMinutes: z.number().min(0) }).strict(),
-    overlap: z.literal('skip'),
-    unavailableDisplay: z.enum(['skip', 'fallback-headless']),
-    runOnStart: z.boolean(),
-  })
-  .strict();
-
-const interactionSchema = z
-  .object({
-    like: z.object({ enabled: z.boolean(), topicRate: percent, replyRate: percent, maxReplies: z.number().int().min(0) }).strict(),
-    reply: z.object({ enabled: z.boolean(), rate: percent, riskAcknowledged: z.boolean() }).strict(),
-  })
-  .strict();
-
-const extraWaitSchema = z.object({ enabled: z.boolean(), minSec: z.number().min(0), maxSec: z.number().min(0) }).strict();
-const sampleSchema = z.object({ min: z.number().int().min(1), max: z.number().int().min(1) }).strict();
-const experimentsSchema = z
-  .object({ useNewList: z.boolean(), useUnreadList: z.boolean(), refreshCategories: z.boolean(), smartRanked: z.boolean() })
-  .strict();
-
-export const runPresetSchema = z
-  .object({
-    id: z.string().min(1),
-    siteId: z.string().min(1),
-    browseMode: z.enum(['deep', 'quick']),
-    runMode: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('endless') }).strict(),
-      z.object({ kind: z.literal('topics'), min: z.number().int().min(1), max: z.number().int().min(1) }).strict(),
-      z.object({ kind: z.literal('time'), minutes: z.number().positive() }).strict(),
-    ]),
-    categoryPaths: z.array(z.string()),
-    interaction: interactionSchema,
-    extraWait: extraWaitSchema,
-    samplePerCategory: sampleSchema,
-    experiments: experimentsSchema.optional(),
-  })
-  .strict();
 
 const bookSchema = z
   .object({
@@ -138,35 +40,66 @@ function checkBook(path: string, book: ScheduleBook): void {
       throw new ConfigFileError(path, `schedule ${s.id}: ${(err as Error).message}`);
     }
   }
-  for (const p of book.presets) {
-    if (p.runMode.kind === 'topics' && p.runMode.max < p.runMode.min) throw new ConfigFileError(path, `preset ${p.id}: topic range ends below its start`);
-    if (p.extraWait.maxSec < p.extraWait.minSec || p.samplePerCategory.max < p.samplePerCategory.min) {
-      throw new ConfigFileError(path, `preset ${p.id}: a range ends below its start`);
-    }
-  }
 }
 
 /** `<dir>/schedules.json`: written by the CLI and the UI, re-read by the running scheduler. */
 export class FileScheduleBook {
-  constructor(readonly dir: string) {}
+  private readonly file: JsonFile<typeof bookSchema>;
+  private cached: { version: string; book: ScheduleBook } | null = null;
 
-  get path(): string {
-    return join(this.dir, 'schedules.json');
+  constructor(readonly dir: string) {
+    this.file = new JsonFile(join(dir, 'schedules.json'), bookSchema, 'schedule file');
   }
 
+  get path(): string {
+    return this.file.path;
+  }
+
+  /** Parses the file only when it changed since the last load, which the scheduler loop does every step. */
   async load(): Promise<ScheduleBook> {
-    const json = await readJson(this.path);
-    if (json === null) return { schedules: [], presets: [] };
-    const parsed = bookSchema.safeParse(json);
-    if (!parsed.success) throw new ConfigFileError(this.path, `not a valid schedule file (${issuesOf(parsed.error)})`);
-    const book = { schedules: parsed.data.schedules, presets: parsed.data.presets } as unknown as ScheduleBook;
+    const version = await this.file.version();
+    if (version === null) return { schedules: [], presets: [] };
+    if (this.cached?.version === version) return structuredClone(this.cached.book);
+    const data = await this.file.load();
+    const book = (data ? { schedules: data.schedules, presets: data.presets } : { schedules: [], presets: [] }) as ScheduleBook;
     checkBook(this.path, book);
+    this.cached = { version, book: structuredClone(book) };
     return book;
   }
 
   async save(book: ScheduleBook): Promise<void> {
     checkBook(this.path, book);
-    await writeJsonAtomic(this.path, { schemaVersion: 1, ...structuredClone(book) });
+    await this.file.save({ schemaVersion: 1, ...book });
+  }
+
+  /** Adds or replaces a schedule together with the preset it runs. */
+  async withSchedule(spec: ScheduleSpec, preset: RunPreset): Promise<ScheduleBook> {
+    const current = await this.load();
+    const book = {
+      schedules: [...current.schedules.filter((s) => s.id !== spec.id), structuredClone(spec)],
+      presets: [...current.presets.filter((p) => p.id !== preset.id), structuredClone(preset)],
+    };
+    await this.save(book);
+    return book;
+  }
+
+  /** Removes a schedule and the preset copy no other schedule runs; null when there was no such schedule. */
+  async withoutSchedule(scheduleId: string): Promise<ScheduleSpec | null> {
+    const current = await this.load();
+    const spec = current.schedules.find((s) => s.id === scheduleId);
+    if (!spec) return null;
+    const schedules = current.schedules.filter((s) => s.id !== scheduleId);
+    const presets = current.presets.filter((p) => schedules.some((s) => s.presetId === p.id));
+    await this.save({ schedules, presets });
+    return spec;
+  }
+
+  /** Replaces the copy of a preset the schedules run; false when no schedule runs it. */
+  async replacePreset(preset: RunPreset): Promise<boolean> {
+    const current = await this.load();
+    if (!current.presets.some((p) => p.id === preset.id)) return false;
+    await this.save({ ...current, presets: current.presets.map((p) => (p.id === preset.id ? structuredClone(preset) : p)) });
+    return true;
   }
 }
 
@@ -242,28 +175,22 @@ const stateSchema = z
 
 /** `<dir>/state.json`: materialized plans and run history, written only by the lock holder. */
 export class FileScheduleStore implements ScheduleStore {
-  private writes: Promise<void> = Promise.resolve();
+  private readonly file: JsonFile<typeof stateSchema>;
 
-  constructor(readonly dir: string) {}
+  constructor(readonly dir: string) {
+    this.file = new JsonFile(join(dir, 'state.json'), stateSchema, 'scheduler state file');
+  }
 
   get path(): string {
-    return join(this.dir, 'state.json');
+    return this.file.path;
   }
 
   async load(): Promise<SchedulerState | null> {
-    const json = await readJson(this.path);
-    if (json === null) return null;
-    const parsed = stateSchema.safeParse(json);
-    if (!parsed.success) throw new ConfigFileError(this.path, `not a valid scheduler state file (${issuesOf(parsed.error)})`);
-    return parsed.data as unknown as SchedulerState;
+    return (await this.file.load()) as SchedulerState | null;
   }
 
-  /** Writes run one after another, in call order, so an older state never lands last. */
   save(state: SchedulerState): Promise<void> {
-    const value = structuredClone(state);
-    const write = this.writes.catch(() => {}).then(() => writeJsonAtomic(this.path, value));
-    this.writes = write;
-    return write;
+    return this.file.save(state as z.input<typeof stateSchema>);
   }
 }
 

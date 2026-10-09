@@ -3,9 +3,23 @@ import type { ProfileCreate, ProfilePatch, StoredPreset } from './contract';
 import { MAX_REPLY_LIKES, type ScheduleSpec } from '@disco-lurk/core';
 import { HttpError } from './server';
 
+/** `user:pass@` in a URL; unparsable input counts as none, the pattern above rejects it anyway. */
+export function hasUserinfo(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.username !== '' || u.password !== '';
+  } catch {
+    return false;
+  }
+}
+
 const percent = z.number().int().min(0).max(100);
 /** A proxy goes straight into the browser's launch options, so only a plain proxy URL is accepted. */
-const proxyUrl = z.string().regex(/^(https?|socks[45]?):\/\/[^\s]+$/, 'http://, https://, socks4:// or socks5:// URL');
+const proxyUrl = z
+  .string()
+  .regex(/^(https?|socks[45]?):\/\/[^\s]+$/, 'http://, https://, socks4:// or socks5:// URL')
+  // Credentials would be stored in profiles.json and shown in the UI; only proxies without authentication are supported.
+  .refine((v) => !hasUserinfo(v), 'proxy credentials are not supported; use a proxy that needs no username or password');
 const name = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'letters, digits, - and _ only');
 
 const runModeSchema = z.discriminatedUnion('kind', [

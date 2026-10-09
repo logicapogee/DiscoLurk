@@ -12,25 +12,49 @@ export interface DriveOptions {
 }
 
 /**
- * Reconciles on the first step and whenever the definitions change, ticks otherwise. A failing
- * step is logged and retried on the next one: a broken definitions file must not stop schedules
- * that were already running from the last good copy.
+ * Reconciles on the first step and whenever the definitions change, ticks otherwise. A step that
+ * cannot read or apply the definitions still ticks the schedules adopted from the last good copy,
+ * so a broken definitions file never stops schedules that were already running. An error is
+ * logged once until it changes or a step succeeds.
  */
 export async function driveScheduler(opts: DriveOptions): Promise<void> {
   let applied: string | null = null;
+  let reported: string | null = null;
+  const report = (err: unknown) => {
+    const message = `scheduler: ${err instanceof Error ? err.message : String(err)}`;
+    if (message !== reported) opts.log(message);
+    reported = message;
+  };
   while (!opts.signal.aborted) {
+    let failed = false;
+    let specs: ScheduleSpec[] | null = null;
     try {
-      const specs = await opts.loadSpecs();
-      const key = JSON.stringify(specs);
-      if (key !== applied) {
+      specs = await opts.loadSpecs();
+    } catch (err) {
+      failed = true;
+      report(err);
+    }
+    const key = specs ? JSON.stringify(specs) : null;
+    let ticked = false;
+    if (specs && key !== applied) {
+      try {
         await opts.scheduler.reconcile(specs);
         applied = key;
-      } else {
-        await opts.scheduler.tick();
+        ticked = true;
+      } catch (err) {
+        failed = true;
+        report(err);
       }
-    } catch (err) {
-      opts.log(`scheduler: ${(err as Error).message}`);
     }
+    if (!ticked) {
+      try {
+        await opts.scheduler.tick();
+      } catch (err) {
+        failed = true;
+        report(err);
+      }
+    }
+    if (!failed) reported = null;
     try {
       await opts.sleeper.sleep(opts.intervalMs, opts.signal);
     } catch (err) {

@@ -1,13 +1,19 @@
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { FileCategoryStore, type ScheduleBook } from '@disco-lurk/config';
 import { DiscoLurkCoordinator, RunError, systemClock, systemDeps, type CoordinatorEnv, type Site } from '@disco-lurk/core';
 import { createApp, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ServerFrame, type ShellChannel } from '@disco-lurk/server';
 import { LOCK_FILE, openDiscourseForum, processAlive, readLock, type Credentials } from '@disco-lurk/site-discourse';
 import { runDoctor } from './doctor';
-import type { SidecarLifecycle } from './lifecycle';
+import { SidecarLifecycle } from './lifecycle';
+import { DailyLog } from './log-file';
+import { appDataDir } from './paths';
+import { EXIT } from './run';
 import { BUILTIN_SITES, findSite } from './sites';
 
 const execFileAsync = promisify(execFile);
@@ -175,17 +181,88 @@ export function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
   return { app, exit };
 }
 
+/** Lines the sidecar writes to its stdout, which only the desktop shell reads. */
+export type SidecarLine =
+  | { event: 'starting' }
+  | { event: 'ready'; port: number; token: string; version: string }
+  | { event: 'alive' }
+  | { event: 'runs'; active: number }
+  | { event: 'token'; token: string }
+  | { event: 'notify'; title: string; body: string }
+  | { event: 'result'; cmd: ShellCommand; ok: boolean; message?: string };
+
+/** Tray actions the shell writes to the sidecar's stdin, one JSON object per line. */
+export type ShellCommand = 'start' | 'stop' | 'shutdown';
+
+export const ALIVE_INTERVAL_MS = 10_000;
+
+export const stdoutLine = (line: SidecarLine) => process.stdout.write(JSON.stringify(line) + '\n');
+
 /**
- * Lines for the desktop shell on the sidecar's own stdout, which only the shell reads. The shell
- * owns the tray and native notifications, and keeps working while the window's page is suspended.
+ * The shell owns the tray and native notifications and keeps working while the window's page is
+ * suspended, so the server reaches it through stdout rather than the page.
  */
-export function stdoutShell(write: (line: string) => void = (l) => process.stdout.write(l + '\n')): ShellChannel {
+export function stdoutShell(write: (line: SidecarLine) => void = stdoutLine): ShellChannel {
   return {
-    notify: (title, body) => write(JSON.stringify({ event: 'notify', title, body })),
-    settings: (s) => write(JSON.stringify({ event: 'settings', closeToTray: s.closeToTray })),
-    token: (token) => write(JSON.stringify({ event: 'token', token })),
-    activeRuns: (count) => write(JSON.stringify({ event: 'runs', active: count })),
+    notify: (title, body) => write({ event: 'notify', title, body }),
+    // Closing the window always hides it to the tray, so the shell has no setting to follow.
+    settings: () => {},
+    token: (token) => write({ event: 'token', token }),
+    activeRuns: (count) => write({ event: 'runs', active: count }),
   };
+}
+
+export function parseShellCommand(line: string): ShellCommand | null {
+  try {
+    const cmd = (JSON.parse(line) as { cmd?: unknown } | null)?.cmd;
+    return cmd === 'start' || cmd === 'stop' || cmd === 'shutdown' ? cmd : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The REST routes the tray's start and stop stand for, so both paths behave the same. */
+const COMMAND_ROUTES = { start: '/runs/current', stop: '/runs/stop' } as const;
+
+async function runRoute(app: LurkApp, path: string): Promise<void> {
+  const route = app.routes.find((r) => r.method === 'POST' && r.path === path);
+  if (!route) throw new Error(`no route POST ${path}`);
+  await route.handle({ params: {}, query: new URLSearchParams(), body: undefined, ip: '127.0.0.1' });
+}
+
+/**
+ * Serves the shell's stdin commands. Every command is answered with a `result` line; `shutdown`
+ * is answered before the cleanup starts, since the shell watches for the exit itself.
+ */
+export function serveShellCommands(opts: {
+  input: Readable;
+  app: LurkApp;
+  lifecycle: SidecarLifecycle;
+  write: (line: SidecarLine) => void;
+  log(message: string): void;
+}): void {
+  const lines = createInterface({ input: opts.input, crlfDelay: Infinity });
+  lines.on('line', (line) => {
+    if (line.trim() === '') return;
+    const cmd = parseShellCommand(line);
+    if (cmd === null) {
+      opts.log(`stdin: ignored ${JSON.stringify(line.slice(0, 200))}`);
+      return;
+    }
+    if (cmd === 'shutdown') {
+      opts.write({ event: 'result', cmd, ok: true });
+      void opts.lifecycle.shutdown('shutdown command');
+      return;
+    }
+    runRoute(opts.app, COMMAND_ROUTES[cmd]).then(
+      () => opts.write({ event: 'result', cmd, ok: true }),
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        opts.log(`stdin: ${cmd} failed: ${message}`);
+        opts.write({ event: 'result', cmd, ok: false, message });
+      },
+    );
+  });
 }
 
 export interface BootOptions {
@@ -204,6 +281,8 @@ export interface BootOptions {
   extraSchedules?(): Promise<ScheduleBook>;
   /** Every frame the server pushes to its clients; `lurk serve` logs runs from them. */
   onFrame?(frame: ServerFrame): void;
+  /** The desktop shell's stdin and the stdout line writer that answers it. */
+  shellCommands?: { input: Readable; write: (line: SidecarLine) => void };
   log(message: string): void;
 }
 
@@ -243,6 +322,7 @@ export async function bootServer(opts: BootOptions): Promise<LurkServer> {
   });
   const listening = server;
   app.bindTokenRotation((token) => listening.rotateToken(token));
+  if (opts.shellCommands) serveShellCommands({ ...opts.shellCommands, app, lifecycle: opts.lifecycle, log: opts.log });
   // Registered first so it runs last: the server keeps answering /health while runs wind down.
   opts.lifecycle.register('server', () => listening.close());
   opts.lifecycle.register('runs and sign-in windows', async () => {
@@ -250,4 +330,56 @@ export async function bootServer(opts: BootOptions): Promise<LurkServer> {
     await app.close('app-exit');
   });
   return listening;
+}
+
+/**
+ * `lurk sidecar`, spawned by the desktop shell. It binds 127.0.0.1:0 and mints its token itself,
+ * announcing both in the ready line: the token never appears in argv, the environment or a file,
+ * where other local processes could read it.
+ */
+export async function runSidecar(argv: string[], version: string): Promise<number> {
+  if (argv.length > 0) {
+    console.error('sidecar takes no arguments');
+    return EXIT.environment;
+  }
+  const token = randomBytes(32).toString('base64url');
+  // Once the shell is gone its ends of stdout/stderr are closed; dropping those write errors keeps
+  // them from crashing the sidecar before cleanup finishes.
+  process.stdout.on('error', () => {});
+  process.stderr.on('error', () => {});
+  const dataDir = appDataDir();
+  const file = new DailyLog(join(dataDir, 'logs'));
+  // stderr feeds the shell's start-up failure page; the file is the lasting record.
+  const log = (m: string) => {
+    file.write(m);
+    console.error(m);
+  };
+  const lifecycle = new SidecarLifecycle(log);
+  // Reclaiming Profiles a dead sidecar left behind can take a while; this tells the shell the
+  // process is up and working towards ready.
+  stdoutLine({ event: 'starting' });
+  log(`sidecar ${version} starting, pid ${process.pid}`);
+  const server = await bootServer({
+    version,
+    host: '127.0.0.1',
+    port: 0,
+    token,
+    dataDir,
+    headlessOnly: false,
+    lifecycle,
+    shell: stdoutShell(),
+    shellCommands: { input: process.stdin, write: stdoutLine },
+    log,
+  });
+  stdoutLine({ event: 'ready', port: server.port, token, version });
+  log(`sidecar ready on 127.0.0.1:${server.port}`);
+  // stdin stays paused until here, so an EOF during start-up is seen once the cleanups exist.
+  lifecycle.watchParent(process.stdin);
+  process.once('SIGTERM', () => void lifecycle.shutdown('SIGTERM'));
+  process.once('SIGINT', () => void lifecycle.shutdown('SIGINT'));
+  const alive = setInterval(() => stdoutLine({ event: 'alive' }), ALIVE_INTERVAL_MS);
+  alive.unref();
+  await lifecycle.done;
+  clearInterval(alive);
+  return EXIT.ok;
 }

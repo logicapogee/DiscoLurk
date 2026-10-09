@@ -85,7 +85,11 @@ function Shell(props: { conn: SidecarConnection | null; notice?: string | undefi
         )}
       </nav>
       <main class="content">
-        {state.stream !== 'open' && state.stream !== 'connecting' && <Notice kind="warn">{copy.boot.reconnecting}</Notice>}
+        {state.stream === 'server-closed' ? (
+          <Notice kind="warn">{copy.boot.serverClosed}</Notice>
+        ) : (
+          state.stream !== 'open' && state.stream !== 'connecting' && <Notice kind="warn">{copy.boot.reconnecting}</Notice>
+        )}
         {props.notice && <Notice kind="info">{props.notice}</Notice>}
         {page === 'dashboard' && <DashboardPage go={setPage} />}
         {page === 'run' && <RunPage />}

@@ -14,7 +14,7 @@ import {
   type Site,
   type StopRequest,
 } from '@disco-lurk/core';
-import type { ActiveRun, RunRecord, StoredPreset } from './contract';
+import type { ActiveRun, LoggedEvent, RunRecord, StoredPreset } from './contract';
 import { EventHub, HttpError } from './server';
 import type { RunHistory } from './store';
 
@@ -154,6 +154,8 @@ export class RunManager {
       stopping: false,
     };
     let askedToSignIn = false;
+    let seq = 0;
+    const runIdJson = JSON.stringify(plan.id);
     const emit = (event: RunEvent) => {
       if (event.type === 'state') {
         view.state = event.state;
@@ -162,8 +164,10 @@ export class RunManager {
           this.deps.notify('needs-login', '需要登录', `${presetName}：请在浏览器窗口中登录，或在 Profile 页重新登录`);
         }
       }
-      void this.deps.history.appendEvent(plan.id, JSON.stringify(event));
-      this.deps.hub.publish({ type: 'event', runId: plan.id, event });
+      const logged: LoggedEvent = { seq: ++seq, ...event };
+      const line = JSON.stringify(logged);
+      this.deps.history.appendEvent(plan.id, line);
+      this.deps.hub.publish({ type: 'event', runId: plan.id, event: logged }, `{"type":"event","runId":${runIdJson},"event":${line}}`);
     };
     const finish = async (result: RunResult) => {
       view.result = result;
@@ -178,7 +182,10 @@ export class RunManager {
         result,
       };
       try {
+        await this.deps.history.closeRun(plan.id);
         await this.deps.history.add(record);
+      } catch (err) {
+        this.deps.log?.(`run ${plan.id}: writing its record failed: ${String(err)}`);
       } finally {
         this.live.delete(plan.id);
         release();
@@ -188,11 +195,11 @@ export class RunManager {
       }
       await onEnded?.(result).catch((err: unknown) => this.deps.log?.(`run ${plan.id}: recording its end for the scheduler failed: ${String(err)}`));
     };
+    this.deps.history.openRun({ runId: plan.id, presetId: view.presetId, presetName, plan: view.plan, startedAt: view.startedAt });
     const done = this.deps.coordinator.run(plan, controller.signal, emit).then(finish, (err: unknown) =>
       // The coordinator turns every run failure into a result; reaching here is a bug worth a record.
       finish({ outcome: 'failed', stopCause: 'error', stats: emptyStats(), failure: toFailure(err), baseline: 'missing', levels: { initial: null, final: null } }),
     );
-    void this.deps.history.markOpen({ runId: plan.id, presetId: view.presetId, presetName, plan: view.plan, startedAt: view.startedAt });
     this.live.set(plan.id, { view, controller, done });
     this.deps.hub.publish({ type: 'run', run: structuredClone(view) });
     this.deps.onActiveChange?.(this.live.size);

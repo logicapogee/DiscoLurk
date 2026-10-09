@@ -111,10 +111,12 @@ export class PlanScheduler implements Scheduler {
   private materialize(spec: ScheduleSpec, plannedAtMs: number): RunPlanSnapshot {
     const seed = Math.floor(this.deps.random.next() * 0x1_0000_0000);
     const { preset, categories } = this.deps.loadPreset(spec.presetId);
+    const siteId = this.deps.siteOf(spec.profileId);
+    if (preset.siteId !== siteId) throw new Error(`Schedule ${spec.id} runs Profile ${spec.profileId} of site ${siteId} with preset ${preset.id} of site ${preset.siteId}`);
     return {
       id: this.deps.newId(),
       scheduleId: spec.id,
-      siteId: this.deps.siteOf(spec.profileId),
+      siteId,
       profileId: spec.profileId,
       browserMode: spec.browserMode,
       preset: resolvePreset(preset, categories, seededRandom(seed), (code, message) => this.deps.warn?.(code, `Schedule ${spec.id}: ${message}`)),
@@ -184,13 +186,16 @@ export class PlanScheduler implements Scheduler {
     return runId;
   }
 
+  /** A run that could not start is settled as skipped, so the next tick does not retry it. */
   private tryFire(spec: ScheduleSpec, s: ScheduleState, entry: PlannedRun, cause: TriggerCause): void {
     try {
       this.fire(spec, s, entry.snapshot, cause);
       entry.status = 'started';
     } catch (err) {
-      if (!(err instanceof ScheduleSkipped)) throw err;
       entry.status = 'skipped';
+      if (err instanceof ScheduleSkipped) return;
+      this.record(s, { snapshotId: entry.snapshot.id, cause, outcome: 'skipped', reason: 'start-failed' });
+      throw err;
     }
   }
 
@@ -209,7 +214,11 @@ export class PlanScheduler implements Scheduler {
       if (spec.enabled) this.plan(spec, s);
     }
     await this.persist();
-    await this.tick();
+    // Run-on-start still fires when one schedule's tick fails; the failure is reported afterwards.
+    const ticked = await this.tick().then(
+      () => null,
+      (err: unknown) => err,
+    );
     for (const spec of specs) {
       const s = state.schedules[spec.id]!;
       if (spec.enabled && spec.runOnStart && !s.runOnStartConsumed) {
@@ -224,6 +233,7 @@ export class PlanScheduler implements Scheduler {
       }
     }
     await this.persist();
+    if (ticked) throw ticked;
     return this.views();
   }
 
@@ -231,23 +241,34 @@ export class PlanScheduler implements Scheduler {
   async tick(): Promise<void> {
     const state = await this.load();
     const now = this.deps.clock.now();
+    const failures: string[] = [];
     for (const spec of this.specs.values()) {
       const s = state.schedules[spec.id];
       if (!s || !spec.enabled) continue;
-      this.plan(spec, s);
-      const due = s.planned.filter((p) => p.status === 'pending' && Date.parse(p.snapshot.plannedAt) <= now);
-      const graceMs = spec.misfire.graceMinutes * 60_000;
-      const missed = due.filter((p) => now - Date.parse(p.snapshot.plannedAt) > graceMs);
-      for (const p of due.filter((p) => !missed.includes(p))) this.tryFire(spec, s, p, 'planned');
-      for (const p of missed) {
-        p.status = 'missed';
-        this.record(s, { snapshotId: p.snapshot.id, cause: 'misfire', outcome: 'missed' });
+      try {
+        this.tickOne(spec, s, now);
+      } catch (err) {
+        failures.push(`schedule ${spec.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
-      if (missed.length > 0 && spec.misfire.policy === 'run-once') this.tryFire(spec, s, missed.at(-1)!, 'misfire');
-      // A cron schedule holds one pending run, so the next one is planned once this one is settled.
-      this.plan(spec, s);
     }
     await this.persist();
+    if (failures.length > 0) throw new Error(failures.join('; '));
+  }
+
+  /** One schedule's step; one schedule failing leaves the others' runs to fire. */
+  private tickOne(spec: ScheduleSpec, s: ScheduleState, now: number): void {
+    this.plan(spec, s);
+    const due = s.planned.filter((p) => p.status === 'pending' && Date.parse(p.snapshot.plannedAt) <= now);
+    const graceMs = spec.misfire.graceMinutes * 60_000;
+    const missed = due.filter((p) => now - Date.parse(p.snapshot.plannedAt) > graceMs);
+    for (const p of due.filter((p) => !missed.includes(p))) this.tryFire(spec, s, p, 'planned');
+    for (const p of missed) {
+      p.status = 'missed';
+      this.record(s, { snapshotId: p.snapshot.id, cause: 'misfire', outcome: 'missed' });
+    }
+    if (missed.length > 0 && spec.misfire.policy === 'run-once') this.tryFire(spec, s, missed.at(-1)!, 'misfire');
+    // A cron schedule holds one pending run, so the next one is planned once this one is settled.
+    this.plan(spec, s);
   }
 
   async trigger(scheduleId: ScheduleId, cause: TriggerCause): Promise<RunId> {

@@ -1,6 +1,7 @@
-import type { Category, ProfileHealth, RunEvent, ScheduleSpec } from '@disco-lurk/core';
+import type { Category, ProfileHealth, ScheduleSpec } from '@disco-lurk/core';
 import type {
   ActiveRun,
+  LoggedEvent,
   LoginView,
   ProfileCreate,
   ProfilePatch,
@@ -111,7 +112,7 @@ export class Api {
   startRun = (presetId: string) => this.json<ActiveRun>('POST', '/runs', { presetId });
   stopRun = (runId: string) => this.json<ActiveRun>('POST', `/runs/${encodeURIComponent(runId)}/stop`);
   history = (limit = 100) => this.json<RunRecord[]>('GET', `/runs/history?limit=${limit}`);
-  runEvents = (runId: string) => this.json<RunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events`);
+  runEvents = (runId: string) => this.json<LoggedEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events`);
   runLog = async (runId: string, types: string[]) =>
     (await this.raw('GET', `/runs/${encodeURIComponent(runId)}/log${types.length ? `?types=${types.join(',')}` : ''}`)).text();
 
@@ -129,7 +130,8 @@ export class Api {
   scheduleHistory = (id: string) => this.json<ScheduleHistoryEntry[]>('GET', `/schedules/${encodeURIComponent(id)}/history`);
 }
 
-export type StreamStatus = 'connecting' | 'open' | 'closed' | 'auth-failed';
+/** `server-closed`: the server shut down on purpose (close code 1001); reconnecting would only fail. */
+export type StreamStatus = 'connecting' | 'open' | 'closed' | 'auth-failed' | 'server-closed';
 
 /**
  * The `/events` socket: the first frame authenticates; afterwards frames arrive until the socket
@@ -183,6 +185,10 @@ export class EventStream {
       this.ws = null;
       if (e.code === 4401) {
         this.onStatus('auth-failed');
+        return;
+      }
+      if (e.code === 1001) {
+        this.onStatus('server-closed');
         return;
       }
       this.onStatus('closed');

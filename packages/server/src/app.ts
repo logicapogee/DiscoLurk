@@ -9,7 +9,7 @@ import { ProfileGate, RunManager, SiteCatalog, type Notify } from './runs';
 import { ScheduleService } from './schedules';
 import { parseBody, presetSaveSchema, profileCreateSchema, profilePatchSchema, scheduleSpecSchema, settingsPatchSchema } from './schemas';
 import { EventHub, HttpError, type Reply, type Route } from './server';
-import { PresetStore, ProfileRegistry, RunHistory, SettingsStore, splitProfileId, type LockHolder } from './store';
+import { HISTORY_LIMIT, PresetStore, ProfileRegistry, RunHistory, SettingsStore, splitProfileId, toJsonl, type LockHolder } from './store';
 
 /** Messages to the desktop shell, which owns the tray and native notifications. */
 export interface ShellChannel {
@@ -108,7 +108,7 @@ export function createApp(deps: AppDeps): LurkApp {
   const gate = new ProfileGate();
   const settings = new SettingsStore(join(deps.dataDir, 'settings.json'));
   const presets = new PresetStore(join(deps.dataDir, 'presets.json'));
-  const history = new RunHistory(join(deps.dataDir, 'runs'));
+  const history = new RunHistory(join(deps.dataDir, 'runs'), HISTORY_LIMIT, log);
   const catalog = new SiteCatalog(deps.sites, (site) =>
     site.categorySource === 'builtin' ? Promise.resolve(site.builtinCategories ?? []) : deps.categories.load(site.id),
   );
@@ -184,10 +184,13 @@ export function createApp(deps: AppDeps): LurkApp {
       hub.publish({ type: 'profiles-changed' });
     }
   };
-  const runLog = async (runId: string, types: string | null) => {
+  /** The run's stored events, optionally only some types; lines a crash cut short are skipped and logged. */
+  const runLog = async (runId: string, types: readonly string[] | null) => {
     if (!runs.get(runId) && !history.get(runId)) throw new HttpError(404, 'unknown-run', `Unknown run ${runId}`);
-    const wanted = types?.split(',').filter((t): t is RunEvent['type'] => EVENT_TYPES.has(t as RunEvent['type']));
-    return (await history.readEvents(runId)).filter((l) => !wanted?.length || wanted.includes((JSON.parse(l) as RunEvent).type));
+    const wanted = types?.filter((t): t is RunEvent['type'] => EVENT_TYPES.has(t as RunEvent['type']));
+    const { events, skipped } = await history.readEvents(runId);
+    if (skipped > 0) log(`run ${runId}: skipped ${skipped} unreadable event line(s)`);
+    return { events: events.filter((e) => !wanted?.length || wanted.includes(e.type)), skipped };
   };
   const startPreset = async (presetId: string) => {
     const preset = presets.get(presetId);
@@ -323,6 +326,11 @@ export function createApp(deps: AppDeps): LurkApp {
         const save: PresetSave = parseBody(presetSaveSchema, body);
         if (save.preset.id !== params.id) throw new HttpError(422, 'id-mismatch', 'The preset id must match the URL');
         catalog.site(save.preset.siteId);
+        const stored = presets.get(save.preset.id);
+        if (stored && stored.siteId !== save.preset.siteId) {
+          const users = await schedules.usersOf(save.preset.id);
+          if (users.length > 0) throw new HttpError(409, 'preset-in-use', `Preset ${save.preset.id} is run by schedule ${users.join(', ')}; its site cannot change`);
+        }
         // Automatic replies post under the user's name; the kernel also turns them off without this.
         const reply = save.preset.interaction.reply;
         if (reply.enabled && !reply.riskAcknowledged) throw new HttpError(428, 'reply-confirmation-required', '开启自动回复需要确认风险');
@@ -384,7 +392,10 @@ export function createApp(deps: AppDeps): LurkApp {
     {
       method: 'GET',
       path: '/runs/:id/events',
-      handle: async ({ params }) => ok((await history.readEvents(params.id!)).map((l) => JSON.parse(l) as RunEvent)),
+      handle: async ({ params }) => {
+        const { events, skipped } = await runLog(params.id!, null);
+        return { status: 200, body: events, headers: { 'X-Skipped-Lines': String(skipped) } };
+      },
     },
     {
       // The event log as JSONL, optionally only some event types; `types=state,warning,error`.
@@ -392,12 +403,12 @@ export function createApp(deps: AppDeps): LurkApp {
       path: '/runs/:id/log',
       handle: async ({ params, query }) => {
         const id = params.id!;
-        const lines = await runLog(id, query.get('types'));
+        const { events, skipped } = await runLog(id, query.get('types')?.split(',') ?? null);
         return {
           status: 200,
-          text: lines.join('\n') + (lines.length ? '\n' : ''),
+          text: toJsonl(events),
           contentType: 'application/x-ndjson; charset=utf-8',
-          headers: { 'Content-Disposition': `attachment; filename="${id}.jsonl"` },
+          headers: { 'Content-Disposition': `attachment; filename="${id}.jsonl"`, 'X-Skipped-Lines': String(skipped) },
         };
       },
     },
@@ -408,12 +419,12 @@ export function createApp(deps: AppDeps): LurkApp {
       handle: async ({ params, body }) => {
         const id = params.id!;
         const types = (body as { types?: unknown } | undefined)?.types;
-        const lines = await runLog(id, Array.isArray(types) ? types.filter((t) => typeof t === 'string').join(',') : null);
+        const { events, skipped } = await runLog(id, Array.isArray(types) ? types.filter((t) => typeof t === 'string') : null);
         const stamp = new Date(deps.clock.now()).toISOString().replace(/[:.]/g, '-');
         const path = join(deps.dataDir, 'exports', `${id.replace(/[^A-Za-z0-9_-]/g, '_')}-${stamp}.jsonl`);
         await mkdir(dirname(path), { recursive: true });
-        await writeFile(path, lines.join('\n') + (lines.length ? '\n' : ''));
-        return ok({ path, lines: lines.length });
+        await writeFile(path, toJsonl(events));
+        return ok({ path, lines: events.length, skipped });
       },
     },
 

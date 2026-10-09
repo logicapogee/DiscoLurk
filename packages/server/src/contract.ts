@@ -79,6 +79,9 @@ export interface ActiveRun {
   result?: RunResult;
 }
 
+/** A run event as stored and pushed: `seq` counts up from 1 within the run, so a client merges stored and live events by it. */
+export type LoggedEvent = RunEvent & { seq: number };
+
 export interface RunRecord {
   runId: RunId;
   presetId: string;
@@ -153,7 +156,7 @@ export interface ErrorBody {
 export type ServerFrame =
   | { type: 'auth-ok' }
   | { type: 'heartbeat'; at: string }
-  | { type: 'event'; runId: RunId; event: RunEvent }
+  | { type: 'event'; runId: RunId; event: LoggedEvent }
   | { type: 'run'; run: ActiveRun }
   | { type: 'login'; login: LoginView }
   | { type: 'profiles-changed' }

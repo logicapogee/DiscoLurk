@@ -85,18 +85,24 @@ jobs:
             pnpm gate:sidecar --headed
           fi
 
+      # Updater bundles need both halves of the minisign pair: the public key in tauri.conf.json,
+      # which the installed app verifies against, and the private key secret that signs them.
       - name: Updater signing
         id: updater
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
+          pubkey=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').plugins.updater.pubkey")
           if [ "${{ matrix.updater }}" != true ]; then
             echo 'config={}' >> "$GITHUB_OUTPUT"
-          elif [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo 'config={"bundle":{"createUpdaterArtifacts":true}}' >> "$GITHUB_OUTPUT"
-          else
+          elif [ -z "$pubkey" ]; then
+            echo "::warning title=Updater bundles skipped::plugins.updater.pubkey in tauri.conf.json is empty, so ${{ matrix.name }} ships without updater artifacts"
+            echo 'config={}' >> "$GITHUB_OUTPUT"
+          elif [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "::warning title=Updater bundles skipped::TAURI_SIGNING_PRIVATE_KEY is not set, so ${{ matrix.name }} ships without signed updater artifacts"
             echo 'config={}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'config={"bundle":{"createUpdaterArtifacts":true}}' >> "$GITHUB_OUTPUT"
           fi
 
       - name: Tauri build

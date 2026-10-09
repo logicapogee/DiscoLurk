@@ -20,6 +20,7 @@ export const copy = {
     logFile: '日志文件',
     retry: '重新启动',
     reconnecting: '与后台服务的连接已断开，正在重连…',
+    serverClosed: '后台服务已关闭。服务重新启动后请刷新本页面。',
     restarted: '后台服务已重新启动',
   },
   token: {

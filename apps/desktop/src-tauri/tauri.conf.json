@@ -29,10 +29,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "app",
-      "dmg"
-    ],
+    "targets": "all",
     "externalBin": [
       "binaries/lurk"
     ],

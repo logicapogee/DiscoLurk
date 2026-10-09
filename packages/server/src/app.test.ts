@@ -15,6 +15,7 @@ import {
   type InterruptibleSleeper,
   type LevelSnapshot,
   type RunEvent,
+  type Site,
 } from '@disco-lurk/core';
 import { FixtureForum, fixtureSite } from '@disco-lurk/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,7 +24,7 @@ import { createApp, defaultPreset, isNewer, type LurkApp, type ShellChannel } fr
 import type { ActiveRun, LoginView, RunRecord, ScheduleHistoryEntry, ScheduleList, ServerFrame, Settings, StoredPreset } from './contract';
 import { startServer, type LurkServer } from './server';
 import { RunHistory } from './store';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 /** Every kernel wait shrinks to a few milliseconds, so a fixture run takes real but short time. */
 const fastSleeper: InterruptibleSleeper = { sleep: (ms, signal) => systemSleeper.sleep(Math.min(ms, 3), signal) };
@@ -49,7 +50,7 @@ interface Harness {
   shell: { notices: Array<[string, string]>; settings: Settings[]; tokens: string[]; active: number[] };
   locks: Map<string, number>;
   /** How the next sign-in check answers, per mode. */
-  auth: { next: (mode: AuthMode) => Promise<AuthResult> };
+  auth: { next: (mode: AuthMode, signal?: AbortSignal) => Promise<AuthResult> };
   dataDir: string;
   shutdowns: () => number;
   /** The browser form of every session the kernel opened, in order. */
@@ -70,6 +71,7 @@ interface BootOptions {
   dataDir?: string;
   /** Answers the progress page; the fixture site then reports one. */
   progress?: (kind: 'initial' | 'final') => LevelSnapshot | null;
+  extraSites?: Site[];
 }
 
 async function boot(opts: BootOptions = {}): Promise<Harness> {
@@ -100,7 +102,7 @@ async function boot(opts: BootOptions = {}): Promise<Harness> {
         sleeper: fastSleeper,
         topics: (path, call) => Array.from({ length: 3 }, (_, i) => ({ id: `${path}-${call}-${i}`, title: 't', unread: true, pinned: false })),
         latency: { collect: 2, enter: 2, dwell: 2, back: 2 },
-        auth: (mode) => auth.next(mode),
+        auth: (mode, signal) => auth.next(mode, signal),
       });
       return { forum, closed: new AbortController().signal, close: async () => {} };
     },
@@ -112,7 +114,7 @@ async function boot(opts: BootOptions = {}): Promise<Harness> {
     dataDir,
     profilesDir,
     coordinator,
-    sites: [runSite],
+    sites: [runSite, ...(opts.extraSites ?? [])],
     categories: new MemoryCategories(),
     sleeper: fastSleeper,
     lockHolder: async (dir) => locks.get(dir) ?? null,
@@ -312,11 +314,69 @@ describe('server API', () => {
     const alive = createApp(appDepsOf(h));
     await alive.start();
     expect((await new RunHistoryProbe(h).list()).some((r) => r.runId === started.body.runId)).toBe(false);
+    // The mark now names another process, one that has died.
+    const markPath = join(h.dataDir, 'runs', 'open', `${started.body.runId.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+    writeFileSync(markPath, JSON.stringify({ ...JSON.parse(readFileSync(markPath, 'utf8')), pid: 999_999 }));
     const again = createApp({ ...appDepsOf(h), processAlive: () => false });
     await again.start();
     const rec = (await new RunHistoryProbe(h).list()).find((r) => r.runId === started.body.runId);
     expect(rec?.result).toMatchObject({ outcome: 'failed', failure: { code: 'internal' } });
     expect(rec?.result.stats.confirmed.topics).toBeGreaterThanOrEqual(0);
+  });
+
+  it('skips event lines a crash cut short in /events, /log and the export, and counts them', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset({ runMode: { kind: 'topics', min: 1, max: 1 } }) });
+    const ws = await events(h);
+    const runId = (await call<ActiveRun>('POST', '/runs', { presetId: 'p1' })).body.runId;
+    await ws.until((f) => f.type === 'run' && f.run.runId === runId && f.run.result !== undefined);
+    ws.ws.close();
+    const file = join(h.dataDir, 'runs', `${runId.replace(/[^A-Za-z0-9_-]/g, '_')}.events.jsonl`);
+    const whole = readFileSync(file, 'utf8').trimEnd().split('\n');
+    writeFileSync(file, [whole[0], '{"seq":99,"type":"sta', ...whole.slice(1)].join('\n') + '\n');
+    const list = await call<Array<{ seq: number }>>('GET', `/runs/${runId}/events`);
+    expect(list.status).toBe(200);
+    expect(list.body).toHaveLength(whole.length);
+    expect(list.body.map((e) => e.seq)).toEqual(whole.map((_, i) => i + 1));
+    expect(list.headers.get('x-skipped-lines')).toBe('1');
+    const log = await call<string>('GET', `/runs/${runId}/log?types=state`);
+    expect(log.status).toBe(200);
+    expect(log.headers.get('x-skipped-lines')).toBe('1');
+    expect(log.body.trim().split('\n').every((l) => JSON.parse(l).type === 'state')).toBe(true);
+    const exported = await call<{ lines: number; skipped: number }>('POST', `/runs/${runId}/export`, {});
+    expect(exported.body).toMatchObject({ lines: whole.length, skipped: 1 });
+  });
+
+  it('refuses to move a preset that a schedule runs to another site', async () => {
+    const other = fixtureSite({ id: 'fy', displayName: 'Other', categorySource: 'builtin', builtinCategories: categories });
+    const h = await boot({ extraSites: [other] });
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset() });
+    const spec = {
+      id: 's1',
+      name: 'n',
+      profileId: 'fx/main',
+      presetId: 'p1',
+      enabled: true,
+      browserMode: 'headless',
+      timezone: 'UTC',
+      trigger: { kind: 'cron', expression: '0 8 * * *' },
+      misfire: { policy: 'skip', graceMinutes: 30 },
+      overlap: 'skip',
+      unavailableDisplay: 'skip',
+      runOnStart: false,
+    };
+    await h.app.services.profiles.setHealth({ profileId: 'fx/main', status: 'ready', checkedAt: new Date().toISOString() });
+    expect((await call('PUT', '/schedules/s1', spec)).status).toBe(200);
+    const moved = await call<{ error: string }>('PUT', '/presets/p1', { preset: preset({ siteId: 'fy', profileId: null }) });
+    expect(moved.status).toBe(409);
+    expect(moved.body.error).toBe('preset-in-use');
+    expect((await call('PUT', '/presets/p1', { preset: preset({ browseMode: 'quick' }) })).status).toBe(200);
+    await call('DELETE', '/schedules/s1');
+    expect((await call('PUT', '/presets/p1', { preset: preset({ siteId: 'fy', profileId: null }) })).status).toBe(200);
   });
 
   it('answers 409 when another process holds the Profile lock', async () => {
@@ -360,7 +420,8 @@ describe('server API', () => {
     const h = await boot();
     const call = api(h);
     await withProfile(h);
-    h.auth.next = (_mode) => new Promise(() => {});
+    // Waits until the window is closed, as the real sign-in check does.
+    h.auth.next = (_mode, signal) => new Promise((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason)));
     const ws = await events(h);
     await call('POST', '/profiles/fx/main/login');
     const waiting = (await ws.until((f) => f.type === 'login' && f.login.phase === 'waiting')) as Extract<ServerFrame, { type: 'login' }>;
@@ -495,6 +556,9 @@ describe('server API', () => {
     expect((await call('PATCH', '/profiles/fx/main', { proxy: 'http://127.0.0.1:7890' })).status).toBe(200);
     expect((await call('PATCH', '/profiles/fx/main', { executablePath: '/bin/sh' })).status).toBe(422);
     expect((await call('PATCH', '/profiles/fx/main', { proxy: '--disable-web-security' })).status).toBe(422);
+    const withCredentials = await call<{ message: string }>('PATCH', '/profiles/fx/main', { proxy: 'http://user:secret@127.0.0.1:7890' });
+    expect(withCredentials.status).toBe(422);
+    expect(withCredentials.body.message).toMatch(/credentials are not supported/);
     expect(await h.app.services.profiles.resolve('fx/main')).toMatchObject({ channel: 'chrome', proxy: 'http://127.0.0.1:7890' });
     mkdirSync(join(h.dataDir, 'profiles', 'fx', 'cli-made'), { recursive: true });
     expect((await call<Array<{ id: string }>>('GET', '/profiles')).body.map((p) => p.id)).toEqual(['fx/cli-made', 'fx/main']);

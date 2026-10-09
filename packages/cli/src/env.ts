@@ -1,5 +1,5 @@
 import type { RunPreset, ScheduleSpec, Site } from '@disco-lurk/core';
-import { isLoopback, MIN_TOKEN_BYTES, tokenStrongEnough } from '@disco-lurk/server';
+import { hasUserinfo, isLoopback, MIN_TOKEN_BYTES, TOKEN_REQUIREMENT, tokenStrongEnough } from '@disco-lurk/server';
 import { DEFAULT_EXTRA_WAIT, DEFAULT_INTERACTION, parseRunMode, profileIdOf, UsageError } from './run';
 import { BUILTIN_SITES, findSite } from './sites';
 
@@ -91,6 +91,7 @@ export function proxyFromEnv(env: Env): string | undefined {
     throw new EnvError(`LURK_PROXY must be a URL such as http://127.0.0.1:7890 or socks5://host:1080, not "${v}"`);
   }
   if (!['http:', 'https:', 'socks5:'].includes(url.protocol)) throw new EnvError(`LURK_PROXY scheme must be http, https or socks5, not ${url.protocol}`);
+  if (hasUserinfo(v)) throw new EnvError('LURK_PROXY must not carry a username or password; use a proxy that needs no authentication');
   return v;
 }
 
@@ -146,7 +147,7 @@ export function serveEnv(host: string, env: Env): ServeEnv {
   if (!loopback && token === undefined) {
     throw new EnvError(`--host ${host} accepts remote connections, so LURK_TOKEN is required (at least ${MIN_TOKEN_BYTES} random bytes, e.g. \`openssl rand -base64 48\`)`);
   }
-  if (token !== undefined && !tokenStrongEnough(token)) throw new EnvError(`LURK_TOKEN must be at least ${MIN_TOKEN_BYTES} bytes long`);
+  if (token !== undefined && !tokenStrongEnough(token)) throw new EnvError(`LURK_TOKEN must be ${TOKEN_REQUIREMENT} (e.g. \`openssl rand -base64 48\`)`);
   return { token, proxy: proxyFromEnv(env) };
 }
 

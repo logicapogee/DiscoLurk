@@ -4,6 +4,7 @@ import { ERROR_CODES, type RunPreset, type ScheduleSpec } from '@disco-lurk/core
 import { PlanScheduler, validateTrigger, type SchedulerDeps, type SchedulerState, type ScheduleStore } from '@disco-lurk/scheduler';
 import { z } from 'zod';
 import { writeJsonAtomic } from './category-store';
+import { currentLockOwner, lockOwnerLive, markLockHeld, markLockReleased, type LivenessProbe, type LockOwner } from './process';
 import { categorySchema } from './site';
 
 /** A schedule or preset file that exists but cannot be used; the message names the file. */
@@ -280,36 +281,29 @@ export class SchedulerLockedError extends Error {
   }
 }
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
 /**
  * One process at a time owns the scheduler state, since each holds it in memory and writes it
- * back whole. A lock left by a process that no longer exists is taken over.
+ * back whole. A lock whose owner is gone (see `lockOwnerLive`) is taken over.
  */
-export async function acquireSchedulerLock(dir: string, isAlive: (pid: number) => boolean = alive): Promise<SchedulerLock> {
+export async function acquireSchedulerLock(dir: string, probe: LivenessProbe = {}): Promise<SchedulerLock> {
   await mkdir(dir, { recursive: true });
   const path = join(dir, '.lurk-lock');
-  const info = { pid: process.pid, startedAt: new Date().toISOString() };
+  const info = { ...(await currentLockOwner()), startedAt: new Date().toISOString() };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await writeFile(path, JSON.stringify(info), { flag: 'wx' });
+      markLockHeld(path);
       return {
         async release() {
+          markLockReleased(path);
           const current = (await readJson(path).catch(() => null)) as { pid?: number; startedAt?: string } | null;
           if (current?.pid === info.pid && current.startedAt === info.startedAt) await unlink(path).catch(() => {});
         },
       };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      const holder = (await readJson(path).catch(() => null)) as { pid?: number } | null;
-      if (typeof holder?.pid === 'number' && isAlive(holder.pid)) throw new SchedulerLockedError(dir, holder.pid);
+      const holder = (await readJson(path).catch(() => null)) as LockOwner | null;
+      if (typeof holder?.pid === 'number' && (await lockOwnerLive(holder, path, probe))) throw new SchedulerLockedError(dir, holder.pid);
       await unlink(path).catch(() => {});
     }
   }
@@ -320,7 +314,7 @@ export interface OpenSchedulerOptions {
   /** `<appData>/disco-lurk`; definitions, state and the lock live in its `schedules` directory. */
   dataDir: string;
   deps: Omit<SchedulerDeps, 'store'>;
-  isAlive?: (pid: number) => boolean;
+  probe?: LivenessProbe;
 }
 
 export interface OpenedScheduler {
@@ -340,7 +334,7 @@ export const schedulesDirOf = (dataDir: string) => join(dataDir, 'schedules');
  */
 export async function openScheduler(opts: OpenSchedulerOptions): Promise<OpenedScheduler> {
   const dir = schedulesDirOf(opts.dataDir);
-  const lock = await acquireSchedulerLock(dir, opts.isAlive);
+  const lock = await acquireSchedulerLock(dir, opts.probe);
   return {
     scheduler: new PlanScheduler({ ...opts.deps, store: new FileScheduleStore(dir) }),
     book: new FileScheduleBook(dir),

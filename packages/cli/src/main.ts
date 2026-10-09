@@ -1,14 +1,12 @@
 import './inspector-shim';
-import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { DiscoLurkCoordinator, isAbortError, RunError } from '@disco-lurk/core';
 import { formatDoctor, runDoctor } from './doctor';
 import { ConfigFileError, FileCategoryStore } from '@disco-lurk/config';
-import { appDataDir, profilesDir, sitesDir } from './paths';
-import { SidecarLifecycle } from './lifecycle';
-import { bootServer, stdoutShell } from './sidecar';
+import { profilesDir, sitesDir } from './paths';
+import { runSidecar } from './sidecar';
 import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
 import { installStopHandlers } from './signals';
@@ -68,40 +66,6 @@ async function doctor(argv: string[]): Promise<number> {
   });
   console.log(values.json ? JSON.stringify(report, null, 2) : formatDoctor(report));
   return report.checks.some((c) => c.status === 'fail') ? EXIT.environment : EXIT.ok;
-}
-
-async function sidecar(argv: string[]): Promise<number> {
-  if (argv.length > 0) {
-    console.error('sidecar takes no arguments');
-    return EXIT.environment;
-  }
-  // The token never appears in argv, the environment or a file, where other local processes
-  // could read it; only the shell, holding the other end of stdout, learns it from the ready line.
-  const token = randomBytes(32).toString('base64url');
-  // Once the shell is gone its ends of stdout/stderr are closed; dropping those write errors keeps
-  // them from crashing the sidecar before cleanup finishes.
-  process.stdout.on('error', () => {});
-  process.stderr.on('error', () => {});
-  const log = (m: string) => console.error(m);
-  const lifecycle = new SidecarLifecycle(log);
-  // The shell spawns the sidecar on loopback only; remote access is the separate `serve` command.
-  const server = await bootServer({
-    version: VERSION,
-    host: '127.0.0.1',
-    port: 0,
-    token,
-    dataDir: appDataDir(),
-    headlessOnly: false,
-    lifecycle,
-    shell: stdoutShell(),
-    log,
-  });
-  console.log(JSON.stringify({ event: 'ready', port: server.port, token }));
-  lifecycle.watchParent(process.stdin);
-  process.once('SIGTERM', () => void lifecycle.shutdown('SIGTERM'));
-  process.once('SIGINT', () => void lifecycle.shutdown('SIGINT'));
-  await lifecycle.done;
-  return EXIT.ok;
 }
 
 /** Packaging-gate entry used by scripts/gate-sidecar.ts; not a user-facing command. */
@@ -249,7 +213,7 @@ async function main(argv: string[]): Promise<number> {
     case 'doctor':
       return doctor(rest);
     case 'sidecar':
-      return sidecar(rest);
+      return runSidecar(rest, VERSION);
     case 'serve':
       return serve(rest, VERSION);
     case 'selftest':

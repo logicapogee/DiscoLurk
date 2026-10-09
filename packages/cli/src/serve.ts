@@ -18,6 +18,8 @@ export interface ServeArgs {
   origins: string[];
   uiDir: string | undefined;
   dataDir: string;
+  /** Reverse proxies whose X-Forwarded-For names the client that auth failures are counted against. */
+  trustedProxies: string[];
 }
 
 /** The built UI ships inside the binary next to the bundle; `--ui` or `LURK_UI_DIR` point elsewhere. */
@@ -39,6 +41,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
         origin: { type: 'string', multiple: true },
         ui: { type: 'string' },
         data: { type: 'string' },
+        'trusted-proxy': { type: 'string', multiple: true },
       },
     }));
   } catch (err) {
@@ -55,6 +58,13 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
     origins: values.origin ?? [],
     uiDir: ui ? resolve(ui) : defaultUiDir(),
     dataDir: data ? resolve(data) : appDataDir(),
+    trustedProxies: [
+      ...(values['trusted-proxy'] ?? []),
+      ...(env.LURK_TRUSTED_PROXIES ?? '')
+        .split(',')
+        .map((p) => p.trim())
+        .filter(Boolean),
+    ],
   };
 }
 
@@ -101,6 +111,44 @@ export function runLogLine(frame: ServerFrame): string | null {
   return null;
 }
 
+export interface CrashWatch {
+  readonly crashed: boolean;
+  dispose(): void;
+}
+
+/**
+ * An error nothing caught still ends the process, but through the same shutdown as a signal:
+ * runs stop as an app exit, browsers and Profile locks are released and history is written, then
+ * the process exits with the environment code.
+ */
+export function exitOnCrash(
+  lifecycle: { shutdown(reason: string): Promise<void> },
+  log: (message: string) => void,
+  target: NodeJS.EventEmitter = process,
+  exit: (code: number) => void = (code) => process.exit(code),
+): CrashWatch {
+  let crashed = false;
+  const onCrash = (kind: string) => (err: unknown) => {
+    log(`${kind}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    if (crashed) return;
+    crashed = true;
+    void lifecycle.shutdown(kind).finally(() => exit(EXIT.environment));
+  };
+  const rejection = onCrash('unhandledRejection');
+  const exception = onCrash('uncaughtException');
+  target.on('unhandledRejection', rejection);
+  target.on('uncaughtException', exception);
+  return {
+    get crashed() {
+      return crashed;
+    },
+    dispose() {
+      target.off('unhandledRejection', rejection);
+      target.off('uncaughtException', exception);
+    },
+  };
+}
+
 /** The server, its web UI and the schedules in one process, for a NAS, Docker or a remote desktop. */
 export async function serve(argv: string[], version: string): Promise<number> {
   const args = parseServeArgs(argv);
@@ -110,6 +158,7 @@ export async function serve(argv: string[], version: string): Promise<number> {
   const log = (m: string) => console.error(`[${new Date().toISOString()}] ${m}`);
   for (const w of envWarnings(process.env)) log(`warning: ${w}`);
   const lifecycle = new SidecarLifecycle(log);
+  const crash = exitOnCrash(lifecycle, log);
   const server = await bootServer({
     version,
     host: args.host,
@@ -139,5 +188,5 @@ export async function serve(argv: string[], version: string): Promise<number> {
   process.once('SIGTERM', () => void lifecycle.shutdown('SIGTERM'));
   process.once('SIGINT', () => void lifecycle.shutdown('SIGINT'));
   await lifecycle.done;
-  return EXIT.ok;
+  return crash.crashed ? EXIT.environment : EXIT.ok;
 }

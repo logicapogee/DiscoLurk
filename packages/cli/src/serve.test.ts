@@ -1,13 +1,14 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LOCK_FILE, processAlive } from '@disco-lurk/site-discourse';
 import { describe, expect, it } from 'vitest';
-import { parseServeArgs, runLogLine, serveToken } from './serve';
+import { exitOnCrash, parseServeArgs, runLogLine, serveToken } from './serve';
 import { reclaimProfiles } from './sidecar';
 
-const strong = 'k'.repeat(43);
+const strong = 'abcdefghijklmnopqrstuvwxyz0123456789-_ABCDE';
 
 describe('lurk serve access rules', () => {
   it('refuses a non-loopback host without LURK_TOKEN and a weak LURK_TOKEN anywhere', () => {
@@ -32,15 +33,44 @@ describe('lurk serve access rules', () => {
     const b = parseServeArgs(['--host', '0.0.0.0', '--port', '9000', '--headless', '--data', '/x', '--origin', 'https://a', '--origin', 'https://b'], {});
     expect(b).toMatchObject({ host: '0.0.0.0', port: 9000, headless: true, dataDir: '/x', origins: ['https://a', 'https://b'] });
     expect(() => parseServeArgs(['--port', 'nope'], {})).toThrow(/Invalid --port/);
+    expect(parseServeArgs(['--trusted-proxy', '10.0.0.2'], { LURK_TRUSTED_PROXIES: '10.0.0.3, 10.0.0.4' }).trustedProxies).toEqual(['10.0.0.2', '10.0.0.3', '10.0.0.4']);
+    expect(a.trustedProxies).toEqual([]);
+  });
+});
+
+describe('crashes in serve and sidecar', () => {
+  it('runs the shutdown once for an unhandled rejection or exception, then exits with the environment code', async () => {
+    const target = new EventEmitter();
+    const reasons: string[] = [];
+    const logs: string[] = [];
+    let exitCode: number | null = null;
+    await new Promise<void>((resolve) => {
+      const watch = exitOnCrash(
+        { shutdown: async (r) => void reasons.push(r) },
+        (m) => logs.push(m),
+        target,
+        (code) => {
+          exitCode = code;
+          resolve();
+        },
+      );
+      target.emit('unhandledRejection', new Error('history write failed'));
+      target.emit('uncaughtException', new Error('second'));
+      expect(watch.crashed).toBe(true);
+    });
+    expect(reasons).toEqual(['unhandledRejection']);
+    expect(exitCode).toBe(4);
+    expect(logs[0]).toMatch(/^unhandledRejection: Error: history write failed/);
+    expect(logs[1]).toMatch(/^uncaughtException: Error: second/);
   });
 });
 
 describe('lurk serve log', () => {
   it('keeps warnings, errors and how each run ended', () => {
     const at = '2026-10-09T00:00:00.000Z';
-    expect(runLogLine({ type: 'event', runId: 'r1', event: { type: 'warning', at, code: 'page-hidden', message: 'hidden' } })).toBe('r1 warning page-hidden: hidden');
-    expect(runLogLine({ type: 'event', runId: 'r1', event: { type: 'error', at, error: { code: 'needs-auth', message: 'signed out' } } })).toBe('r1 error needs-auth: signed out');
-    expect(runLogLine({ type: 'event', runId: 'r1', event: { type: 'floor', at, from: 1, to: 2, confirmed: true } })).toBeNull();
+    expect(runLogLine({ type: 'event', runId: 'r1', event: { seq: 1, type: 'warning', at, code: 'page-hidden', message: 'hidden' } })).toBe('r1 warning page-hidden: hidden');
+    expect(runLogLine({ type: 'event', runId: 'r1', event: { seq: 2, type: 'error', at, error: { code: 'needs-auth', message: 'signed out' } } })).toBe('r1 error needs-auth: signed out');
+    expect(runLogLine({ type: 'event', runId: 'r1', event: { seq: 3, type: 'floor', at, from: 1, to: 2, confirmed: true } })).toBeNull();
     const stats = { confirmed: { topics: 3, floors: 40 } } as never;
     const run = { runId: 'r1', presetName: 'p', plan: { profileId: 'linuxdo/default' }, state: 'completed', result: { outcome: 'completed', stopCause: 'target', stats } } as never;
     expect(runLogLine({ type: 'run', run })).toBe('run r1 ended: completed (target), confirmed 3 topics / 40 floors');

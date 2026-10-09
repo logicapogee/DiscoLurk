@@ -19,6 +19,8 @@ interface Login {
   release: () => void;
   /** The step in flight (opening, waiting, rechecking), so close() can let it unwind. */
   step: Promise<void>;
+  /** Set by close(); a step that resumes afterwards closes whatever it opened and stops. */
+  closed: boolean;
 }
 
 /**
@@ -55,23 +57,28 @@ export class LoginManager {
     const existing = this.logins.get(profileId);
     if (existing && !['done', 'failed', 'closed'].includes(existing.view.phase)) return { ...existing.view };
     const release = this.deps.gate.claim(profileId, 'sign-in');
-    const l: Login = { view: { profileId, phase: 'opening' }, session: null, wait: null, release, step: Promise.resolve() };
+    const l: Login = { view: { profileId, phase: 'opening' }, session: null, wait: null, release, step: Promise.resolve(), closed: false };
     this.logins.set(profileId, l);
     this.publish(l, { phase: 'opening' });
     l.step = (async () => {
+      let session: AuthSession;
       try {
-        l.session = await this.deps.coordinator.beginAuth(profileId);
+        session = await this.deps.coordinator.beginAuth(profileId);
       } catch (err) {
         release();
-        this.publish(l, { phase: 'failed', message: describe(err) });
+        if (!l.closed) this.publish(l, { phase: 'failed', message: describe(err) });
         return;
       }
+      // The window opened after the sign-in was closed: nobody is left to use it.
+      if (l.closed) return void (await session.close().catch(() => {}));
+      l.session = session;
       await this.waitOnce(l);
     })();
     return { ...l.view };
   }
 
   private async waitOnce(l: Login): Promise<void> {
+    if (l.closed || !l.session) return;
     const wait = new AbortController();
     l.wait = wait;
     this.publish(l, { phase: 'waiting', deadline: this.deps.clock.now() + LOGIN_WAIT_MS });
@@ -84,11 +91,12 @@ export class LoginManager {
     try {
       result = await step();
     } catch (err) {
-      if (l.view.phase === 'closed' || interrupt?.aborted) return;
+      if (l.closed || l.view.phase === 'closed' || interrupt?.aborted) return;
       // The person closed the browser window: the sign-in is over and the Profile is free again.
       if (isAbortError(err)) return this.finish(l, 'closed');
       return this.finish(l, 'failed', describe(err));
     }
+    if (l.closed) return;
     if (result.status === 'authenticated') return this.signedIn(l, result.username);
     this.publish(l, { phase: result.status === 'challenge-detected' ? 'challenge-detected' : 'needs-auth' });
   }
@@ -100,9 +108,9 @@ export class LoginManager {
     try {
       const health = await session.inspect();
       await this.deps.afterSignIn(health);
-      this.publish(l, { phase: 'done', ...(username ? { username } : {}), health });
+      if (!l.closed) this.publish(l, { phase: 'done', ...(username ? { username } : {}), health });
     } catch (err) {
-      this.publish(l, { phase: 'done', ...(username ? { username } : {}), message: describe(err) });
+      if (!l.closed) this.publish(l, { phase: 'done', ...(username ? { username } : {}), message: describe(err) });
     } finally {
       l.session = null;
       await session.close().catch(() => {});
@@ -122,7 +130,7 @@ export class LoginManager {
   recheck(profileId: ProfileId): LoginView {
     const l = this.live(profileId);
     if (l.view.phase === 'waiting') l.wait?.abort();
-    l.step = l.step.then(() => this.settle(l, () => l.session!.recheck()));
+    l.step = l.step.then(() => (l.closed || !l.session ? undefined : this.settle(l, () => l.session!.recheck())));
     return { ...l.view };
   }
 
@@ -133,10 +141,15 @@ export class LoginManager {
     return { ...l.view };
   }
 
+  /** Closes the window and waits for the step in flight to unwind, so no browser outlives the call. */
   async close(profileId: ProfileId): Promise<LoginView> {
     const l = this.logins.get(profileId);
     if (!l) throw new HttpError(404, 'no-login', `No sign-in for ${profileId}`);
-    if (l.view.phase !== 'done' && l.view.phase !== 'failed' && l.view.phase !== 'closed') await this.finish(l, 'closed');
+    if (l.view.phase !== 'done' && l.view.phase !== 'failed' && l.view.phase !== 'closed') {
+      l.closed = true;
+      await this.finish(l, 'closed');
+    }
+    await l.step.catch(() => {});
     return { ...l.view };
   }
 

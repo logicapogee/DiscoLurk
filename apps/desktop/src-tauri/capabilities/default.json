@@ -1,12 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: core defaults plus the autostart switch. The shell spawns the sidecar from Rust, so the page holds no shell permission.",
+  "description": "Main window: event listening for the restart notice plus the autostart switch. The shell spawns the sidecar from Rust and app commands need no permission, so the page holds nothing else.",
   "windows": [
     "main"
   ],
   "permissions": [
-    "core:default",
+    "core:event:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled"

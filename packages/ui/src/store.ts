@@ -1,11 +1,12 @@
 import { createContext } from 'preact';
 import { useContext, useEffect, useState } from 'preact/hooks';
-import type { RunEvent } from '@disco-lurk/core';
-import type { ActiveRun, LoginView, ProfileView, RunRecord, ServerFrame, ServerInfo, Settings, SiteView, StoredPreset, UpdateInfo } from '@disco-lurk/server/contract';
+import type { ActiveRun, LoggedEvent, LoginView, ProfileView, RunRecord, ServerFrame, ServerInfo, Settings, SiteView, StoredPreset, UpdateInfo } from '@disco-lurk/server/contract';
 import { Api, EventStream, type StreamStatus } from './api';
 
 /** The log keeps the newest events of a run; a long endless run would otherwise grow without bound. */
 const MAX_EVENTS = 5000;
+/** A finished run's events stay in memory this long; its history entry reads them back on demand. */
+export const FINISHED_EVENTS_TTL_MS = 10 * 60_000;
 
 export interface State {
   info: ServerInfo;
@@ -16,7 +17,7 @@ export interface State {
   settings: Settings;
   /** Running runs, plus finished ones until the page moves on, so their result stays on screen. */
   runs: Record<string, ActiveRun>;
-  events: Record<string, RunEvent[]>;
+  events: Record<string, LoggedEvent[]>;
   logins: Record<string, LoginView>;
   history: RunRecord[];
   update: UpdateInfo | null;
@@ -94,12 +95,27 @@ export class Store {
     this.stream?.reconnectNow();
   }
 
-  /** Merges the stored event log with events that already arrived live, without doubling any. */
+  /** Merges the stored event log with events that already arrived live; `seq` tells them apart. */
   async backfill(runId: string) {
-    const stored = await this.api.runEvents(runId).catch(() => [] as RunEvent[]);
-    const seen = new Set(stored.map((e) => JSON.stringify(e)));
-    const live = (this.state.events[runId] ?? []).filter((e) => !seen.has(JSON.stringify(e)));
+    const stored = await this.api.runEvents(runId).catch(() => [] as LoggedEvent[]);
+    const upTo = stored.at(-1)?.seq ?? 0;
+    const live = (this.state.events[runId] ?? []).filter((e) => e.seq > upTo);
     this.set({ events: { ...this.state.events, [runId]: [...stored, ...live].slice(-MAX_EVENTS) } });
+  }
+
+  private expiry = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** Drops a finished run's events after a while, so a long session does not keep every log. */
+  private expireEvents(runId: string) {
+    if (this.expiry.has(runId)) return;
+    this.expiry.set(
+      runId,
+      setTimeout(() => {
+        this.expiry.delete(runId);
+        const { [runId]: _dropped, ...events } = this.state.events;
+        this.set({ events });
+      }, FINISHED_EVENTS_TTL_MS),
+    );
   }
 
   async resync() {
@@ -131,6 +147,8 @@ export class Store {
     switch (f.type) {
       case 'event': {
         const list = this.state.events[f.runId] ?? [];
+        // A frame that arrived during a backfill is already in the stored log.
+        if (f.event.seq <= (list.at(-1)?.seq ?? 0)) return;
         const next = list.length >= MAX_EVENTS ? [...list.slice(1 - MAX_EVENTS), f.event] : [...list, f.event];
         const run = this.state.runs[f.runId];
         const runs = run && f.event.type === 'state' ? { ...this.state.runs, [f.runId]: { ...run, state: f.event.state } } : this.state.runs;
@@ -140,6 +158,7 @@ export class Store {
       case 'run':
         this.set({ runs: { ...this.state.runs, [f.run.runId]: f.run } });
         if (f.run.result) {
+          this.expireEvents(f.run.runId);
           this.background(this.refreshHistory());
           this.background(this.refreshProfiles());
         }

@@ -267,6 +267,9 @@ importers:
 
   packages/site-discourse:
     dependencies:
+      '@disco-lurk/config':
+        specifier: workspace:*
+        version: link:../config
       '@disco-lurk/core':
         specifier: workspace:*
         version: link:../core

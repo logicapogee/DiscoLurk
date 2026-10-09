@@ -6,3 +6,4 @@ export * from './runs';
 export * from './logins';
 export * from './schedules';
 export * from './app';
+export * from './schemas';

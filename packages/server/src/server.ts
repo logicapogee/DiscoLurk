@@ -4,17 +4,24 @@ import type { AddressInfo } from 'node:net';
 import { extname, join, normalize, sep } from 'node:path';
 import type { Clock } from '@disco-lurk/core';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { bearer, isLoopback, MIN_TOKEN_BYTES, TokenGuard, tokenStrongEnough } from './auth';
+import { bearer, clientAddress, TOKEN_REQUIREMENT, TokenGuard, tokenStrongEnough } from './auth';
 import { HEARTBEAT_MS, type ServerFrame } from './contract';
 
 /** The shell's webview origin (Windows serves it over http://tauri.localhost). */
 export const TAURI_ORIGINS = ['tauri://localhost', 'http://tauri.localhost'] as const;
 export const WS_AUTH_TIMEOUT_MS = 5000;
-/** Loopback failures are not counted toward lockout, so each one costs a fixed pause instead. */
+/** Client frames are only the auth frame; anything near this size is not one. */
+export const WS_MAX_PAYLOAD = 64 * 1024;
+/** Sockets still waiting for their auth frame; more are refused until some authenticate or time out. */
+export const WS_MAX_UNAUTHENTICATED = 16;
+/** Failures that are not counted toward lockout (see `TokenGuard.exempt`) cost a fixed pause instead. */
 export const LOOPBACK_FAILURE_DELAY_MS = 250;
 const MAX_BODY_BYTES = 1024 * 1024;
+/** How long clients get to acknowledge the going-away close before their sockets are cut. */
+const CLOSE_GRACE_MS = 500;
 
-export const WS_CLOSE = { authFailed: 4401, authTimeout: 4408, tokenRotated: 4001 } as const;
+/** `goingAway` (1001) tells the UI the server shut down on purpose, so it stops reconnecting. */
+export const WS_CLOSE = { goingAway: 1001, authFailed: 4401, authTimeout: 4408, tokenRotated: 4001 } as const;
 
 export class HttpError extends Error {
   constructor(
@@ -53,17 +60,20 @@ export interface Route {
   handle(ctx: RouteContext): Promise<Reply>;
 }
 
+export type FrameListener = (frame: ServerFrame, encoded: string) => void;
+
 /** Frames published here reach every authenticated WebSocket. */
 export class EventHub {
-  private listeners = new Set<(frame: ServerFrame) => void>();
+  private listeners = new Set<FrameListener>();
 
-  subscribe(fn: (frame: ServerFrame) => void): () => void {
+  subscribe(fn: FrameListener): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
   }
 
-  publish(frame: ServerFrame): void {
-    for (const fn of this.listeners) fn(frame);
+  /** `encoded` is the frame's JSON when the caller already has it, so it is serialized once. */
+  publish(frame: ServerFrame, encoded = JSON.stringify(frame)): void {
+    for (const fn of this.listeners) fn(frame, encoded);
   }
 }
 
@@ -78,7 +88,10 @@ export interface ServerOptions {
   /** The built UI, served to remote browsers; the desktop shell bundles its own copy. */
   staticDir?: string;
   allowedOrigins?: readonly string[];
+  /** Reverse proxies whose `X-Forwarded-For` names the client failures are counted against. */
+  trustedProxies?: readonly string[];
   wsAuthTimeoutMs?: number;
+  wsMaxUnauthenticated?: number;
   loopbackFailureDelayMs?: number;
   heartbeatMs?: number;
   log?: (message: string) => void;
@@ -161,7 +174,13 @@ function match(pattern: string, path: string): Record<string, string> | null {
 }
 
 async function serveStatic(dir: string, pathname: string, res: ServerResponse): Promise<boolean> {
-  const rel = normalize(decodeURIComponent(pathname === '/' ? '/index.html' : pathname)).replace(/^([/\\])+/, '');
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
+  } catch {
+    throw new HttpError(400, 'invalid-path');
+  }
+  const rel = normalize(decoded).replace(/^([/\\])+/, '');
   const file = join(dir, rel);
   if (!file.startsWith(dir.endsWith(sep) ? dir : dir + sep)) return false;
   try {
@@ -178,14 +197,16 @@ async function serveStatic(dir: string, pathname: string, res: ServerResponse): 
 }
 
 export async function startServer(opts: ServerOptions): Promise<LurkServer> {
-  if (!tokenStrongEnough(opts.token)) throw new Error(`Token must be at least ${MIN_TOKEN_BYTES} bytes`);
+  if (!tokenStrongEnough(opts.token)) throw new Error(`Token must be ${TOKEN_REQUIREMENT}`);
   const log = opts.log ?? (() => {});
   const allowed = new Set(opts.allowedOrigins ?? TAURI_ORIGINS);
   const guard = new TokenGuard(opts.token, opts.clock, (ip) => log(`auth: ${ip} locked out after repeated failures`));
   const authed = new Set<WebSocket>();
   const failureDelayMs = opts.loopbackFailureDelayMs ?? LOOPBACK_FAILURE_DELAY_MS;
+  const trustedProxies = opts.trustedProxies ?? [];
+  const sourceOf = (req: IncomingMessage) => clientAddress(req.socket.remoteAddress ?? 'unknown', req.headers['x-forwarded-for'], trustedProxies);
   const afterFailure = (ip: string, respond: () => void) => {
-    if (isLoopback(ip)) setTimeout(respond, failureDelayMs);
+    if (guard.exempt(ip)) setTimeout(respond, failureDelayMs);
     else respond();
   };
 
@@ -214,14 +235,14 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
       if (!params) continue;
       pathMatched = true;
       if (route.method !== req.method) continue;
+      const ip = sourceOf(req);
       if (route.auth !== false) {
-        const ip = req.socket.remoteAddress ?? 'unknown';
         const verdict = guard.check(ip, bearer(req.headers.authorization));
         if (verdict === 'locked') return send(res, { status: 429, body: { error: 'locked' } });
         if (verdict === 'denied') return afterFailure(ip, () => send(res, { status: 401, body: { error: 'unauthorized' } }));
       }
       const body = req.method === 'GET' || req.method === 'DELETE' ? undefined : await readBody(req);
-      const reply = await route.handle({ params, query: url.searchParams, body, ip: req.socket.remoteAddress ?? 'unknown' });
+      const reply = await route.handle({ params, query: url.searchParams, body, ip });
       send(res, reply);
       if (reply.after) await reply.after();
       return;
@@ -238,16 +259,38 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
         return;
       }
       log(`${req.method} ${req.url} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
-      if (!res.headersSent) send(res, { status: 500, body: { error: 'internal', message: err instanceof Error ? err.message : String(err) } });
+      // The details stay in the log: an exception message can carry paths and other host internals.
+      if (!res.headersSent) send(res, { status: 500, body: { error: 'internal' } });
     });
   });
 
-  const wss = new WebSocketServer({ server: http, path: '/events' });
+  const pending = new Set<WebSocket>();
+  const maxPending = opts.wsMaxUnauthenticated ?? WS_MAX_UNAUTHENTICATED;
+  const wss = new WebSocketServer({
+    server: http,
+    path: '/events',
+    maxPayload: WS_MAX_PAYLOAD,
+    // A browser always sends Origin: only the shell, the served UI (same origin) and listed origins
+    // may open the socket. Non-browser clients send none and still have to pass the auth frame.
+    verifyClient: ({ origin, req }: { origin: string | undefined; req: IncomingMessage }) => {
+      if (pending.size >= maxPending) return false;
+      if (!origin || allowed.has(origin)) return true;
+      try {
+        return new URL(origin).host === req.headers.host;
+      } catch {
+        return false;
+      }
+    },
+  });
   wss.on('connection', (ws, req) => {
-    const ip = req.socket.remoteAddress ?? 'unknown';
+    const ip = sourceOf(req);
+    pending.add(ws);
+    // Malformed or oversized frames surface here; the library closes the socket itself.
+    ws.on('error', (err) => log(`ws ${ip}: ${err.message}`));
     const timer = setTimeout(() => ws.close(WS_CLOSE.authTimeout, 'auth-timeout'), opts.wsAuthTimeoutMs ?? WS_AUTH_TIMEOUT_MS);
     ws.once('message', (data) => {
       clearTimeout(timer);
+      pending.delete(ws);
       let frame: unknown;
       try {
         frame = JSON.parse(String(data));
@@ -267,13 +310,13 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
     });
     ws.on('close', () => {
       clearTimeout(timer);
+      pending.delete(ws);
       authed.delete(ws);
     });
   });
 
-  const push = (frame: ServerFrame) => {
-    const data = JSON.stringify(frame);
-    for (const ws of authed) ws.send(data);
+  const push = (frame: ServerFrame, data = JSON.stringify(frame)) => {
+    for (const ws of authed) if (ws.readyState === ws.OPEN) ws.send(data);
   };
   const unsubscribe = opts.hub?.subscribe(push);
   const heartbeat = setInterval(() => push({ type: 'heartbeat', at: new Date(opts.clock.now()).toISOString() }), opts.heartbeatMs ?? HEARTBEAT_MS);
@@ -290,19 +333,31 @@ export async function startServer(opts: ServerOptions): Promise<LurkServer> {
   return {
     port: (http.address() as AddressInfo).port,
     rotateToken(token) {
-      if (!tokenStrongEnough(token)) throw new Error(`Token must be at least ${MIN_TOKEN_BYTES} bytes`);
+      if (!tokenStrongEnough(token)) throw new Error(`Token must be ${TOKEN_REQUIREMENT}`);
       guard.rotate(token);
       for (const ws of authed) ws.close(WS_CLOSE.tokenRotated, 'token-rotated');
       authed.clear();
     },
-    close: () =>
-      new Promise<void>((resolve) => {
-        clearInterval(heartbeat);
-        unsubscribe?.();
-        for (const ws of wss.clients) ws.terminate();
-        wss.close();
-        http.closeAllConnections();
-        http.close(() => resolve());
-      }),
+    async close() {
+      clearInterval(heartbeat);
+      unsubscribe?.();
+      const sockets = [...wss.clients];
+      await Promise.race([
+        Promise.all(
+          sockets.map(
+            (ws) =>
+              new Promise<void>((resolve) => {
+                ws.once('close', () => resolve());
+                ws.close(WS_CLOSE.goingAway, 'server-shutdown');
+              }),
+          ),
+        ),
+        new Promise((resolve) => setTimeout(resolve, CLOSE_GRACE_MS)),
+      ]);
+      for (const ws of wss.clients) ws.terminate();
+      wss.close();
+      http.closeAllConnections();
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+    },
   };
 }

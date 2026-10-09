@@ -58,6 +58,14 @@ describe('nextCronTime', () => {
     expect(iso(nextCronTime(c, local('2026-10-09', '13:00'), SH))).toBe(iso(local('2026-10-13', '12:00')));
   });
 
+  it('requires both day fields when day-of-month starts with *, as in */2', () => {
+    // Odd days that are also Mondays: 10-12 is an even Monday, 10-19 an odd one. Either-day matching would pick 10-09.
+    const c = parseCron('0 9 */2 * 1');
+    expect(c.domRestricted).toBe(false);
+    expect(iso(nextCronTime(c, local('2026-10-08', '00:00'), SH))).toBe(iso(local('2026-10-19', '09:00')));
+    expect(parseCron('0 9 1-31/2 * 1').domRestricted).toBe(true);
+  });
+
   it('honours weekday-only and month restrictions', () => {
     const c = parseCron('0 9 * 11 mon-fri');
     expect(iso(nextCronTime(c, local('2026-10-08', '00:00'), SH))).toBe(iso(local('2026-11-02', '09:00')));

@@ -52,4 +52,57 @@ describe('driveScheduler', () => {
     expect(logs).toEqual(['scheduler: schedules.json is not valid JSON']);
     expect(started).toEqual([new Date(at('2026-10-08', '07:30')).toISOString()]);
   });
+
+  it('keeps ticking the last good definitions when new ones cannot be applied, and logs the error once', async () => {
+    const { time, started, scheduler } = setup();
+    const ctrl = new AbortController();
+    const logs: string[] = [];
+    let loads = 0;
+    const good = [spec({ trigger: { kind: 'cron', expression: '0 7,8 * * *' } })];
+    // From the second step on the file holds a trigger the scheduler cannot plan.
+    const loadSpecs = async () => (++loads === 1 ? good : [spec({ trigger: { kind: 'cron', expression: '61 * * * *' } })]);
+    time.at(2 * 3_600_000, () => ctrl.abort());
+    await time.drive(driveScheduler({ scheduler, loadSpecs, sleeper: time.sleeper, intervalMs: 60_000, signal: ctrl.signal, log: (m) => logs.push(m) }));
+    expect(started).toEqual([new Date(at('2026-10-08', '07:00')).toISOString(), new Date(at('2026-10-08', '08:00')).toISOString()]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/minute 61/);
+  });
+
+  it('fires the other schedules when one cannot start, and records that one as skipped', async () => {
+    const time = new VirtualTime(at('2026-10-08', '06:59'));
+    const started: string[] = [];
+    const scheduler = new PlanScheduler({
+      clock: time.clock,
+      random: seededRandom(3),
+      store: new MemoryScheduleStore(),
+      newId: () => `id-${started.length}-${Math.random()}`,
+      loadPreset: () => ({ preset: preset(5, 5), categories: [] }),
+      siteOf: () => 'linuxdo',
+      profileBusy: () => false,
+      displayAvailable: () => true,
+      startRun: (plan) => {
+        if (plan.scheduleId === 'bad') throw new Error('Profile linuxdo/bad is in use');
+        started.push(plan.scheduleId!);
+        return `run-${started.length}`;
+      },
+    });
+    const cron = { kind: 'cron' as const, expression: '0 7 * * *' };
+    const ctrl = new AbortController();
+    const logs: string[] = [];
+    time.at(10 * 60_000, () => ctrl.abort());
+    await time.drive(
+      driveScheduler({
+        scheduler,
+        loadSpecs: async () => [spec({ id: 'bad', profileId: 'linuxdo/bad', trigger: cron }), spec({ id: 'good', trigger: cron })],
+        sleeper: time.sleeper,
+        intervalMs: 60_000,
+        signal: ctrl.signal,
+        log: (m) => logs.push(m),
+      }),
+    );
+    expect(started).toEqual(['good']);
+    expect(scheduler.history('bad').at(-1)).toMatchObject({ outcome: 'skipped', reason: 'start-failed' });
+    expect(logs).toEqual(['scheduler: schedule bad: Profile linuxdo/bad is in use']);
+  });
 });
+

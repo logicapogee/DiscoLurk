@@ -1,5 +1,5 @@
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describeSchedulerContract, preset, spec } from '@disco-lurk/scheduler/contract';
 import { describe, expect, it } from 'vitest';
@@ -80,8 +80,36 @@ describe('acquireSchedulerLock', () => {
     const again = await acquireSchedulerLock(dir);
     await again.release();
     writeFileSync(join(dir, '.lurk-lock'), JSON.stringify({ pid: 999_999, startedAt: 'x' }));
-    const takeover = await acquireSchedulerLock(dir, (pid) => pid !== 999_999);
+    const takeover = await acquireSchedulerLock(dir, { isAlive: (pid) => pid !== 999_999 });
     await takeover.release();
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('takes over a lock naming this PID that this process does not hold, as after a container restart', async () => {
+    const dir = tmp();
+    writeFileSync(join(dir, '.lurk-lock'), JSON.stringify({ pid: process.pid, startedAt: 'x' }));
+    const lock = await acquireSchedulerLock(dir);
+    await expect(acquireSchedulerLock(dir)).rejects.toBeInstanceOf(SchedulerLockedError);
+    await lock.release();
+  });
+
+  it('takes over a lock from another host or from a recycled PID', async () => {
+    const dir = tmp();
+    const live = { isAlive: () => true, startTime: async () => 1_000_000 };
+    writeFileSync(join(dir, '.lurk-lock'), JSON.stringify({ pid: 4242, hostname: 'elsewhere', processStartedAt: 1_000_000 }));
+    await (await acquireSchedulerLock(dir, live)).release();
+    writeFileSync(join(dir, '.lurk-lock'), JSON.stringify({ pid: 4242, hostname: hostname(), processStartedAt: 2_000_000 }));
+    await (await acquireSchedulerLock(dir, live)).release();
+    writeFileSync(join(dir, '.lurk-lock'), JSON.stringify({ pid: 4242, hostname: hostname(), processStartedAt: 1_002_000 }));
+    await expect(acquireSchedulerLock(dir, live)).rejects.toMatchObject({ pid: 4242 });
+  });
+
+  it('records the host and the start time of the owning process', async () => {
+    const dir = tmp();
+    const lock = await acquireSchedulerLock(dir);
+    const info = JSON.parse(readFileSync(join(dir, '.lurk-lock'), 'utf8')) as { pid: number; hostname: string; processStartedAt: number };
+    expect(info).toMatchObject({ pid: process.pid, hostname: hostname() });
+    expect(Math.abs(info.processStartedAt - (Date.now() - process.uptime() * 1000))).toBeLessThan(5_000);
+    await lock.release();
   });
 });

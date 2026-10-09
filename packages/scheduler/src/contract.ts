@@ -58,7 +58,8 @@ export function harness(startMs: number, open: () => ScheduleStore, seed = 11) {
     random: seededRandom(seed),
     store,
     newId: () => `id-${seed}-${++ids}`,
-    loadPreset: () => ({ preset: currentPreset, categories }),
+    // Preset `doc` is the docofcard copy of the current preset.
+    loadPreset: (presetId) => ({ preset: presetId === 'doc' ? { ...currentPreset, id: 'doc', siteId: 'docofcard' } : currentPreset, categories }),
     siteOf: (profileId) => (profileId.startsWith('doc') ? 'docofcard' : 'linuxdo'),
     profileBusy: (profileId) => busy.has(profileId),
     displayAvailable: () => display,
@@ -195,10 +196,17 @@ describe(`with ${name}`, () => {
 
     it('lets schedules on other Profiles (other sites) run concurrently', async () => {
       const h = harness(at('2026-10-08', '06:00'), backing());
-      await h.scheduler.reconcile([spec(), spec({ id: 's2', profileId: 'doc-main' })]);
+      await h.scheduler.reconcile([spec(), spec({ id: 's2', profileId: 'doc-main', presetId: 'doc' })]);
       h.busy.add('p1');
       await expect(h.scheduler.trigger('s2', 'manual')).resolves.toBe('run-1');
       expect(h.started[0]!.plan.siteId).toBe('docofcard');
+    });
+
+    it('refuses to materialize a preset of another site than the Profile', async () => {
+      const h = harness(at('2026-10-08', '06:00'), backing());
+      await h.scheduler.reconcile([spec({ id: 's2', profileId: 'doc-main' })]).catch(() => {});
+      await expect(h.scheduler.trigger('s2', 'manual')).rejects.toThrow(/site docofcard with preset .* of site linuxdo/);
+      expect(h.started).toEqual([]);
     });
 
     it('skips a headed run without a display by default', async () => {

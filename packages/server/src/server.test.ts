@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
+import { connect, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { EventHub, LOOPBACK_FAILURE_DELAY_MS, startServer, WS_AUTH_TIMEOUT_MS, WS_CLOSE, type LurkServer, type Route } from './server';
+import { EventHub, LOOPBACK_FAILURE_DELAY_MS, startServer, WS_AUTH_TIMEOUT_MS, WS_CLOSE, WS_MAX_PAYLOAD, type LurkServer, type Route } from './server';
 
 const token = () => randomBytes(32).toString('base64url');
 
@@ -14,7 +15,9 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function boot(opts: { wsAuthTimeoutMs?: number; loopbackFailureDelayMs?: number; heartbeatMs?: number; staticDir?: string } = {}) {
+async function boot(
+  opts: { wsAuthTimeoutMs?: number; loopbackFailureDelayMs?: number; heartbeatMs?: number; staticDir?: string; trustedProxies?: string[]; wsMaxUnauthenticated?: number; log?: (m: string) => void } = {},
+) {
   const clock = { ms: Date.UTC(2026, 9, 8) };
   const t = token();
   let shutdowns = 0;
@@ -23,6 +26,13 @@ async function boot(opts: { wsAuthTimeoutMs?: number; loopbackFailureDelayMs?: n
     { method: 'GET', path: '/doctor', handle: async () => ({ status: 200, body: { checks: [] } }) },
     { method: 'POST', path: '/shutdown', handle: async () => ({ status: 202, after: () => void shutdowns++ }) },
     { method: 'PUT', path: '/things/:id', handle: async ({ params, body }) => ({ status: 200, body: { id: params.id, body } }) },
+    {
+      method: 'GET',
+      path: '/boom',
+      handle: async () => {
+        throw new Error('ENOENT: /home/alice/secret/path');
+      },
+    },
   ];
   server = await startServer({
     host: '127.0.0.1',
@@ -109,7 +119,7 @@ describe('SERVER-001 sidecar access contract (§10.3)', () => {
     await Promise.all([good.opened, idle.opened]);
     good.ws.send(JSON.stringify({ type: 'auth', token: t }));
     expect(await good.next()).toEqual({ type: 'auth-ok' });
-    hub.publish({ type: 'event', runId: 'r1', event: { type: 'warning', at: 'now', code: 'x', message: 'hello' } });
+    hub.publish({ type: 'event', runId: 'r1', event: { seq: 1, type: 'warning', at: 'now', code: 'x', message: 'hello' } });
     expect(await good.next()).toMatchObject({ type: 'event', runId: 'r1', event: { code: 'x' } });
     expect(idle.messages).toEqual([]);
     good.ws.close();
@@ -180,7 +190,7 @@ describe('SERVER-001 sidecar access contract (§10.3)', () => {
       routes: [{ method: 'GET', path: '/doctor', handle: async () => ({ status: 200, body: {} }) }],
     });
     const base = `http://${lan}:${server.port}`;
-    for (let i = 0; i < 4; i++) expect((await fetch(`${base}/doctor`, { headers: auth('bad') })).status).toBe(401);
+    for (let i = 0; i < 5; i++) expect((await fetch(`${base}/doctor`, { headers: auth('bad') })).status).toBe(401);
     expect((await fetch(`${base}/doctor`, { headers: auth('bad') })).status).toBe(429);
     expect((await fetch(`${base}/doctor`, { headers: auth(t) })).status).toBe(429);
     expect((await fetch(`http://127.0.0.1:${server.port}/doctor`, { headers: auth(t) })).status).toBe(200);
@@ -216,5 +226,105 @@ describe('SERVER-001 sidecar access contract (§10.3)', () => {
     await ws.next();
     expect(await ws.next()).toMatchObject({ type: 'heartbeat' });
     ws.ws.close();
+  });
+
+  it('answers an internal error without its message, and logs the details', async () => {
+    const logs: string[] = [];
+    const { base, token: t } = await boot({ log: (m) => logs.push(m) });
+    const res = await fetch(`${base}/boom`, { headers: auth(t) });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'internal' });
+    expect(logs.join('\n')).toContain('/home/alice/secret/path');
+  });
+
+  it('answers 400 for a static path that is not valid percent-encoding', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lurk-ui-'));
+    writeFileSync(join(dir, 'index.html'), 'ui');
+    const { base } = await boot({ staticDir: dir });
+    expect((await fetch(`${base}/%E0%A4%A`)).status).toBe(400);
+  });
+});
+
+describe('SERVER-001 WebSocket hardening', () => {
+  it('survives oversized and malformed frames and keeps serving', async () => {
+    const logs: string[] = [];
+    const { base, token: t } = await boot({ log: (m) => logs.push(m) });
+    const big = openWs(base);
+    await big.opened;
+    big.ws.on('error', () => {});
+    big.ws.send('x'.repeat(WS_MAX_PAYLOAD + 1));
+    expect((await big.closed).code).toBe(1009);
+
+    // A frame with the reserved bits set, written straight onto the upgraded TCP socket.
+    const raw = await new Promise<Socket>((resolve, reject) => {
+      const sock = connect(Number(new URL(base).port), '127.0.0.1', () => {
+        sock.write(
+          'GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
+            'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n',
+        );
+        sock.once('data', () => resolve(sock));
+      });
+      sock.on('error', reject);
+    });
+    const closed = new Promise<void>((resolve) => raw.on('close', () => resolve()));
+    raw.on('error', () => {});
+    raw.write(Buffer.from([0xf1, 0x80, 0, 0, 0, 0]));
+    await closed;
+
+    const good = openWs(base);
+    await good.opened;
+    good.ws.send(JSON.stringify({ type: 'auth', token: t }));
+    expect(await good.next()).toEqual({ type: 'auth-ok' });
+    good.ws.close();
+    expect(logs.some((l) => l.startsWith('ws '))).toBe(true);
+  });
+
+  it('refuses a browser origin that is neither allowed nor the server itself', async () => {
+    const { base } = await boot();
+    const foreign = new WebSocket(base.replace('http', 'ws') + '/events', { origin: 'https://evil.example' });
+    const status = await new Promise<number>((resolve) => foreign.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)));
+    expect(status).toBe(401);
+    for (const origin of ['tauri://localhost', base]) {
+      const ok = new WebSocket(base.replace('http', 'ws') + '/events', { origin });
+      await new Promise<void>((resolve, reject) => {
+        ok.once('open', () => resolve());
+        ok.once('error', reject);
+      });
+      ok.close();
+    }
+  });
+
+  it('caps the sockets still waiting for their auth frame', async () => {
+    const { base, token: t } = await boot({ wsMaxUnauthenticated: 2 });
+    const a = openWs(base);
+    const b = openWs(base);
+    await Promise.all([a.opened, b.opened]);
+    const c = new WebSocket(base.replace('http', 'ws') + '/events');
+    await new Promise<void>((resolve) => c.on('unexpected-response', () => resolve()));
+    a.ws.send(JSON.stringify({ type: 'auth', token: t }));
+    await a.next();
+    const d = openWs(base);
+    await d.opened;
+    for (const s of [a, b, d]) s.ws.close();
+  });
+
+  it('closes sockets with 1001 when the server shuts down', async () => {
+    const { base, token: t, server: s } = await boot();
+    const ws = openWs(base);
+    await ws.opened;
+    ws.ws.send(JSON.stringify({ type: 'auth', token: t }));
+    await ws.next();
+    await s.close();
+    server = undefined;
+    expect((await ws.closed).code).toBe(WS_CLOSE.goingAway);
+  });
+
+  it('counts failures behind a trusted proxy against the forwarded client', async () => {
+    const { base } = await boot({ trustedProxies: ['127.0.0.1'] });
+    for (let i = 0; i < 5; i++) {
+      expect((await fetch(`${base}/doctor`, { headers: { ...auth('bad'), 'X-Forwarded-For': '203.0.113.7' } })).status).toBe(401);
+    }
+    expect((await fetch(`${base}/doctor`, { headers: { ...auth('bad'), 'X-Forwarded-For': '203.0.113.7' } })).status).toBe(429);
+    expect((await fetch(`${base}/doctor`, { headers: { ...auth('bad'), 'X-Forwarded-For': '203.0.113.8' } })).status).toBe(401);
   });
 });

@@ -78,7 +78,9 @@ function parseField(raw: string, f: FieldSpec, expression: string): { values: nu
     }
     for (let v = lo; v <= hi; v += step) values.add(v);
   }
-  return { values: [...values].sort((a, b) => a - b), restricted: raw !== '*' };
+  // Vixie cron: a field starting with `*` (`*`, `*/2`) leaves the day unrestricted, so `*/2` in
+  // day-of-month combined with a weekday means both must match, not either.
+  return { values: [...values].sort((a, b) => a - b), restricted: !raw.startsWith('*') };
 }
 
 export function parseCron(expression: string): CronExpression {

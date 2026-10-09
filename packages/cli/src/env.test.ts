@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { checkCredentialsEnv, ENV_SCHEDULE_ID, EnvError, envSchedule, envWarnings, proxyFromEnv, runArgvWithEnv, serveEnv } from './env';
 import { parseRunArgs } from './run';
 
-const TOKEN = 'x'.repeat(43);
+const TOKEN = 'abcdefghijklmnopqrstuvwxyz0123456789-_ABCDE';
 
 describe('lurk run reads LURK_* for options the command line leaves out', () => {
   const parsed = (argv: string[], env: Record<string, string>) => parseRunArgs(runArgvWithEnv(argv, env));
@@ -51,6 +51,7 @@ describe('lurk run reads LURK_* for options the command line leaves out', () => 
 
   it('reads LURK_PROXY and both credentials together', () => {
     expect(proxyFromEnv({ LURK_PROXY: 'socks5://127.0.0.1:1080' })).toBe('socks5://127.0.0.1:1080');
+    expect(() => proxyFromEnv({ LURK_PROXY: 'http://user:pw@127.0.0.1:7890' })).toThrow(/must not carry a username or password/);
     expect(() => checkCredentialsEnv({ LURK_USERNAME: 'me', LURK_PASSWORD: 'pw' })).not.toThrow();
   });
 });
@@ -73,6 +74,8 @@ describe('lurk serve environment', () => {
     expect(() => serveEnv('0.0.0.0', {})).toThrow(/LURK_TOKEN is required/);
     expect(() => serveEnv('0.0.0.0', { LURK_TOKEN: 'short' })).toThrow(/at least 32 bytes/);
     expect(serveEnv('0.0.0.0', { LURK_TOKEN: TOKEN }).token).toBe(TOKEN);
+    // Long enough but nearly all one character.
+    expect(() => serveEnv('0.0.0.0', { LURK_TOKEN: 'x'.repeat(64) })).toThrow(/at least 16 different characters/);
     expect(serveEnv('127.0.0.1', {}).token).toBeUndefined();
   });
 

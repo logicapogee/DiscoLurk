@@ -1,8 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { acquireProfileLock, LOCK_FILE } from './profile-lock';
+import { acquireProfileLock, LOCK_FILE, profileLockLive } from './profile-lock';
 
 const profile = () => mkdtempSync(join(tmpdir(), 'lurk-lock-'));
 
@@ -22,13 +22,32 @@ describe('Profile lock file (B02, §8.3)', () => {
   it('refuses a Profile whose lock holder is still running', async () => {
     const dir = profile();
     await acquireProfileLock(dir, 'run-1', { pid: 1 });
-    await expect(acquireProfileLock(dir, 'run-2', { isAlive: () => true })).rejects.toMatchObject({ code: 'profile-locked' });
+    await expect(acquireProfileLock(dir, 'run-2', { probe: { isAlive: () => true } })).rejects.toMatchObject({ code: 'profile-locked' });
   });
 
   it('clears a lock only after confirming its process is gone', async () => {
     const dir = profile();
     await acquireProfileLock(dir, 'crashed', { pid: 999_999 });
-    const lock = await acquireProfileLock(dir, 'run-2', { isAlive: (pid) => pid !== 999_999 });
+    const lock = await acquireProfileLock(dir, 'run-2', { probe: { isAlive: (pid) => pid !== 999_999 } });
+    expect(lock.info.runId).toBe('run-2');
+  });
+
+  it('records this process\'s host and start time, and clears a lock naming this PID that it does not hold', async () => {
+    const dir = profile();
+    writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ pid: process.pid, startedAt: '', runId: 'before-restart' }));
+    const lock = await acquireProfileLock(dir, 'run-1');
+    expect(lock.info).toMatchObject({ pid: process.pid, hostname: hostname(), runId: 'run-1' });
+    expect(typeof lock.info.processStartedAt).toBe('number');
+    await expect(acquireProfileLock(dir, 'run-2')).rejects.toMatchObject({ code: 'profile-locked' });
+    expect(await profileLockLive(lock.info, join(dir, LOCK_FILE))).toBe(true);
+    await lock.release();
+    expect(await profileLockLive(lock.info, join(dir, LOCK_FILE))).toBe(false);
+  });
+
+  it('clears a lock whose PID now belongs to a process that started later', async () => {
+    const dir = profile();
+    writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ pid: 4242, hostname: hostname(), processStartedAt: 1_000, startedAt: '', runId: 'old' }));
+    const lock = await acquireProfileLock(dir, 'run-2', { probe: { isAlive: () => true, startTime: async () => 9_000_000 } });
     expect(lock.info.runId).toBe('run-2');
   });
 

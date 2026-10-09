@@ -10,7 +10,7 @@ import { copy } from './copy';
 import { RunPage } from './pages/run';
 import { SchedulesPage } from './pages/schedules';
 import type { Platform } from './platform';
-import { Store, StoreContext, type State } from './store';
+import { FINISHED_EVENTS_TTL_MS, Store, StoreContext, type State } from './store';
 
 afterEach(() => {
   cleanup();
@@ -106,7 +106,7 @@ describe('run page', () => {
     await waitFor(() => expect(api.startRun).toHaveBeenCalledWith('linuxdo-default'));
     expect(api.savePreset).toHaveBeenCalledWith(expect.objectContaining({ id: 'linuxdo-default', profileId: 'linuxdo/main' }));
 
-    store.apply({ type: 'event', runId: 'run-1', event: { type: 'state', at: new Date().toISOString(), state: 'browsing' } });
+    store.apply({ type: 'event', runId: 'run-1', event: { seq: 1, type: 'state', at: new Date().toISOString(), state: 'browsing' } });
     const stop = await screen.findByRole('button', { name: copy.run.stop });
     fireEvent.click(stop);
     await waitFor(() => expect(api.stopRun).toHaveBeenCalledWith('run-1'));
@@ -177,11 +177,11 @@ describe('site progress while running', () => {
   it('shows the initial read at once and replaces the final read when it comes again', async () => {
     const store = mount(fakeApi());
     store.set({ runs: { 'run-1': activeRun({ state: 'browsing' }) } });
-    store.apply({ type: 'event', runId: 'run-1', event: { type: 'levels', at, kind: 'initial', snapshot: viewed(100) } });
+    store.apply({ type: 'event', runId: 'run-1', event: { seq: 1, type: 'levels', at, kind: 'initial', snapshot: viewed(100) } });
     await waitFor(() => expect(cells()).toEqual([['100', '100', '—', '500', '—']]));
-    store.apply({ type: 'event', runId: 'run-1', event: { type: 'levels', at, kind: 'final', snapshot: viewed(101) } });
+    store.apply({ type: 'event', runId: 'run-1', event: { seq: 2, type: 'levels', at, kind: 'final', snapshot: viewed(101) } });
     await waitFor(() => expect(cells()[0]![2]).toBe('101'));
-    store.apply({ type: 'event', runId: 'run-1', event: { type: 'levels', at, kind: 'final', snapshot: viewed(103) } });
+    store.apply({ type: 'event', runId: 'run-1', event: { seq: 3, type: 'levels', at, kind: 'final', snapshot: viewed(103) } });
     await waitFor(() => expect(cells()).toEqual([['100', '100', '103', '500', '+3']]));
   });
 
@@ -289,5 +289,37 @@ describe('remote access', () => {
       expect((init.headers as Record<string, string>).Authorization).toBe('Bearer wrong-token');
     }
     expect(platform.storeToken).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe('store events', () => {
+  const at = new Date().toISOString();
+  const warning = (seq: number) => ({ seq, type: 'warning' as const, at, code: `w${seq}`, message: '' });
+
+  it('merges stored and live events by seq, dropping frames already in the stored log', async () => {
+    const api = { ...fakeApi(), runEvents: vi.fn(async () => [warning(1), warning(2)]) };
+    const store = mount(api);
+    store.apply({ type: 'event', runId: 'run-1', event: warning(2) });
+    store.apply({ type: 'event', runId: 'run-1', event: warning(3) });
+    await store.backfill('run-1');
+    expect(store.state.events['run-1']!.map((e) => e.seq)).toEqual([1, 2, 3]);
+    store.apply({ type: 'event', runId: 'run-1', event: warning(3) });
+    store.apply({ type: 'event', runId: 'run-1', event: warning(4) });
+    expect(store.state.events['run-1']!.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('forgets a finished run\'s events ten minutes after it ended', () => {
+    vi.useFakeTimers();
+    try {
+      const store = mount(fakeApi());
+      store.apply({ type: 'event', runId: 'run-1', event: warning(1) });
+      store.apply({ type: 'run', run: activeRun({ state: 'completed', result: { outcome: 'completed', stopCause: 'target', baseline: 'not-applicable', levels: { initial: null, final: null }, stats: emptyStats() } }) });
+      vi.advanceTimersByTime(FINISHED_EVENTS_TTL_MS - 1);
+      expect(store.state.events['run-1']).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(store.state.events['run-1']).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

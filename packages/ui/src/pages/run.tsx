@@ -37,10 +37,11 @@ export function RunPage() {
   const live = run ? state.live[run.runId] : undefined;
   const stats = run?.result?.stats ?? live?.stats;
 
-  // Picks the preset to edit when the site changes: the current one, any saved one, or the default.
+  // Picks the preset to edit when the site changes: the one running there, the current one, any saved one, or the default.
   useEffect(() => {
     if (!siteId) return;
-    const saved = (current?.siteId === siteId ? current : undefined) ?? sitePresets[0];
+    const runningId = Object.values(state.runs).find((r) => !r.result && r.plan.siteId === siteId)?.presetId;
+    const saved = sitePresets.find((p) => p.id === runningId) ?? (current?.siteId === siteId ? current : undefined) ?? sitePresets[0];
     if (saved) {
       setDraft(structuredClone(saved));
       return;
@@ -141,7 +142,8 @@ export function RunPage() {
       <h1>{copy.run.title}</h1>
       <div class="columns">
         <form class="panel settings-form" onSubmit={(e) => e.preventDefault()} aria-label={copy.run.title}>
-          <fieldset disabled={locked}>
+          {/* Only the preset's own settings lock while it runs, so another site or preset can start alongside it. */}
+          <fieldset disabled={pending === 'start'}>
             <Field label={copy.run.site}>
               <Select label={copy.run.site} value={siteId} options={state.sites.map((s) => ({ value: s.site.id, label: s.site.displayName }))} onChange={setSiteId} />
             </Field>
@@ -173,6 +175,8 @@ export function RunPage() {
                 )}
               </div>
             </Field>
+          </fieldset>
+          <fieldset disabled={locked}>
             <Field label={copy.run.profile} hint={profiles.length === 0 ? copy.run.noProfile : undefined}>
               <div class="row">
                 <Select

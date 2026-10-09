@@ -313,6 +313,10 @@ fieldset {
   border-bottom: 0;
 }
 
+fieldset:not(:last-child) > .field:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
 .field-label {
   color: var(--muted);
   padding-top: 4px;

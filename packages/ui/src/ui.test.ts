@@ -184,6 +184,36 @@ describe('run page', () => {
     await waitFor(() => expect(api.savePreset).toHaveBeenCalled());
     expect(api.savePreset.mock.calls[0]![0].interaction.reply).toMatchObject({ enabled: false, riskAcknowledged: false });
   });
+
+  it('starts another site while one runs, and shows the running one again on switching back', async () => {
+    const otherSite: SiteView = { site: { ...siteView.site, id: 'docofcard', displayName: '卡粉论坛', baseUrl: 'https://card.invalid' }, categories };
+    const otherPreset: StoredPreset = { ...preset, id: 'docofcard-default', name: '卡粉默认', siteId: 'docofcard', profileId: 'docofcard/main' };
+    const lighter: StoredPreset = { ...preset, id: 'linuxdo-light', name: 'LINUX DO 轻量' };
+    const api = fakeApi();
+    api.presets.mockResolvedValue([lighter, preset, otherPreset]);
+    api.startRun.mockResolvedValue(activeRun({ runId: 'run-2', presetId: otherPreset.id, plan: { ...activeRun().plan, id: 'run-2', siteId: 'docofcard', profileId: 'docofcard/main' } }));
+    const store = mount(api, undefined, {
+      sites: [siteView, otherSite],
+      profiles: [
+        { id: 'linuxdo/main', siteId: 'linuxdo', name: 'main', channel: 'chrome', status: 'ready', busy: true },
+        { id: 'docofcard/main', siteId: 'docofcard', name: 'main', channel: 'chrome', status: 'ready', busy: false },
+      ],
+      presets: [lighter, preset, otherPreset],
+      runs: { 'run-1': activeRun({ state: 'browsing' }) },
+    });
+    const siteSelect = () => screen.getByRole('combobox', { name: copy.run.site }) as HTMLSelectElement;
+    await screen.findByRole('button', { name: copy.run.stop });
+    expect(siteSelect().closest('fieldset')!.disabled).toBe(false);
+
+    fireEvent.change(siteSelect(), { target: { value: 'docofcard' } });
+    fireEvent.click(await screen.findByRole('button', { name: copy.run.start }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith('docofcard-default'));
+    store.set({ settings: { ...settings, currentPresetId: 'docofcard-default' } });
+
+    fireEvent.change(siteSelect(), { target: { value: 'linuxdo' } });
+    await waitFor(() => expect((screen.getByRole('combobox', { name: copy.run.preset }) as HTMLSelectElement).value).toBe('linuxdo-default'));
+    expect(screen.getAllByRole('button', { name: copy.run.stop })).toHaveLength(1);
+  });
 });
 
 describe('site progress while running', () => {

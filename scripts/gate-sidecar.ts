@@ -58,7 +58,11 @@ function runBinary(bin: string, args: string[], cwd: string): Promise<{ code: nu
 
 /** Processes still holding the Profile; Chrome passes it as --user-data-dir. */
 function processesUsing(profileDir: string): string[] {
-  const out = execFileSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8' });
+  // Windows has no `ps`; CIM lists every process with its full command line.
+  const out =
+    process.platform === 'win32'
+      ? execFileSync('powershell', ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'], { encoding: 'utf8' })
+      : execFileSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8' });
   return out.split('\n').filter((l) => l.includes(profileDir));
 }
 

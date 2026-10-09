@@ -1,0 +1,134 @@
+name: Build
+
+# Desktop installers, the single-file CLI and, for v* tags, a pre-release carrying them.
+# Nothing is code-signed or notarized. Windows/Linux updater bundles are signed with Tauri's
+# minisign key only when the TAURI_SIGNING_PRIVATE_KEY secret exists.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            bundles: nsis
+            updater: true
+          - name: macos-arm64
+            os: macos-latest
+            triple: aarch64-apple-darwin
+            bundles: app,dmg
+            updater: false
+          # GitHub's last Intel macOS image; macos-13 has been retired.
+          - name: macos-x64
+            os: macos-15-intel
+            triple: x86_64-apple-darwin
+            bundles: app,dmg
+            updater: false
+          # The oldest supported base: bundles built here run on newer glibc, not the reverse.
+          - name: linux-x64
+            os: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+            updater: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm vitest run
+      - run: pnpm typecheck
+
+      # The gates drive the system Chrome a user would have, installed the way Playwright's
+      # `channel: 'chrome'` expects to find it; no Playwright browser build is downloaded.
+      - name: Install Google Chrome
+        run: pnpm exec playwright-core install --force chrome
+
+      - run: pnpm build:sidecar ${{ matrix.triple }}
+
+      - name: Sidecar gate (headless)
+        run: pnpm gate:sidecar
+
+      - name: Sidecar gate (headed)
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run --auto-servernum pnpm gate:sidecar --headed
+          else
+            pnpm gate:sidecar --headed
+          fi
+
+      - name: Updater signing
+        id: updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ "${{ matrix.updater }}" != true ]; then
+            echo 'config={}' >> "$GITHUB_OUTPUT"
+          elif [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo 'config={"bundle":{"createUpdaterArtifacts":true}}' >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=Updater bundles skipped::TAURI_SIGNING_PRIVATE_KEY is not set, so ${{ matrix.name }} ships without signed updater artifacts"
+            echo 'config={}' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --target ${{ matrix.triple }} --bundles ${{ matrix.bundles }} --config '${{ steps.updater.outputs.config }}'
+
+      - name: Collect artifacts
+        run: node scripts/ci-collect.ts --triple ${{ matrix.triple }} --name ${{ matrix.name }} --out out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: disco-lurk-${{ matrix.name }}
+          path: out/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: disco-lurk-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          draft: false
+          generate_release_notes: true
+          files: artifacts/**/*

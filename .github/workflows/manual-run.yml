@@ -1,0 +1,43 @@
+name: Manual run (not recommended)
+
+# One `lurk run` on a hosted runner, started by hand. Not suited to scheduling: runner IPs often
+# meet Cloudflare challenges, and the browser Profile (the login) does not survive between runs,
+# so only sites with a password login can sign in, from the LURK_USERNAME / LURK_PASSWORD secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: Site id
+        default: linuxdo
+      browse_mode:
+        description: deep or quick
+        default: quick
+      run_mode:
+        description: endless, topics:<n>, topics:<min>-<max> or time:<minutes>
+        default: topics:10
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright-core install --force chrome
+      - name: lurk run
+        env:
+          LURK_SITE: ${{ inputs.site }}
+          LURK_BROWSE_MODE: ${{ inputs.browse_mode }}
+          LURK_RUN_MODE: ${{ inputs.run_mode }}
+          LURK_USERNAME: ${{ secrets.LURK_USERNAME }}
+          LURK_PASSWORD: ${{ secrets.LURK_PASSWORD }}
+          LURK_PROXY: ${{ secrets.LURK_PROXY }}
+        run: pnpm lurk run --headless

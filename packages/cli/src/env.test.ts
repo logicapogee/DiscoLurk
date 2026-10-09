@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,6 +74,10 @@ describe('lurk serve environment', () => {
     expect(() => serveEnv('0.0.0.0', {})).toThrow(/LURK_TOKEN is required/);
     expect(() => serveEnv('0.0.0.0', { LURK_TOKEN: 'short' })).toThrow(/at least 32 bytes/);
     expect(serveEnv('0.0.0.0', { LURK_TOKEN: TOKEN }).token).toBe(TOKEN);
+    const secret = join(mkdtempSync(join(tmpdir(), 'lurk-token-')), 'token');
+    writeFileSync(secret, `${TOKEN}\n`);
+    expect(serveEnv('0.0.0.0', { LURK_TOKEN_FILE: secret, LURK_TOKEN: 'ignored' }).token).toBe(TOKEN);
+    expect(() => serveEnv('0.0.0.0', { LURK_TOKEN_FILE: `${secret}.missing` })).toThrow(/LURK_TOKEN_FILE .* cannot be read/);
     // Long enough but nearly all one character.
     expect(() => serveEnv('0.0.0.0', { LURK_TOKEN: 'x'.repeat(64) })).toThrow(/at least 16 different characters/);
     expect(serveEnv('127.0.0.1', {}).token).toBeUndefined();

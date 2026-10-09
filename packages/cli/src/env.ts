@@ -1,6 +1,7 @@
-import type { RunPreset, ScheduleSpec, Site } from '@disco-lurk/core';
+import { readFileSync } from 'node:fs';
+import type { Site } from '@disco-lurk/core';
 import { hasUserinfo, isLoopback, MIN_TOKEN_BYTES, TOKEN_REQUIREMENT, tokenStrongEnough } from '@disco-lurk/server';
-import { DEFAULT_EXTRA_WAIT, DEFAULT_INTERACTION, parseRunMode, profileIdOf, UsageError } from './run';
+import { parseCount, parsePercent, parseRunMode, UsageError } from './run';
 import { BUILTIN_SITES, findSite } from './sites';
 
 /** A LURK_* variable that is missing or malformed; the CLI exits with the environment code. */
@@ -27,20 +28,20 @@ function bool(env: Env, name: string): boolean | undefined {
   throw new EnvError(`${name} must be true or false, not "${env[name]}"`);
 }
 
-function percent(env: Env, name: string): number | undefined {
+/** Reads a variable with the parser of the matching command-line option, naming the variable in its error. */
+function viaOption<T>(env: Env, name: string, parse: (raw: string) => T): T | undefined {
   const v = read(env, name);
   if (v === undefined) return undefined;
-  const n = Number(v);
-  if (!/^\d+(\.\d+)?$/.test(v) || n > 100) throw new EnvError(`${name} must be a percentage from 0 to 100, not "${v}"`);
-  return n;
+  try {
+    return parse(v);
+  } catch (err) {
+    if (err instanceof UsageError) throw new EnvError(`${err.message.replace(/--[a-z-]+/, name)}, not "${v}"`);
+    throw err;
+  }
 }
 
-function wholeNumber(env: Env, name: string): number | undefined {
-  const v = read(env, name);
-  if (v === undefined) return undefined;
-  if (!/^\d+$/.test(v)) throw new EnvError(`${name} must be a whole number, not "${v}"`);
-  return Number(v);
-}
+const percent = (env: Env, name: string) => viaOption(env, name, (raw) => parsePercent(raw, 'value', 0));
+const wholeNumber = (env: Env, name: string) => viaOption(env, name, (raw) => parseCount(raw, 'value', 0));
 
 export function siteFromEnv(env: Env): Site {
   const id = read(env, 'LURK_SITE') ?? 'linuxdo';
@@ -142,7 +143,9 @@ export interface ServeEnv {
  */
 export function serveEnv(host: string, env: Env): ServeEnv {
   checkCredentialsEnv(env);
-  const token = read(env, 'LURK_TOKEN');
+  // LURK_TOKEN_FILE (a Docker secret, for one) wins over LURK_TOKEN.
+  const file = read(env, 'LURK_TOKEN_FILE');
+  const token = file === undefined ? read(env, 'LURK_TOKEN') : readTokenFile(file);
   const loopback = host === 'localhost' || isLoopback(host);
   if (!loopback && token === undefined) {
     throw new EnvError(`--host ${host} accepts remote connections, so LURK_TOKEN is required (at least ${MIN_TOKEN_BYTES} random bytes, e.g. \`openssl rand -base64 48\`)`);
@@ -151,64 +154,54 @@ export function serveEnv(host: string, env: Env): ServeEnv {
   return { token, proxy: proxyFromEnv(env) };
 }
 
+function readTokenFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8').trim() || undefined;
+  } catch (err) {
+    throw new EnvError(`LURK_TOKEN_FILE ${path} cannot be read: ${(err as Error).message}`);
+  }
+}
+
 /** The schedule and preset id the environment defines; kept apart from user-made schedules. */
 export const ENV_SCHEDULE_ID = 'env';
 
-export interface EnvSchedule {
-  spec: ScheduleSpec;
-  preset: RunPreset;
-  /** Category tokens as given in LURK_CATEGORIES, resolved against the site's list at run time; null means the site's defaults. */
-  categoryTokens: string[] | null;
-}
-
-function windowFromEnv(env: Env): { start: string; end: string } {
+function windowFromEnv(env: Env): string {
   const v = read(env, 'LURK_WINDOW') ?? '07:00-23:00';
-  const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(v);
-  if (!m) throw new EnvError(`LURK_WINDOW must be HH:MM-HH:MM, not "${v}"`);
-  return { start: m[1]!, end: m[2]! };
+  if (!/^(\d{2}:\d{2})-(\d{2}:\d{2})$/.test(v)) throw new EnvError(`LURK_WINDOW must be HH:MM-HH:MM, not "${v}"`);
+  return v;
 }
 
 /**
- * The unattended schedule `lurk serve` runs when LURK_RUNS_PER_DAY is set above zero: a random
- * daily window for Profile `<LURK_SITE>/default`, headless, with the preset the variables describe.
+ * The unattended schedule `lurk serve` runs when LURK_RUNS_PER_DAY is set above zero, as the
+ * `lurk schedule add` command line that defines it: a random daily window for Profile
+ * `<LURK_SITE>/default`, headless, with the preset the variables describe. Each variable is
+ * checked here so an error names it; the command line itself is parsed by `schedule add`.
  */
-export function envSchedule(env: Env, defaultTimezone: string): EnvSchedule | null {
+export function envScheduleArgv(env: Env, defaultTimezone: string): string[] | null {
   const runs = wholeNumber(env, 'LURK_RUNS_PER_DAY');
   if (runs === undefined || runs === 0) return null;
-  const site = siteFromEnv(env);
-  const { start, end } = windowFromEnv(env);
-  const jitter = wholeNumber(env, 'LURK_JITTER_MIN') ?? 15;
+  const argv = [
+    '--id', ENV_SCHEDULE_ID,
+    '--name', 'LURK_* environment',
+    '--site', siteFromEnv(env).id,
+    '--profile', 'default',
+    '--runs', String(runs),
+    '--window', windowFromEnv(env),
+    '--jitter', String(wholeNumber(env, 'LURK_JITTER_MIN') ?? 15),
+    // Gaps of an hour keep the day's runs from bunching up; a narrow window gets as many as fit.
+    '--min-gap', '60',
+    '--timezone', read(env, 'TZ') ?? defaultTimezone,
+    '--misfire', 'skip',
+    '--grace', '30',
+  ];
+  if (bool(env, 'LURK_RUN_ON_START') ?? true) argv.push('--run-on-start');
+  const browseMode = browseModeFromEnv(env);
+  if (browseMode) argv.push('--browse-mode', browseMode);
+  if (runModeFromEnv(env)) argv.push('--run-mode', read(env, 'LURK_RUN_MODE')!);
+  const categories = categoryTokens(env);
+  if (categories) argv.push('--categories', categories.join(','));
+  if (bool(env, 'LURK_LIKE')) argv.push('--like');
   const likeRate = percent(env, 'LURK_LIKE_RATE');
-  const timezone = read(env, 'TZ') ?? defaultTimezone;
-  return {
-    spec: {
-      id: ENV_SCHEDULE_ID,
-      name: 'LURK_* environment',
-      profileId: profileIdOf(site.id, 'default'),
-      presetId: ENV_SCHEDULE_ID,
-      enabled: true,
-      browserMode: 'headless',
-      timezone,
-      // Gaps of an hour keep the day's runs from bunching up; a narrow window gets as many as fit.
-      trigger: { kind: 'daily-window', runs, start, end, jitterMinutes: jitter, minGapMinutes: 60 },
-      misfire: { policy: 'skip', graceMinutes: 30 },
-      overlap: 'skip',
-      unavailableDisplay: 'skip',
-      runOnStart: bool(env, 'LURK_RUN_ON_START') ?? true,
-    },
-    preset: {
-      id: ENV_SCHEDULE_ID,
-      siteId: site.id,
-      browseMode: browseModeFromEnv(env) ?? 'deep',
-      runMode: runModeFromEnv(env) ?? { kind: 'topics', min: 15, max: 40 },
-      categoryPaths: [],
-      interaction: {
-        like: { ...DEFAULT_INTERACTION.like, enabled: bool(env, 'LURK_LIKE') ?? false, ...(likeRate !== undefined ? { topicRate: likeRate } : {}) },
-        reply: { ...DEFAULT_INTERACTION.reply },
-      },
-      extraWait: { ...DEFAULT_EXTRA_WAIT },
-      samplePerCategory: { min: 3, max: 8 },
-    },
-    categoryTokens: categoryTokens(env) ?? null,
-  };
+  if (likeRate !== undefined) argv.push('--like-rate', String(likeRate));
+  return argv;
 }

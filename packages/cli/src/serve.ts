@@ -36,7 +36,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
       strict: true,
       options: {
         host: { type: 'string', default: '127.0.0.1' },
-        port: { type: 'string', default: '8080' },
+        port: { type: 'string', default: env.LURK_PORT?.trim() || '8080' },
         headless: { type: 'boolean', default: false },
         origin: { type: 'string', multiple: true },
         ui: { type: 'string' },

@@ -33,6 +33,8 @@ describe('lurk serve access rules', () => {
     const b = parseServeArgs(['--host', '0.0.0.0', '--port', '9000', '--headless', '--data', '/x', '--origin', 'https://a', '--origin', 'https://b'], {});
     expect(b).toMatchObject({ host: '0.0.0.0', port: 9000, headless: true, dataDir: '/x', origins: ['https://a', 'https://b'] });
     expect(() => parseServeArgs(['--port', 'nope'], {})).toThrow(/Invalid --port/);
+    expect(parseServeArgs([], { LURK_PORT: '9090' }).port).toBe(9090);
+    expect(parseServeArgs(['--port', '9000'], { LURK_PORT: '9090' }).port).toBe(9000);
     expect(parseServeArgs(['--trusted-proxy', '10.0.0.2'], { LURK_TRUSTED_PROXIES: '10.0.0.3, 10.0.0.4' }).trustedProxies).toEqual(['10.0.0.2', '10.0.0.3', '10.0.0.4']);
     expect(a.trustedProxies).toEqual([]);
   });

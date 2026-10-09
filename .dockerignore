@@ -6,3 +6,9 @@ tests
 docs
 .git
 **/*.test.ts
+**/.env
+docker/.env
+docker/data
+docker/lurk_token
+profiles/
+.smoke/

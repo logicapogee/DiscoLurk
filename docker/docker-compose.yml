@@ -1,41 +1,25 @@
-# docker compose --env-file .env up -d   (copy .env.example to .env first)
+# cp .env.example .env, set LURK_TOKEN (or use the secret below), then: docker compose up -d
 services:
   disco-lurk:
     image: ghcr.io/logicapogee/discolurk:${LURK_IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: disco-lurk
     restart: unless-stopped
+    # Every LURK_* setting and TZ come from .env; unset ones take the application's defaults.
+    env_file: .env
     ports:
-      - "${LURK_PORT:-8080}:8080"
-    environment:
-      # Required: serve listens on 0.0.0.0 inside the container and refuses to start without it.
-      LURK_TOKEN: ${LURK_TOKEN:?set LURK_TOKEN in .env (openssl rand -base64 48)}
-      TZ: ${TZ:-Asia/Shanghai}
-      LURK_SITE: ${LURK_SITE:-linuxdo}
-      LURK_BROWSE_MODE: ${LURK_BROWSE_MODE:-deep}
-      LURK_RUN_MODE: ${LURK_RUN_MODE:-topics:15-40}
-      LURK_RUNS_PER_DAY: ${LURK_RUNS_PER_DAY:-2}
-      LURK_WINDOW: ${LURK_WINDOW:-07:00-23:00}
-      LURK_JITTER_MIN: ${LURK_JITTER_MIN:-15}
-      LURK_RUN_ON_START: ${LURK_RUN_ON_START:-true}
-      LURK_LIKE: ${LURK_LIKE:-false}
-      LURK_LIKE_RATE: ${LURK_LIKE_RATE:-30}
-      LURK_CATEGORIES: ${LURK_CATEGORIES:-}
-      LURK_PROXY: ${LURK_PROXY:-}
-      LURK_USERNAME: ${LURK_USERNAME:-}
-      LURK_PASSWORD: ${LURK_PASSWORD:-}
+      - "${LURK_PORT:-8080}:${LURK_PORT:-8080}"
     volumes:
-      # Profiles, schedules and run history: /data/disco-lurk/{profiles,schedules,...}
+      # Profiles, schedules, run history and logs: /data/disco-lurk/...
       - ./data:/data
+    # To keep the token out of the environment, put it in ./lurk_token, uncomment these lines and
+    # leave LURK_TOKEN empty in .env; LURK_TOKEN_FILE wins over LURK_TOKEN.
+    # secrets:
+    #   - lurk_token
+    # environment:
+    #   LURK_TOKEN_FILE: /run/secrets/lurk_token
     # Chrome keeps renderer memory in /dev/shm; Docker's 64 MB default makes pages crash.
     shm_size: 1gb
-    # The image's own check: the unauthenticated /health of lurk serve inside the container.
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
-      interval: 60s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
     # A run stops gracefully and reads the progress page once more before exiting.
     stop_grace_period: 30s
     deploy:
@@ -43,3 +27,7 @@ services:
         limits:
           cpus: "1"
           memory: 1g
+
+# secrets:
+#   lurk_token:
+#     file: ./lurk_token

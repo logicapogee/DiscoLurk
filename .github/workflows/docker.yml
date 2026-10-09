@@ -1,11 +1,13 @@
 name: Docker
 
-# ghcr.io/logicapogee/discolurk:<tag> and :latest, linux/amd64 only (Google ships no Linux arm64 Chrome).
+# ghcr.io/logicapogee/discolurk, linux/amd64 only (Google ships no Linux arm64 Chrome). Every v* tag
+# publishes its own tag; `latest` moves only on release tags (no `-` suffix). The image is built
+# and checked with `lurk doctor` locally before anything is pushed.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Image tag to publish besides latest
+        description: Image tag to publish (never latest)
         required: true
         default: dev
   push:
@@ -21,20 +23,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/logicapogee/discolurk
+          flavor: latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
+
+      - name: Build for the self-check
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: disco-lurk:check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Self-check inside the image
+        run: docker run --rm --platform linux/amd64 disco-lurk:check doctor
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/logicapogee/discolurk
-          tags: |
-            type=ref,event=tag
-            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=latest
-      - uses: docker/build-push-action@v6
+      # Every layer comes from the cache the self-check build just filled.
+      - name: Push
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
@@ -43,6 +62,3 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Self-check inside the image
-        run: docker run --rm --platform linux/amd64 ghcr.io/logicapogee/discolurk:latest doctor

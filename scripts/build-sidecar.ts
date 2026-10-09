@@ -25,7 +25,8 @@ function hostTriple(): string {
   return triple;
 }
 
-const triple = process.argv[2] ?? hostTriple();
+// Tauri sets TAURI_ENV_TARGET_TRIPLE for beforeBuildCommand, so `tauri build --target <triple>` packs the matching sidecar.
+const triple = process.argv[2] ?? process.env.TAURI_ENV_TARGET_TRIPLE ?? hostTriple();
 const pkgTarget = PKG_TARGETS[triple];
 if (!pkgTarget) throw new Error(`No pkg target for ${triple}; supported: ${Object.keys(PKG_TARGETS).join(', ')}`);
 const exe = triple.includes('windows') ? '.exe' : '';

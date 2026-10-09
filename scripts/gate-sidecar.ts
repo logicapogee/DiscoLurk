@@ -2,7 +2,8 @@
 //   1. launch system Chrome  2. persistent context  3. one locator click on a local static page
 //   4. screenshot, Profile written, clean close with no leftover browser process
 //   5. run again from a path outside the repository (Profile reused; sidecar ready line, token kept out of
-//      argv and environment, loopback-only listener, /health, /shutdown, stdin EOF)
+//      argv and environment, loopback-only listener, /health, /shutdown, the stdin shutdown command, stdin EOF)
+// Process inspection uses PowerShell on Windows and ps/lsof elsewhere.
 // Only a loopback static server is contacted; no real site is visited.
 import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -56,14 +57,41 @@ function runBinary(bin: string, args: string[], cwd: string): Promise<{ code: nu
   });
 }
 
+const powershell = (command: string) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8' });
+
 /** Processes still holding the Profile; Chrome passes it as --user-data-dir. */
 function processesUsing(profileDir: string): string[] {
-  // Windows has no `ps`; CIM lists every process with its full command line.
   const out =
     process.platform === 'win32'
-      ? execFileSync('powershell', ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'], { encoding: 'utf8' })
+      ? powershell('Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }')
       : execFileSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8' });
   return out.split('\n').filter((l) => l.includes(profileDir));
+}
+
+function commandLineOf(pid: number): string {
+  return process.platform === 'win32'
+    ? powershell(`(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`).trim()
+    : execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+}
+
+/** `ps eww` prints a process's environment on macOS and Linux; Windows offers no such view of another process. */
+function environmentOf(pid: number): string | null {
+  return process.platform === 'win32' ? null : execFileSync('ps', ['eww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
+}
+
+/** Listening TCP addresses as `host:port`. */
+function listenersOf(pid: number): string[] {
+  if (process.platform === 'win32') {
+    return powershell(`Get-NetTCPConnection -OwningProcess ${pid} -State Listen -ErrorAction SilentlyContinue | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }`)
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+  }
+  return execFileSync('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN'], { encoding: 'utf8' })
+    .split('\n')
+    .slice(1)
+    .filter(Boolean)
+    .map((l) => l.split(/\s+/).at(-2) ?? '');
 }
 
 async function selftestRun(label: string, bin: string, cwd: string, url: string, profileDir: string, screenshot: string) {
@@ -104,26 +132,31 @@ async function startSidecar(bin: string, cwd: string) {
   // stdin stays an open pipe, as under the shell; closing it is the parent-gone signal.
   const child = spawn(bin, ['sidecar'], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
   const exited = new Promise<number | null>((resolve) => child.on('close', resolve));
-  const ready = await new Promise<{ port: number; token: string } | null>((resolve) => {
+  const lines: Array<Record<string, unknown>> = [];
+  const ready = await new Promise<{ port: number; token: string; version: string } | null>((resolve) => {
     let buffered = '';
-    const timer = setTimeout(() => resolve(null), 10_000);
+    // The shell's own start-up timeout.
+    const timer = setTimeout(() => resolve(null), 30_000);
     child.stdout.on('data', (d: Buffer) => {
       buffered += d;
-      for (const line of buffered.split('\n').slice(0, -1)) {
+      const complete = buffered.split('\n');
+      buffered = complete.pop() ?? '';
+      for (const line of complete) {
         try {
-          const msg = JSON.parse(line) as { event?: string; port?: number; token?: string };
-          if (msg.event === 'ready' && msg.port && msg.token) {
+          const msg = JSON.parse(line) as { event?: string; port?: number; token?: string; version?: string };
+          lines.push(msg);
+          if (msg.event === 'ready' && msg.port && msg.token && msg.version) {
             clearTimeout(timer);
-            return resolve({ port: msg.port, token: msg.token });
+            resolve({ port: msg.port, token: msg.token, version: msg.version });
           }
         } catch {
-          // not the ready line
+          // plain output
         }
       }
     });
     child.on('close', () => resolve(null));
   });
-  return { child, exited, ready, token: ready?.token ?? '', base: `http://127.0.0.1:${ready?.port ?? 0}` };
+  return { child, exited, ready, lines, token: ready?.token ?? '', base: `http://127.0.0.1:${ready?.port ?? 0}` };
 }
 
 async function waitHealth(base: string): Promise<unknown> {
@@ -142,18 +175,20 @@ const within = <T,>(p: Promise<T>, ms: number) =>
 
 async function sidecarRun(bin: string, cwd: string) {
   const a = await startSidecar(bin, cwd);
-  record('run 2 sidecar ready line', a.ready !== null, a.ready ? `port ${a.ready.port}, ${Buffer.byteLength(a.token)}-byte token` : 'none within 10 s');
+  record(
+    'run 2 sidecar starting and ready lines',
+    a.ready !== null && a.lines[0]?.event === 'starting',
+    a.ready ? `port ${a.ready.port}, ${Buffer.byteLength(a.token)}-byte token, version ${a.ready.version}` : 'no ready line within 30 s',
+  );
   const health = a.ready ? await waitHealth(a.base) : null;
   record('run 2 sidecar /health', health !== null, JSON.stringify(health));
-  const argv = execFileSync('ps', ['-o', 'command=', '-p', String(a.child.pid)], { encoding: 'utf8' }).trim();
+  const pid = a.child.pid!;
+  const argv = commandLineOf(pid);
   record('run 2 token absent from argv', a.token !== '' && !argv.includes(a.token), argv);
-  const env = execFileSync('ps', ['eww', '-o', 'command=', '-p', String(a.child.pid)], { encoding: 'utf8' });
-  record('run 2 token absent from environment', a.token !== '' && !env.includes(a.token), 'checked ps eww');
-  const listening = execFileSync('lsof', ['-nP', '-a', '-p', String(a.child.pid), '-iTCP', '-sTCP:LISTEN'], { encoding: 'utf8' })
-    .split('\n')
-    .slice(1)
-    .filter(Boolean)
-    .map((l) => l.split(/\s+/).at(-2) ?? '');
+  const env = environmentOf(pid);
+  if (env === null) record('run 2 token absent from environment', true, 'skipped: Windows cannot read another process environment; the token is never set in it');
+  else record('run 2 token absent from environment', a.token !== '' && !env.includes(a.token), 'checked ps eww');
+  const listening = listenersOf(pid);
   record(
     'run 2 sidecar listens on 127.0.0.1 only',
     listening.length > 0 && listening.every((addr) => addr.startsWith('127.0.0.1:')),
@@ -170,10 +205,17 @@ async function sidecarRun(bin: string, cwd: string) {
   record('run 2 sidecar /shutdown exits cleanly', shut === 202 && code === 0, `HTTP ${shut}, exit ${String(code)}`);
 
   const b = await startSidecar(bin, cwd);
-  const up = b.ready ? await waitHealth(b.base) : null;
-  b.child.stdin.end();
-  const eof = await within(b.exited, 15_000);
-  if (eof === 'timeout') b.child.kill('SIGKILL');
+  b.child.stdin.write('{"cmd":"shutdown"}\n');
+  const byCommand = await within(b.exited, 15_000);
+  if (byCommand === 'timeout') b.child.kill('SIGKILL');
+  const answered = b.lines.some((l) => l.event === 'result' && l.cmd === 'shutdown' && l.ok === true);
+  record('run 2 sidecar stdin shutdown command exits cleanly', b.ready !== null && answered && byCommand === 0, `answered ${answered}, exit ${String(byCommand)}`);
+
+  const c = await startSidecar(bin, cwd);
+  const up = c.ready ? await waitHealth(c.base) : null;
+  c.child.stdin.end();
+  const eof = await within(c.exited, 15_000);
+  if (eof === 'timeout') c.child.kill('SIGKILL');
   record('run 2 sidecar exits when stdin closes', up !== null && eof === 0, `health ${up ? 'ok' : 'none'}, exit ${String(eof)}`);
 }
 

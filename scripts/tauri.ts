@@ -2,11 +2,15 @@
 // tauri://localhost exactly as a release build does; the CLI's static dev server would give the page
 // an http://127.0.0.1:1430 origin, which the sidecar's CORS allow-list rightly rejects.
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const desktop = join(dirname(fileURLToPath(import.meta.url)), '..', 'apps', 'desktop');
+// The CLI's JS entry runs under this same Node, which needs no shell to resolve `pnpm.cmd` on Windows.
+const cli = join(dirname(createRequire(join(desktop, 'package.json')).resolve('@tauri-apps/cli/package.json')), 'tauri.js');
 const args = process.argv.slice(2);
 if (args[0] === 'dev' && !args.includes('--no-dev-server')) args.splice(1, 0, '--no-dev-server');
-const r = spawnSync('pnpm', ['exec', 'tauri', ...args], { cwd: desktop, stdio: 'inherit' });
+const r = spawnSync(process.execPath, [cli, ...args], { cwd: desktop, stdio: 'inherit' });
+if (r.error) console.error(`cannot run the Tauri CLI (${cli}): ${r.error.message}`);
 process.exit(r.status ?? 1);

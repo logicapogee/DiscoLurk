@@ -1,3 +1,4 @@
+import { LevelTable, StatsPanel } from '../components/stats';
 import { copy } from '../copy';
 import { dateTime } from '../format';
 import { useStore } from '../store';
@@ -14,6 +15,12 @@ export function DashboardPage(props: { go(page: 'run'): void }) {
         const last = state.history.find((r) => r.plan.siteId === site.id);
         const level = last?.result.levels.final ?? last?.result.levels.initial;
         const running = active.filter((r) => r.plan.siteId === site.id);
+        // The progress table and this run's numbers: the run going now, else the last one that ended.
+        const now = running[0];
+        const shown = now ?? last;
+        const shownStats = now ? state.live[now.runId]?.stats : last?.result.stats;
+        const shownLevels = now ? (state.live[now.runId]?.levels ?? { initial: null, final: null }) : (last?.result.levels ?? { initial: null, final: null });
+        const shownBaseline = now ? null : (last?.result.baseline ?? null);
         return (
           <section class="panel" key={site.id}>
             <div class="panel-head">
@@ -40,6 +47,12 @@ export function DashboardPage(props: { go(page: 'run'): void }) {
                   : copy.dashboard.never}
               </span>
             </div>
+            {shown && (
+              <div class="columns">
+                {shownStats && <StatsPanel stats={shownStats} />}
+                <LevelTable levels={shownLevels} baseline={shownBaseline} stats={shownStats} events={state.events[shown.runId] ?? []} />
+              </div>
+            )}
             {running.map((r) => (
               <div key={r.runId} class="status-bar">
                 <span class={`chip state-${r.state}`}>{copy.states[r.state]}</span> {r.presetName} · {r.plan.profileId}

@@ -14,6 +14,11 @@ export function scheduleRoutes(ctx: AppContext): Route[] {
         const spec = parseBody(limitedScheduleSpecSchema, body);
         if (spec.id !== params.id) throw new HttpError(422, 'id-mismatch', 'The schedule id must match the URL');
         await ctx.requireProfile(spec.profileId);
+        // An unattended headless run can only sign in with what the Profile already holds.
+        const mayRunHeadless = spec.browserMode === 'headless' || spec.unavailableDisplay === 'fallback-headless';
+        if (spec.enabled && mayRunHeadless && ctx.profiles.health(spec.profileId)?.status !== 'ready') {
+          throw new HttpError(428, 'health-check-required', `Profile ${spec.profileId} has not passed a health check; sign in and check it on the Profile page first`);
+        }
         return ok(await schedules.upsert(spec));
       },
     },

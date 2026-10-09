@@ -4,7 +4,8 @@ import type { DoctorReport } from '../api';
 import { LIMITS } from '@disco-lurk/core';
 import { Field, Notice, NumberInput, Select, Toggle } from '../components/fields';
 import { ExtraWaitField, SampleField } from '../components/preset-fields';
-import { copy, errorText } from '../copy';
+import { attempt, copy, errorText, type Message } from '../copy';
+import { download } from '../components/log';
 import { platform } from '../platform';
 import { useStore } from '../store';
 
@@ -29,6 +30,56 @@ export function DoctorTable(props: { report: DoctorReport }) {
   );
 }
 
+/** The sites, and a form to add another Discourse forum by its address. */
+function SitesPanel() {
+  const [state, store] = useStore();
+  const [displayName, setDisplayName] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [login, setLogin] = useState<'headed' | 'password'>('headed');
+  const [message, setMessage] = useState<Message | null>(null);
+  const add = async (e: Event) => {
+    e.preventDefault();
+    const added = await attempt(() => store.api.addSite({ displayName: displayName.trim(), baseUrl: baseUrl.trim(), login }), setMessage);
+    if (!added) return;
+    await store.refreshSites();
+    setMessage({ kind: 'ok', text: copy.settings.siteAdded(added.site.displayName) });
+    setDisplayName('');
+    setBaseUrl('');
+  };
+  return (
+    <section class="panel">
+      <div class="panel-head">
+        <h3>{copy.settings.sites}</h3>
+      </div>
+      <p class="hint">{copy.settings.sitesHint}</p>
+      <ul class="sites">
+        {state.sites.map(({ site }) => (
+          <li key={site.id}>
+            <strong>{site.displayName}</strong> <span class="muted">{site.baseUrl}</span>
+          </li>
+        ))}
+      </ul>
+      <form onSubmit={add} aria-label={copy.settings.addSite}>
+        <Field label={copy.settings.siteName}>
+          <input type="text" aria-label={copy.settings.siteName} value={displayName} maxLength={LIMITS.nameLength} required onInput={(e) => setDisplayName((e.currentTarget as HTMLInputElement).value)} />
+        </Field>
+        <Field label={copy.settings.siteUrl}>
+          <input type="url" aria-label={copy.settings.siteUrl} value={baseUrl} placeholder="https://forum.example.org" required onInput={(e) => setBaseUrl((e.currentTarget as HTMLInputElement).value)} />
+        </Field>
+        <Field label={copy.settings.siteLogin}>
+          <Select<'headed' | 'password'> label={copy.settings.siteLogin} value={login} options={(['headed', 'password'] as const).map((v) => ({ value: v, label: copy.settings.siteLogins[v] }))} onChange={(v) => setLogin(v)} />
+        </Field>
+        {message && <Notice kind={message.kind}>{message.text}</Notice>}
+        <div class="actions">
+          <button type="submit" class="primary">
+            {copy.settings.addSite}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 export function SettingsPage(props: { onTokenRotated(token: string): void }) {
   const [state, store] = useStore();
   const s = state.settings;
@@ -46,6 +97,17 @@ export function SettingsPage(props: { onTokenRotated(token: string): void }) {
     setError('');
     try {
       store.set({ settings: await store.api.saveSettings(patch) });
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+
+  const [exported, setExported] = useState('');
+  const exportDiagnostics = async () => {
+    setError('');
+    try {
+      if (platform.desktop) setExported(copy.common.exportedTo((await store.api.writeDiagnostics()).path));
+      else download(`disco-lurk-diagnostics-${Date.now()}.json`, await store.api.diagnostics(), 'application/json');
     } catch (err) {
       setError(errorText(err));
     }
@@ -81,6 +143,7 @@ export function SettingsPage(props: { onTokenRotated(token: string): void }) {
           <Select label={copy.settings.language} value="zh-CN" disabled options={[{ value: 'zh-CN', label: copy.settings.languageZh }]} onChange={() => {}} />
         </Field>
       </section>
+      <SitesPanel />
       <section class="panel">
         <div class="panel-head">
           <h3>{copy.settings.reading}</h3>
@@ -125,6 +188,13 @@ export function SettingsPage(props: { onTokenRotated(token: string): void }) {
           </button>
         </div>
         {doctor ? <DoctorTable report={doctor} /> : <p class="muted">{copy.common.loading}</p>}
+        <div class="actions">
+          <button type="button" onClick={exportDiagnostics}>
+            {copy.settings.diagnostics}
+          </button>
+        </div>
+        <p class="hint">{copy.settings.diagnosticsHint}</p>
+        {exported && <Notice kind="ok">{exported}</Notice>}
       </section>
     </div>
   );

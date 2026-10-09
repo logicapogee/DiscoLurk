@@ -46,11 +46,24 @@ export class ProfileGate {
 /** The site's categories as last loaded; a discovered site's list changes after each sign-in. */
 export class SiteCatalog {
   private cache = new Map<string, Category[]>();
+  private list: Site[];
 
   constructor(
-    readonly sites: readonly Site[],
+    sites: readonly Site[],
     private readonly load: (site: Site) => Promise<Category[]>,
-  ) {}
+  ) {
+    this.list = [...sites];
+  }
+
+  get sites(): readonly Site[] {
+    return this.list;
+  }
+
+  /** Adds a site the user configured; a built-in site keeps its id. */
+  add(site: Site): void {
+    if (this.list.some((s) => s.id === site.id)) throw new HttpError(409, 'site-exists', `Site ${site.id} already exists`);
+    this.list = [...this.list, site];
+  }
 
   site(siteId: string): Site {
     const site = this.sites.find((s) => s.id === siteId);
@@ -87,7 +100,8 @@ export class SiteCatalog {
 }
 
 /** The shell side of notifications; absent outside the desktop sidecar. */
-export type Notify = (kind: 'run-completed' | 'run-failed' | 'needs-login', title: string, body: string) => void;
+export type NotifyKind = 'run-started' | 'run-completed' | 'run-failed' | 'needs-login' | 'run-skipped';
+export type Notify = (kind: NotifyKind, title: string, body: string) => void;
 
 export interface RunManagerDeps {
   coordinator: RunCoordinator;
@@ -214,6 +228,7 @@ export class RunManager {
       finish({ outcome: 'failed', stopCause: 'error', stats: emptyStats(), failure: toFailure(err), baseline: 'missing', levels: { initial: null, final: null } }),
     );
     this.live.set(plan.id, { view, controller, done });
+    this.deps.notify('run-started', '开始运行', `${presetName}：${plan.profileId} · ${plan.browserMode === 'headless' ? '无头' : '有头'}`);
     this.deps.hub.publish({ type: 'run', run: structuredClone(view) });
     this.deps.onActiveChange?.(this.live.size);
     return structuredClone(view);

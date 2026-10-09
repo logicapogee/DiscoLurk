@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { emptyStats, EXPERIMENTS_OFF, type Category, type LevelSnapshot, type RunPlanSnapshot, type RunStats } from '@disco-lurk/core';
-import type { ActiveRun, ScheduleList, ServerInfo, Settings, SiteView, StoredPreset } from '@disco-lurk/server/contract';
+import type { ActiveRun, RunRecord, ScheduleList, ServerInfo, Settings, SiteView, StoredPreset } from '@disco-lurk/server/contract';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { h } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,9 @@ import { App } from './app';
 import { copy } from './copy';
 import { RunPage } from './pages/run';
 import { SchedulesPage } from './pages/schedules';
+import { DashboardPage } from './pages/dashboard';
+import { HistoryPage } from './pages/history';
+import { SettingsPage } from './pages/settings';
 import type { Platform } from './platform';
 import { FINISHED_EVENTS_TTL_MS, Store, StoreContext, type State } from './store';
 
@@ -86,7 +89,7 @@ function fakeApi() {
   return api;
 }
 
-function mount(api: ReturnType<typeof fakeApi>, page: () => ReturnType<typeof h> = () => h(RunPage, {}), patch: Partial<State> = {}) {
+function mount(api: ReturnType<typeof fakeApi>, page: () => ReturnType<typeof h<any>> = () => h(RunPage, {}), patch: Partial<State> = {}) {
   const state: State = {
     info: { version: '0.1.0', headlessOnly: false, platform: 'darwin' } satisfies ServerInfo,
     stream: 'open',
@@ -341,3 +344,60 @@ describe('store events', () => {
     }
   });
 });
+
+describe('spec pages', () => {
+  const ended = (): RunRecord => {
+    const run = activeRun();
+    return {
+      runId: 'run-0',
+      presetId: run.presetId,
+      presetName: run.presetName,
+      plan: run.plan,
+      startedAt: at,
+      endedAt: at,
+      result: {
+        outcome: 'completed',
+        stopCause: 'target',
+        baseline: 'present',
+        levels: { initial: { source: 'connect-linuxdo', metrics: [{ label: '浏览话题', key: 'topicsViewed', current: 10, required: 500 }] }, final: { source: 'connect-linuxdo', metrics: [{ label: '浏览话题', key: 'topicsViewed', current: 14, required: 500 }] } },
+        stats: { ...emptyStats(), confirmed: { ...emptyStats().confirmed, topics: 4 } },
+      },
+    };
+  };
+
+  it('shows the last run\'s site progress and numbers on the dashboard', async () => {
+    mount(fakeApi(), () => h(DashboardPage, { go: () => {} }), { history: [ended()] });
+    await screen.findByText(copy.levels.title);
+    expect(screen.getByText(copy.stats.title)).toBeTruthy();
+    const row = [...document.querySelectorAll('table.levels tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent));
+    expect(row[0]).toEqual(['10', expect.any(String), '14', '500', '+4']);
+  });
+
+  it('offers each history entry\'s log for download', async () => {
+    const api = { ...fakeApi(), history: vi.fn(async () => [ended()]), runLog: vi.fn(async () => '{"seq":1}\n'), raw: vi.fn(async () => new Response('{"path":"/x"}')) };
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() }));
+    mount(api as never, () => h(HistoryPage, {}), { history: [ended()] });
+    fireEvent.click(await screen.findByRole('button', { name: copy.history.download }));
+    // A browser downloads the log; the desktop shell writes it through the sidecar.
+    await waitFor(() => expect(api.runLog.mock.calls.length + api.raw.mock.calls.length).toBe(1));
+  });
+
+  it('adds a Discourse site from the settings page', async () => {
+    const meta = { ...siteView.site, id: 'meta', displayName: 'Meta', baseUrl: 'https://meta.discourse.org', categorySource: 'discovered' as const };
+    const api = {
+      ...fakeApi(),
+      doctor: vi.fn(async () => ({ version: 'x', platform: 'p', arch: 'a', generatedAt: at, checks: [] })),
+      addSite: vi.fn(async () => ({ site: meta, categories: [] })),
+      sites: vi.fn(async () => [siteView, { site: meta, categories: [] }]),
+    };
+    const store = mount(api as never, () => h(SettingsPage, { onTokenRotated: () => {} }));
+    fireEvent.input(screen.getByRole('textbox', { name: copy.settings.siteName }), { target: { value: 'Meta' } });
+    fireEvent.input(screen.getByRole('textbox', { name: copy.settings.siteUrl }), { target: { value: 'https://meta.discourse.org' } });
+    fireEvent.click(screen.getByRole('button', { name: copy.settings.addSite }));
+    await waitFor(() => expect(api.addSite).toHaveBeenCalledWith({ displayName: 'Meta', baseUrl: 'https://meta.discourse.org', login: 'headed' }));
+    await screen.findByText(copy.settings.siteAdded('Meta'));
+    expect(store.state.sites.map((s) => s.site.id)).toEqual(['linuxdo', 'meta']);
+    expect(screen.queryByText(/关闭窗口时隐藏到托盘/)).toBeNull();
+  });
+});
+

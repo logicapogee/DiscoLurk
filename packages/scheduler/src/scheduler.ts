@@ -35,6 +35,8 @@ export interface SchedulerDeps {
   startRun(plan: RunPlanSnapshot, cause: TriggerCause): RunId;
   /** Where a preset setting the run cannot honour is reported, e.g. replies without their risk acknowledged. */
   warn?(code: string, message: string): void;
+  /** Hears every run a schedule skipped, after it is recorded; the place to notify the user. */
+  onSkip?(spec: ScheduleSpec, reason: SkipReason, cause: TriggerCause): void;
 }
 
 export type SkipReason = 'paused' | 'disabled' | 'overlap' | 'no-display';
@@ -170,6 +172,7 @@ export class PlanScheduler implements Scheduler {
   private fire(spec: ScheduleSpec, s: ScheduleState, plan: RunPlanSnapshot, cause: TriggerCause): RunId {
     const skip = (reason: SkipReason): never => {
       this.record(s, { snapshotId: plan.id, cause, outcome: 'skipped', reason });
+      this.deps.onSkip?.(spec, reason, cause);
       throw new ScheduleSkipped(spec.id, reason);
     };
     if (!spec.enabled) skip('disabled');

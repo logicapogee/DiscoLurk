@@ -116,6 +116,10 @@ export class Api {
   runLog = async (runId: string, types: string[]) =>
     (await this.raw('GET', `/runs/${encodeURIComponent(runId)}/log${types.length ? `?types=${types.join(',')}` : ''}`)).text();
 
+  addSite = (req: { displayName: string; baseUrl: string; login: 'headed' | 'password' }) => this.json<SiteView>('POST', '/sites', req);
+  diagnostics = async () => (await this.raw('GET', '/diagnostics')).text();
+  writeDiagnostics = () => this.json<{ path: string }>('POST', '/diagnostics');
+
   settings = () => this.json<Settings>('GET', '/settings');
   saveSettings = (patch: Partial<Settings>) => this.json<Settings>('PUT', '/settings', patch);
   rotateToken = () => this.json<{ token: string }>('POST', '/token/rotate');

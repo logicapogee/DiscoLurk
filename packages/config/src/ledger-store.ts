@@ -33,7 +33,8 @@ export class FileLedgerStore implements LedgerStore {
   constructor(
     private readonly pathOf: (profileId: ProfileId) => string,
     private readonly now: () => number = Date.now,
-    private readonly retentionDays = LEDGER_RETENTION_DAYS,
+    /** A number, or a getter for a setting the user can change while the app runs. */
+    private readonly retentionDays: number | (() => number) = LEDGER_RETENTION_DAYS,
   ) {}
 
   path(profileId: ProfileId): string {
@@ -55,7 +56,8 @@ export class FileLedgerStore implements LedgerStore {
   }
 
   private recent(records: readonly VisitRecord[]): VisitRecord[] {
-    const cutoff = this.now() - this.retentionDays * 86_400_000;
+    const days = typeof this.retentionDays === 'number' ? this.retentionDays : this.retentionDays();
+    const cutoff = this.now() - days * 86_400_000;
     return records.filter((r) => Date.parse(r.lastVisitAt) >= cutoff);
   }
 }

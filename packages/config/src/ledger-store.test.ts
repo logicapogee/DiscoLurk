@@ -31,6 +31,17 @@ describe('visit ledger file (§7.2)', () => {
     expect(saved.records.map((r) => r.topicId)).toEqual(['new']);
   });
 
+  it('reads the retention period from a setting each time it saves', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lurk-ledger-'));
+    let days = 30;
+    const store = new FileLedgerStore((id) => join(dir, `${id}.json`), () => now, () => days);
+    const ledger = await store.open('docofcard/main');
+    ledger.record({ topicId: 'week-old', lastVisitAt: new Date(now - 8 * day).toISOString(), entered: true });
+    await ledger.save();
+    days = 7;
+    expect((await store.open('docofcard/main')).get('week-old')).toBeUndefined();
+  });
+
   it('names the file when it is not a ledger of this Profile', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'lurk-ledger-'));
     const store = new FileLedgerStore((id) => join(dir, `${id}.json`), () => now);

@@ -1,8 +1,8 @@
 import type { LoggedEvent, RunRecord } from '@disco-lurk/server/contract';
 import { useEffect, useState } from 'preact/hooks';
-import { LogPanel } from '../components/log';
+import { exportLog, LogPanel } from '../components/log';
 import { LevelTable, StatsPanel } from '../components/stats';
-import { copy } from '../copy';
+import { copy, errorText } from '../copy';
 import { dateTime, duration } from '../format';
 import { useStore } from '../store';
 
@@ -32,6 +32,7 @@ function Details(props: { record: RunRecord }) {
 export function HistoryPage() {
   const [state, store] = useStore();
   const [open, setOpen] = useState<string | null>(null);
+  const [note, setNote] = useState<{ runId: string; text: string } | null>(null);
   useEffect(() => void store.refreshHistory(), []);
   const siteName = (id: string) => state.sites.find((s) => s.site.id === id)?.site.displayName ?? id;
   return (
@@ -64,9 +65,15 @@ export function HistoryPage() {
                   {c.topics} {copy.stats.topics} · {c.floors} {copy.stats.floors} · {c.likes + c.replyLikes} {copy.stats.likes} · {c.replies} {copy.stats.replies}
                 </span>
               </div>
-              <button type="button" onClick={() => setOpen(open === rec.runId ? null : rec.runId)} aria-expanded={open === rec.runId}>
-                {open === rec.runId ? copy.history.hide : copy.history.details}
-              </button>
+              <div class="actions">
+                <button type="button" onClick={() => setOpen(open === rec.runId ? null : rec.runId)} aria-expanded={open === rec.runId}>
+                  {open === rec.runId ? copy.history.hide : copy.history.details}
+                </button>
+                <button type="button" onClick={() => exportLog(store.api, rec.runId, []).then((t) => setNote(t ? { runId: rec.runId, text: t } : null), (err: unknown) => setNote({ runId: rec.runId, text: errorText(err) }))}>
+                  {copy.history.download}
+                </button>
+              </div>
+              {note?.runId === rec.runId && <div class="hint">{note.text}</div>}
               {open === rec.runId && <Details record={rec} />}
             </li>
           );

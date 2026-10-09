@@ -418,6 +418,82 @@ describe('server API', () => {
     ws.ws.close();
   });
 
+  it('adds a Discourse site on a public http(s) address, keeps it across restarts and lists it', async () => {
+    const h = await boot();
+    const call = api(h);
+    for (const baseUrl of ['ftp://forum.example.org', 'http://127.0.0.1:3000', 'http://192.168.1.10', 'http://[::1]/', 'http://localhost:4200', 'http://nas.local', 'http://intranet']) {
+      expect((await call('POST', '/sites', { displayName: 'X', baseUrl })).status).toBe(422);
+    }
+    const added = await call<{ site: { id: string; login: string; progressSource: string; categorySource: string } }>('POST', '/sites', { displayName: 'Meta', baseUrl: 'https://meta.discourse.org/latest' });
+    expect(added.status).toBe(201);
+    expect(added.body.site).toMatchObject({ id: 'meta-discourse-org', login: 'headed', progressSource: 'none', categorySource: 'discovered', baseUrl: 'https://meta.discourse.org' });
+    expect((await call('POST', '/sites', { displayName: 'Meta', baseUrl: 'https://meta.discourse.org' })).status).toBe(409);
+    expect((await call('POST', '/profiles', { siteId: 'meta-discourse-org', name: 'main', channel: 'chrome' })).status).toBe(201);
+    const again = createApp(appDepsOf(h));
+    await again.start();
+    const sites = await again.routes.find((r) => r.method === 'GET' && r.path === '/sites')!.handle({ params: {}, query: new URLSearchParams(), body: undefined, ip: '' });
+    expect((sites.body as Array<{ site: { id: string } }>).map((s) => s.site.id)).toEqual(['fx', 'meta-discourse-org']);
+  });
+
+  it('notifies a run start unless turned off, and a schedule skipped because another process holds the Profile', async () => {
+    const h = await boot();
+    const call = api(h);
+    await withProfile(h);
+    await call('PUT', '/presets/p1', { preset: preset() });
+    const ws = await events(h);
+    const first = (await call<ActiveRun>('POST', '/runs', { presetId: 'p1' })).body.runId;
+    expect(h.shell.notices.map(([t]) => t)).toContain('开始运行');
+    await call('POST', '/runs/stop');
+    await ws.until((f) => f.type === 'run' && f.run.runId === first && f.record !== undefined);
+    await call('PUT', '/settings', { notifyOnStart: false });
+    h.shell.notices.length = 0;
+    const second = (await call<ActiveRun>('POST', '/runs', { presetId: 'p1' })).body.runId;
+    await call('POST', '/runs/stop');
+    await ws.until((f) => f.type === 'run' && f.run.runId === second && f.record !== undefined);
+    expect(h.shell.notices.map(([t]) => t)).not.toContain('开始运行');
+
+    await call('POST', '/profiles/fx/main/inspect');
+    await call('PUT', '/schedules/s1', {
+      id: 's1',
+      name: '夜间',
+      profileId: 'fx/main',
+      presetId: 'p1',
+      enabled: true,
+      browserMode: 'headless',
+      timezone: 'UTC',
+      trigger: { kind: 'cron', expression: '0 8 * * *' },
+      misfire: { policy: 'skip', graceMinutes: 30 },
+      overlap: 'skip',
+      unavailableDisplay: 'skip',
+      runOnStart: false,
+    });
+    // A CLI run in another process holds the Profile's lock file.
+    h.locks.set(h.app.services.profiles.dirOf('fx/main'), 4242);
+    const skipped = await call<{ error: string }>('POST', '/schedules/s1/trigger');
+    expect(skipped.body.error).toBe('skipped-overlap');
+    expect(h.shell.notices).toContainEqual(['定时任务已跳过', expect.stringContaining('夜间')]);
+    expect((await call<ScheduleHistoryEntry[]>('GET', '/schedules/s1/history')).body.at(-1)).toMatchObject({ outcome: 'skipped', reason: 'overlap' });
+    ws.ws.close();
+  });
+
+  it('exports a diagnostics bundle with the doctor report, settings, runs and logs, never a token', async () => {
+    const h = await boot();
+    const call = api(h);
+    mkdirSync(join(h.dataDir, 'logs'), { recursive: true });
+    writeFileSync(join(h.dataDir, 'logs', 'sidecar-2026-10-09.log'), 'started\nToken (this run only; set LURK_TOKEN to keep one): abcdef123\nAuthorization: Bearer xyz\n');
+    const bundle = await call<{ doctor: unknown; settings: unknown; logs: Record<string, string> }>('GET', '/diagnostics');
+    expect(bundle.status).toBe(200);
+    expect(bundle.headers.get('content-disposition')).toMatch(/attachment; filename="disco-lurk-diagnostics-/);
+    expect(bundle.body).toMatchObject({ doctor: { checks: [] }, settings: { notifications: true } });
+    const log = bundle.body.logs['sidecar-2026-10-09.log']!;
+    expect(log).toContain('started');
+    expect(log).not.toContain('abcdef123');
+    expect(log).not.toContain('xyz');
+    const written = await call<{ path: string }>('POST', '/diagnostics');
+    expect(existsSync(join(written.body.path, 'summary.json'))).toBe(true);
+    expect(readFileSync(join(written.body.path, 'logs', 'sidecar-2026-10-09.log'), 'utf8')).toContain('<redacted>');
+  });
+
   it('answers 409 when another process holds the Profile lock', async () => {
     const h = await boot();
     const call = api(h);
@@ -491,6 +567,12 @@ describe('server API', () => {
       unavailableDisplay: 'skip',
       runOnStart: false,
     };
+    // A headless schedule waits for the Profile to pass a health check.
+    const unchecked = await call<{ error: string }>('PUT', '/schedules/s1', spec);
+    expect(unchecked.status).toBe(428);
+    expect(unchecked.body.error).toBe('health-check-required');
+    expect((await call('PUT', '/schedules/s1', { ...spec, enabled: false })).status).toBe(200);
+    expect((await call('POST', '/profiles/fx/main/inspect')).status).toBe(200);
     const saved = await call<ScheduleList>('PUT', '/schedules/s1', spec);
     expect(saved.status).toBe(200);
     expect(saved.body.available).toBe(true);

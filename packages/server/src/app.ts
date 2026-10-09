@@ -6,6 +6,7 @@ import type { ServerInfo, Settings, UpdateInfo } from './contract';
 import { EventHub, HttpError } from './hub';
 import { LoginManager } from './logins';
 import { ok, type AppContext } from './routes/context';
+import { diagnosticRoutes } from './routes/diagnostics';
 import { profileRoutes } from './routes/profiles';
 import { runRoutes } from './routes/runs';
 import { scheduleRoutes } from './routes/schedules';
@@ -13,7 +14,7 @@ import { ProfileGate, RunManager, SiteCatalog, type Notify } from './runs';
 import { ScheduleService } from './schedules';
 import { parseBody, settingsPatchSchema } from './schemas';
 import type { Route } from './server';
-import { PresetStore, ProfileRegistry, RunHistory, SettingsStore, splitProfileId, type LockHolder } from './store';
+import { PresetStore, ProfileRegistry, RunHistory, SettingsStore, SiteStore, splitProfileId, type LockHolder } from './store';
 
 export { defaultPreset } from './routes/runs';
 
@@ -103,8 +104,11 @@ export function createApp(deps: AppDeps): LurkApp {
     () => catalog.sites.map((s) => s.id),
     deps.lockHolder,
   );
-  const notify: Notify = (_kind, title, body) => {
-    if (settings.get().notifications) deps.shell?.notify(title, body);
+  const userSites = new SiteStore(join(deps.dataDir, 'custom-sites.json'));
+  const notify: Notify = (kind, title, body) => {
+    const s = settings.get();
+    if (!s.notifications || (kind === 'run-started' && !s.notifyOnStart)) return;
+    deps.shell?.notify(title, body);
   };
   const runs = new RunManager({
     coordinator: deps.coordinator,
@@ -143,6 +147,8 @@ export function createApp(deps: AppDeps): LurkApp {
     runs,
     gate,
     hub,
+    notify,
+    lockedElsewhere: async (id) => (await deps.lockHolder(profiles.dirOf(id))) !== null,
     displayAvailable: () => !deps.headlessOnly && deps.displayAvailable(),
     log,
     ...(deps.extraSchedules ? { extraSchedules: deps.extraSchedules } : {}),
@@ -230,7 +236,8 @@ export function createApp(deps: AppDeps): LurkApp {
       path: '/info',
       handle: async () => ok({ version: deps.version, headlessOnly: deps.headlessOnly === true, platform: process.platform } satisfies ServerInfo),
     },
-    ...profileRoutes(ctx),
+    ...diagnosticRoutes(ctx, deps.doctor),
+    ...profileRoutes(ctx, userSites),
     ...runRoutes(ctx),
     ...scheduleRoutes(ctx),
     { method: 'GET', path: '/settings', handle: async () => ok(settings.get()) },
@@ -278,7 +285,14 @@ export function createApp(deps: AppDeps): LurkApp {
     hub,
     services: { runs, logins, schedules, presets, settings, profiles, catalog },
     async start() {
-      await Promise.all([settings.load(), presets.load(), history.load(), profiles.load()]);
+      const [, , , , added] = await Promise.all([settings.load(), presets.load(), history.load(), profiles.load(), userSites.load()]);
+      for (const site of added) {
+        try {
+          catalog.add(site);
+        } catch (err) {
+          log(`custom-sites.json: ${site.id} skipped: ${(err as Error).message}`);
+        }
+      }
       const lost = await history.recoverOpen(new Date(deps.clock.now()).toISOString(), deps.processAlive);
       if (lost > 0) log(`history: ${lost} run(s) were in progress when the previous sidecar stopped; recorded as failed`);
       await catalog.refreshAll().catch((err: unknown) => log(`category load failed: ${String(err)}`));

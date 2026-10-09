@@ -13,19 +13,23 @@ const SHOWN = 800;
 
 const level = (e: RunEvent) => (e.type === 'error' ? 'error' : e.type === 'warning' ? 'warn' : e.type === 'state' ? 'state' : 'info');
 
+/** Hands a file to a browser user; the desktop webview has no downloads, so it writes through the sidecar instead. */
+export function download(name: string, text: string, type: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /** Exports through the sidecar to a file on the desktop, as a download in a browser. */
-async function exportLog(api: Api, runId: string, types: string[]): Promise<string> {
+export async function exportLog(api: Api, runId: string, types: string[]): Promise<string> {
   if (platform.desktop) {
     const res = await api.raw('POST', `/runs/${encodeURIComponent(runId)}/export`, { types });
     return copy.common.exportedTo(((await res.json()) as { path: string }).path);
   }
-  const text = await api.runLog(runId, types);
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/x-ndjson' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${runId}.jsonl`;
-  a.click();
-  URL.revokeObjectURL(url);
+  download(`${runId}.jsonl`, await api.runLog(runId, types), 'application/x-ndjson');
   return '';
 }
 

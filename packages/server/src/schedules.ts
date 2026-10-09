@@ -2,19 +2,26 @@ import {
   systemRandom,
   type Clock,
   type InterruptibleSleeper,
+  type ProfileId,
   type RandomSource,
   type RunPreset,
   type ScheduleSpec,
   type TriggerCause,
 } from '@disco-lurk/core';
 import { openScheduler, SchedulerLockedError, type OpenedScheduler, type ScheduleBook } from '@disco-lurk/config';
-import { driveScheduler, LoopWaker, ScheduleSkipped, validateTrigger, type HistoryEntry } from '@disco-lurk/scheduler';
+import { driveScheduler, LoopWaker, ScheduleSkipped, validateTrigger, type HistoryEntry, type SkipReason } from '@disco-lurk/scheduler';
 import type { ScheduleList, StoredPreset } from './contract';
 import { HttpError, type EventHub } from './hub';
-import type { ProfileGate, RunManager, SiteCatalog } from './runs';
+import type { Notify, ProfileGate, RunManager, SiteCatalog } from './runs';
 import { splitProfileId, type PresetStore } from './store';
 
 export const SCHEDULE_TICK_MS = 30_000;
+
+/** Skips the user hears about; pausing and disabling are their own doing. */
+const SKIP_NOTICES: Partial<Record<SkipReason, string>> = {
+  overlap: '该 Profile 正在被其他运行或进程占用',
+  'no-display': '当前没有图形界面，无法打开有头浏览器',
+};
 
 export interface ScheduleServiceDeps {
   clock: Clock;
@@ -28,6 +35,9 @@ export interface ScheduleServiceDeps {
   gate: ProfileGate;
   hub: EventHub;
   displayAvailable(): boolean;
+  /** Whether another process (a CLI run) holds the Profile's lock; checked before every step and trigger. */
+  lockedElsewhere?(profileId: ProfileId): Promise<boolean>;
+  notify?: Notify;
   /** Schedules defined outside the file, such as `lurk serve`'s LURK_* schedule; read on every step. */
   extraSchedules?(): Promise<ScheduleBook>;
   intervalMs?: number;
@@ -54,6 +64,8 @@ export class ScheduleService {
   private loop: Promise<void> | null = null;
   private readonly loopStop = new AbortController();
   private readonly waker = new LoopWaker();
+  /** Profiles another process held at the last check; the scheduler's overlap test is synchronous. */
+  private heldElsewhere = new Set<ProfileId>();
 
   constructor(private readonly deps: ScheduleServiceDeps) {}
 
@@ -77,13 +89,18 @@ export class ScheduleService {
             return { preset, categories: this.deps.catalog.categoriesFor(preset) };
           },
           siteOf: (profileId) => splitProfileId(profileId).siteId,
-          profileBusy: (profileId) => this.deps.gate.isBusy(profileId),
+          profileBusy: (profileId) => this.deps.gate.isBusy(profileId) || this.heldElsewhere.has(profileId),
           displayAvailable: this.deps.displayAvailable,
           startRun: (plan) => {
             const name = this.deps.presets.get(plan.preset.presetId)?.name ?? plan.preset.presetId;
             return this.deps.runs.launch(plan, name, (result) => this.finished(plan.id, result)).runId;
           },
           warn: (code, message) => this.deps.log(`schedule ${code}: ${message}`),
+          onSkip: (spec, reason) => {
+            this.deps.log(`schedule ${spec.id}: skip ${reason}`);
+            const why = SKIP_NOTICES[reason];
+            if (why) this.deps.notify?.('run-skipped', '定时任务已跳过', `${spec.name}：${why}`);
+          },
         },
       });
     } catch (err) {
@@ -153,7 +170,17 @@ export class ScheduleService {
     const extra = (await this.deps.extraSchedules?.()) ?? { schedules: [], presets: [] };
     const extraIds = new Set(extra.schedules.map((s) => s.id));
     this.presetsInUse = [...book.presets.filter((p) => !extra.presets.some((e) => e.id === p.id)), ...extra.presets];
-    return [...book.schedules.filter((s) => !extraIds.has(s.id)), ...extra.schedules];
+    const specs = [...book.schedules.filter((s) => !extraIds.has(s.id)), ...extra.schedules];
+    await this.checkLocks(specs.map((s) => s.profileId));
+    return specs;
+  }
+
+  private async checkLocks(profileIds: readonly ProfileId[]): Promise<void> {
+    const check = this.deps.lockedElsewhere;
+    if (!check) return;
+    const held = new Set<ProfileId>();
+    for (const id of new Set(profileIds)) if (!this.deps.gate.isBusy(id) && (await check(id))) held.add(id);
+    this.heldElsewhere = held;
   }
 
   /** Has the loop apply the definitions as they are now; settles once it has. */
@@ -201,6 +228,8 @@ export class ScheduleService {
 
   async trigger(scheduleId: string, cause: TriggerCause = 'manual'): Promise<string> {
     this.known(scheduleId);
+    const spec = this.scheduler().views().find((v) => v.spec.id === scheduleId)!.spec;
+    await this.checkLocks([spec.profileId]);
     try {
       return await this.scheduler().trigger(scheduleId, cause);
     } catch (err) {

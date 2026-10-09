@@ -7,6 +7,7 @@ import { DISCARD, FIRST_POST, LIKE, PageActionSurface, performActions, REPLY, te
 import type { EditorKind } from './parse';
 import { likeButtonOf } from './selectors';
 import { StaticPage, timeoutError } from './testing';
+import { WHEEL } from './wheel';
 
 const OFF: InteractionPolicy = { like: { enabled: false, topicRate: 30, replyRate: 15, maxReplies: 4 }, reply: { enabled: false, rate: 5, riskAcknowledged: false } };
 const REPLY_ON = { enabled: true, rate: 100, riskAcknowledged: true };
@@ -205,20 +206,21 @@ describe('LIKE-002 floor 1 is found by its post number after cloaking; replies o
 
   it('scrolls a cloaked long topic back up until floor 1 renders its own like button, then presses that one', async () => {
     const page = new StaticPage('https://linux.do/t/x/2496114/40', fixture('linuxdo', 'topic-wide.html'));
-    let wheels = 0;
+    let scrolled = 0;
     page.onWheel = (dy) => {
-      expect(dy).toBe(FIRST_POST.stepPx);
-      if (++wheels === 3) page.html = fixture('linuxdo', 'liked.html');
+      expect(dy).toBeLessThan(0);
+      scrolled += dy;
+      if (scrolled === 3 * FIRST_POST.stepPx) page.html = fixture('linuxdo', 'liked.html');
     };
     const pressed: number[] = [];
     const time = new VirtualTime();
     const surface = pageSurface(page, time, NO_COMPOSER, async (n) => void pressed.push(n));
     await expect(time.drive(surface.scrollToFirstPost(new AbortController().signal))).resolves.toBe(true);
-    expect(wheels).toBe(3);
+    expect(scrolled).toBe(3 * FIRST_POST.stepPx);
     await time.drive(surface.centerLikeButton(1, new AbortController().signal));
     await surface.pressLike(1);
     expect(pressed).toEqual([1]);
-    expect(page.centered).toEqual([likeButtonOf(1)]);
+    expect(page.measured).toEqual([likeButtonOf(1)]);
     expect(page.all(likeButtonOf(1))).toHaveLength(1);
   });
 
@@ -234,17 +236,35 @@ describe('LIKE-002 floor 1 is found by its post number after cloaking; replies o
 });
 
 describe('ACTION-001 a click counts as confirmed only after the page shows it (A05, A07)', () => {
-  it('centres the button in the viewport (not merely into view), waits 300 ms, then clicks', async () => {
+  it('wheels the button to the middle of the viewport in notches, waits 300 ms, then clicks', async () => {
     const time = new VirtualTime();
     const page = new StaticPage('https://linux.do/t/x/1', `<div class="topic-post" data-post-number="2"><button class="btn-toggle-reaction-like"></button></div>`);
-    const marks: Array<{ op: string; at: number }> = [];
-    page.scrollIntoView = async () => void marks.push({ op: 'into-view', at: time.clock.monotonic() });
-    page.centerInViewport = async () => void marks.push({ op: 'center', at: time.clock.monotonic() });
-    const surface = pageSurface(page, time, NO_COMPOSER, async () => void marks.push({ op: 'click', at: time.clock.monotonic() }));
+    page.offset = 450;
+    const notches: number[] = [];
+    let lastWheelAt = -1;
+    page.onWheel = (dy) => {
+      notches.push(dy);
+      page.offset -= dy;
+      lastWheelAt = time.clock.monotonic();
+    };
+    let clickedAt = -1;
+    const surface = pageSurface(page, time, NO_COMPOSER, async () => void (clickedAt = time.clock.monotonic()));
     await time.drive(surface.centerLikeButton(2, new AbortController().signal));
     await surface.pressLike(2);
-    expect(marks.map((m) => m.op)).toEqual(['center', 'click']);
-    expect(marks[1]!.at - marks[0]!.at).toBe(LIKE.centerMs);
+    expect(page.offset).toBe(0);
+    expect(notches.length).toBeGreaterThan(1);
+    for (const dy of notches) expect(dy).toBeLessThanOrEqual(WHEEL.tickPx[1]);
+    expect(clickedAt - lastWheelAt).toBe(LIKE.centerMs);
+  });
+
+  it('leaves a button already near the middle where it is', async () => {
+    const time = new VirtualTime();
+    const page = new StaticPage('https://linux.do/t/x/1', `<div class="topic-post" data-post-number="2"><button class="btn-toggle-reaction-like"></button></div>`);
+    page.offset = -LIKE.centeredPx;
+    let wheels = 0;
+    page.onWheel = () => void wheels++;
+    await time.drive(pageSurface(page, time).centerLikeButton(2, new AbortController().signal));
+    expect(wheels).toBe(0);
   });
 
   it('reports attempted before the press, then confirmed, in the topic bucket for floor 1', async () => {

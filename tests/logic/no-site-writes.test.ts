@@ -108,11 +108,11 @@ describe('guard: no write paths to a site', () => {
         .filter((line) => EVALUATE.test(line))
         .map((line) => `${relative(root, file)}: ${line.trim()}`),
     );
-    // Each entry is a literal function that reads the page; the one that scrolls only moves the viewport.
+    // Each entry is a literal function that reads the page.
     const allowed = [
       /^packages\/site-discourse\/src\/page\.ts: .*evaluate\(\(\) => \(\{ width: window\.innerWidth, height: window\.innerHeight \}\)\)/,
       /^packages\/site-discourse\/src\/page\.ts: .*evaluate\(\(all\) => all\.map\(\(s\) => document\.querySelectorAll\(s\)\.length\), \[\.\.\.selectors\]\)/,
-      /^packages\/site-discourse\/src\/page\.ts: .*evaluate\(\(el\) => el\.scrollIntoView\(\{ block: 'center' \}\), undefined,/,
+      /^packages\/site-discourse\/src\/page\.ts: .*\.first\(\)\.evaluate\(read, undefined,/,
       /^packages\/site-discourse\/src\/page\.ts: .*evaluate\(\(\) => document\.visibilityState\)\)/,
       /^packages\/site-discourse\/src\/page\.ts: this\.page\.locator\(POST_WITH_NUMBER\)\.evaluateAll\(\(posts\) =>$/,
       /^packages\/site-discourse\/src\/browser\.ts: .*evaluate\(\(\) => screen\.availHeight\)/,

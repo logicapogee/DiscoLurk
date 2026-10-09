@@ -8,6 +8,7 @@ import { classifyReturn, discoveredCategories, DiscourseForum, listUrlFor, navig
 import { expectedMiss, type ReadOnlyPage } from './page';
 import { StaticPage, timeoutError } from './testing';
 import { usernameFromUrl } from './auth';
+import { WHEEL } from './wheel';
 import { loginForm, timingsReceipt, timingsUrlOf } from './session';
 import { parseTimingsBody } from './parse';
 
@@ -268,8 +269,34 @@ describe('entering from the list and getting back to it (T08, T10)', () => {
 
   it('a row that cannot be scrolled into view is click-failed as well', async () => {
     const t = await onList();
-    t.page.scrollError = timeoutError('locator.scrollIntoViewIfNeeded: Timeout 10000ms exceeded.');
+    t.page.scrollError = timeoutError('locator.evaluate: Timeout 10000ms exceeded.');
     await expect(t.enter()).resolves.toMatchObject({ entered: false, reason: 'click-failed' });
+  });
+
+  it('wheels a row below the screen up to the middle in notches before clicking it', async () => {
+    const order: string[] = [];
+    const t = await onList({ titleLinks: { click: async () => void order.push('click') } });
+    t.page.offset = 1500;
+    const notches: number[] = [];
+    t.page.onWheel = (dy) => {
+      notches.push(dy);
+      order.push('wheel');
+      t.page.offset -= dy;
+    };
+    await t.enter();
+    expect(t.page.offset).toBe(0);
+    expect(notches.length).toBeGreaterThan(1);
+    for (const dy of notches) expect(dy).toBeLessThanOrEqual(WHEEL.tickPx[1]);
+    expect(order.at(-1)).toBe('click');
+  });
+
+  it('clicks a row already on screen where it is', async () => {
+    const t = await onList();
+    t.page.offset = 250;
+    let wheels = 0;
+    t.page.onWheel = () => void wheels++;
+    await t.enter();
+    expect(wheels).toBe(0);
   });
 
   it('clicks without a pause in front of the click', async () => {

@@ -34,6 +34,7 @@ import { parseConnect } from './progress/connect-linuxdo';
 import { PROGRESS_READY_MS, progressModuleFor, TRUST_LEVEL_READY_MS } from './progress/index';
 import { parseTrustLevel, TRUST_LEVEL_SELECTORS } from './progress/trust-level-docofcard';
 import { readFloors, type FloorSurface } from './reading';
+import { wheelInNotches, wheelToCenter } from './wheel';
 import {
   ANONYMOUS_HEADER,
   CATEGORY_LINK,
@@ -63,6 +64,8 @@ const TIMEOUTS = {
   visibilityPollMs: 2_000,
 } as const;
 const TITLE_LOG_CHARS = 50;
+/** Room kept for the fixed site header: a title link closer than this to the viewport's top is under it. */
+const TITLE_LINK_HEADER_PX = 100;
 /** A person glances over a list or the categories page once it appears. */
 const GLANCE = { minSec: 1, maxSec: 2 };
 /** Time on the list after a topic, in which the site flushes the topic's last /topics/timings. */
@@ -186,6 +189,7 @@ class PageFloorSurface implements FloorSurface {
     private readonly page: ReadOnlyPage,
     private readonly center: { x: number; y: number },
     private readonly gate: VisibilityGate,
+    private readonly deps: RuntimeDeps,
   ) {}
 
   whenVisible(signal: AbortSignal): Promise<void> {
@@ -201,13 +205,13 @@ class PageFloorSurface implements FloorSurface {
     return this.page.count(TOPIC_POST).catch(fallbackUnlessUnexpected(0));
   }
 
-  async scroll(dy: number): Promise<void> {
+  async scroll(dy: number, signal: AbortSignal): Promise<void> {
     // Real wheel input over the post stream: Discourse's screen tracker pauses when it sees no scroll events.
     if (!this.pointed) {
       await this.page.moveMouse(this.center.x, this.center.y);
       this.pointed = true;
     }
-    await this.page.wheel(0, dy);
+    await wheelInNotches(this.page, dy, this.deps, signal);
   }
 }
 
@@ -415,7 +419,9 @@ export class DiscourseForum implements ForumPort {
     if ((await this.opts.page.count(link)) === 0) return { topic, entered: false, reason: 'row-not-on-list' };
     await this.visibility.whenVisible(signal);
     try {
-      await untilAbort(this.opts.page.scrollIntoView(link), signal);
+      const { height } = await this.opts.page.viewportSize();
+      // A row already on screen below the site header is clicked where it is; any other is wheeled to the middle first.
+      await wheelToCenter(this.opts.page, link, height / 2 - TITLE_LINK_HEADER_PX, this.opts.deps, signal);
       await untilAbort(this.opts.titleLinks.click(topic.id), signal);
     } catch (err) {
       // A row that never becomes clickable costs this topic only; the next candidate is on the same list.
@@ -464,7 +470,7 @@ export class DiscourseForum implements ForumPort {
   async readTopic(visit: TopicVisit, strategy: ReadStrategy, signal: AbortSignal): Promise<ReadResult> {
     if (!visit.entered) return { startFloor: null, endFloor: null, scrolls: 0, stoppedByTarget: false, layout: null };
     const { width, height } = await this.opts.page.viewportSize();
-    const surface = new PageFloorSurface(this.opts.page, { x: Math.round(width / 2), y: Math.round(height / 2) }, this.visibility);
+    const surface = new PageFloorSurface(this.opts.page, { x: Math.round(width / 2), y: Math.round(height / 2) }, this.visibility, this.opts.deps);
     return readFloors(surface, strategy, this.opts.deps, signal);
   }
 

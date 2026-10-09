@@ -35,9 +35,8 @@ export interface ReadOnlyPage {
   texts(selector: string): Promise<string[]>;
   waitFor(selector: string, opts: WaitOptions): Promise<void>;
   waitForURL(url: RegExp, opts: { timeout: number }): Promise<void>;
-  scrollIntoView(selector: string): Promise<void>;
-  /** Scrolls the first match to the middle of the viewport, where a person would have it before pressing it. */
-  centerInViewport(selector: string): Promise<void>;
+  /** How far the first match's centre sits below the viewport's centre, in px; negative when above. */
+  offsetFromCenter(selector: string): Promise<number>;
   moveMouse(x: number, y: number): Promise<void>;
   wheel(dx: number, dy: number): Promise<void>;
   /** The page's `document.visibilityState`; the site's screen tracker counts nothing while it is `hidden`. */
@@ -201,12 +200,12 @@ export class PageView implements ReadOnlyPage {
     return this.call(() => this.page.waitForURL(url, { timeout: opts.timeout }));
   }
 
-  scrollIntoView(selector: string): Promise<void> {
-    return this.call(() => this.page.locator(selector).first().scrollIntoViewIfNeeded({ timeout: PAGE_TIMEOUTS.actionMs }));
-  }
-
-  centerInViewport(selector: string): Promise<void> {
-    return this.call(() => this.page.locator(selector).first().evaluate((el) => el.scrollIntoView({ block: 'center' }), undefined, { timeout: PAGE_TIMEOUTS.actionMs }));
+  offsetFromCenter(selector: string): Promise<number> {
+    const read = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return r.top + r.height / 2 - window.innerHeight / 2;
+    };
+    return this.call(() => this.page.locator(selector).first().evaluate(read, undefined, { timeout: PAGE_TIMEOUTS.actionMs }));
   }
 
   moveMouse(x: number, y: number): Promise<void> {

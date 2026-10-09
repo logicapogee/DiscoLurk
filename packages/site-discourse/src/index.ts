@@ -9,6 +9,7 @@ export * from './browser';
 export * from './page';
 export * from './auth';
 export * from './reading';
+export * from './wheel';
 export * from './forum';
 export * from './session';
 export * from './actions';

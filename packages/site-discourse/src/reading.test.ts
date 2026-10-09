@@ -228,9 +228,9 @@ describe('VIS-001 reading waits for a visible page before every dwell (I6)', () 
     };
     const scrolledAt: number[] = [];
     const scroll = surface.scroll.bind(surface);
-    surface.scroll = async (dy) => {
+    surface.scroll = async (dy, signal) => {
       scrolledAt.push(time.clock.monotonic());
-      await scroll(dy);
+      await scroll(dy, signal);
     };
     await read(time, surface, strategy(mode, 3).s);
     expect(scrolls.length).toBeGreaterThan(0);

@@ -68,14 +68,15 @@ export class StaticPage implements ReadOnlyPage {
   async waitForURL(url: RegExp) {
     if (!url.test(this.address)) throw timeoutError(`waitForURL ${url}`);
   }
-  async scrollIntoView() {
+  /** Where every match sits relative to the viewport's centre; tests move it from `onWheel`. */
+  offset = 0;
+  /** Selectors `offsetFromCenter` was asked for, in call order. */
+  readonly measured: string[] = [];
+  async offsetFromCenter(selector: string) {
+    this.measured.push(selector);
     if (this.scrollError) throw this.scrollError;
-  }
-  /** Selectors `centerInViewport` was asked for, in call order. */
-  readonly centered: string[] = [];
-  async centerInViewport(selector: string) {
-    if (this.scrollError) throw this.scrollError;
-    this.centered.push(selector);
+    if (this.all(selector).length === 0) throw timeoutError(`offsetFromCenter ${selector}`);
+    return this.offset;
   }
   async moveMouse() {}
   async wheel(_dx: number, dy: number) {

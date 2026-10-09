@@ -3,6 +3,7 @@ import { pollUntil, waitUntil } from './auth';
 import type { ReadOnlyPage } from './page';
 import { EDITOR_KINDS, editorKindFromCounts, type EditorKind } from './parse';
 import { COMPOSER_OPEN, EDITOR_SELECTORS, LIKED_MARKERS, likeButtonOf, postOf, SELECTORS, UNLIKED_ICON } from './selectors';
+import { wheelInNotches, wheelToCenter } from './wheel';
 
 /** Presses one post's like button. Built in session.ts, the one place that holds a clickable page. */
 export interface LikeButton {
@@ -51,7 +52,7 @@ export interface ActionSurface {
 }
 
 /** Field-tested pacing for interactions, the same however fast the page answers. */
-export const LIKE = { centerMs: 300, after: { minSec: 0.8, maxSec: 1.5 }, confirmMs: 5_000, pollMs: 250 } as const;
+export const LIKE = { centerMs: 300, centeredPx: 100, after: { minSec: 0.8, maxSec: 1.5 }, confirmMs: 5_000, pollMs: 250 } as const;
 export const REPLY = {
   editorMs: 10_000,
   editorSettle: { minSec: 0.5, maxSec: 1 },
@@ -291,7 +292,7 @@ export class PageActionSurface implements ActionSurface {
         return true;
       }
       if (step === FIRST_POST.maxSteps) break;
-      await this.page.wheel(0, FIRST_POST.stepPx);
+      await wheelInNotches(this.page, FIRST_POST.stepPx, this.deps, signal);
       await this.deps.sleeper.sleep(FIRST_POST.settleMs, signal);
     }
     return false;
@@ -299,7 +300,7 @@ export class PageActionSurface implements ActionSurface {
 
   async centerLikeButton(postNumber: number, signal: AbortSignal): Promise<void> {
     throwIfAborted(signal);
-    await untilAbort(this.page.centerInViewport(likeButtonOf(postNumber)), signal);
+    await wheelToCenter(this.page, likeButtonOf(postNumber), LIKE.centeredPx, this.deps, signal);
     await this.deps.sleeper.sleep(LIKE.centerMs, signal);
   }
 

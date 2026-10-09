@@ -8,7 +8,7 @@ export interface FloorSurface {
   readCounter(): Promise<FloorReading | null>;
   /** Rendered posts on the page; 0 when none can be counted. */
   countPosts(): Promise<number>;
-  scroll(dy: number): Promise<void>;
+  scroll(dy: number, signal: AbortSignal): Promise<void>;
 }
 
 /** Every value is a field-tested default, not a tuning knob. */
@@ -96,7 +96,7 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
 
   const t = tracker(first, strategy);
   const scroll = async (dy: number) => {
-    await surface.scroll(dy);
+    await surface.scroll(dy, signal);
     t.result.scrolls++;
   };
 

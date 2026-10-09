@@ -44,10 +44,12 @@
   box-sizing: border-box;
 }
 
+/* The window is the app frame: only the regions inside it scroll, never the document. */
 html,
 body {
   margin: 0;
   height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
@@ -164,6 +166,7 @@ fieldset {
 .shell {
   display: grid;
   grid-template-columns: 168px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
 }
 
@@ -216,6 +219,7 @@ fieldset {
   overflow-y: auto;
   padding: 20px 24px 40px;
   min-width: 0;
+  min-height: 0;
 }
 
 .page {
@@ -224,13 +228,14 @@ fieldset {
 
 .boot {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100%;
+  height: 100%;
+  overflow-y: auto;
   padding: 16px;
 }
 
+/* Auto margins centre the panel yet keep its top reachable when it is taller than the window. */
 .boot > .panel {
+  margin: auto;
   width: min(720px, 100%);
 }
 
@@ -358,6 +363,7 @@ fieldset {
 }
 
 .toggle {
+  position: relative;
   display: flex;
   width: fit-content;
   align-items: center;
@@ -423,6 +429,7 @@ fieldset {
 }
 
 .segmented label {
+  position: relative;
   padding: 4px 12px;
   cursor: pointer;
   border-right: 1px solid var(--line);
@@ -442,6 +449,7 @@ fieldset {
   cursor: default;
 }
 
+/* Visually hidden yet focusable; the positioned label keeps each one inside its scrolling region. */
 .segmented input,
 .chip input {
   position: absolute;
@@ -457,6 +465,7 @@ fieldset {
 }
 
 .chip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--line);
@@ -624,8 +633,9 @@ td.mark {
 .log {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  max-height: 320px;
+  max-height: max(240px, 40vh);
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg);
   border-radius: 6px;
   padding: 8px;

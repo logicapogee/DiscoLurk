@@ -37,19 +37,40 @@ export function LogPanel(props: { api: Api; runId: string; events: readonly Logg
   const [types, setTypes] = useState<Set<RunEvent['type']>>(new Set(DEFAULT_TYPES));
   const [note, setNote] = useState('');
   const box = useRef<HTMLDivElement>(null);
+  // Whether new lines scroll into view. Decided on scroll rather than after a render, when the new
+  // lines already count in scrollHeight; `pinned` is where the log last scrolled itself, so the
+  // scroll event of that jump still reads as following even if more lines landed meanwhile.
+  const follow = useRef(true);
+  const pinned = useRef(0);
   const shown = props.events.filter((e) => types.has(e.type));
   const tail = shown.slice(-SHOWN);
 
+  // Moves only the log's own scroll position; scrollIntoView on a line would scroll every ancestor too.
   useEffect(() => {
     const el = box.current;
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 80) el.scrollTop = el.scrollHeight;
-  }, [tail.length]);
+    // Sitting above the last pin means the reader scrolled up, even before that scroll event fired.
+    if (el && el.scrollTop < pinned.current - 1) follow.current = false;
+    if (!el || !follow.current) return;
+    el.scrollTop = el.scrollHeight;
+    pinned.current = el.scrollTop;
+  }, [tail.length, tail.at(-1)?.seq, types]);
+
+  const onScroll = () => {
+    const el = box.current;
+    if (!el) return;
+    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    follow.current = bottom || el.scrollTop >= pinned.current;
+    if (bottom) pinned.current = el.scrollTop;
+  };
 
   const flip = (t: RunEvent['type']) => {
     const next = new Set(types);
     if (next.has(t)) next.delete(t);
     else next.add(t);
     setTypes(next);
+    // A new filter changes the lines wholesale; the log starts again at its newest one.
+    follow.current = true;
+    pinned.current = 0;
   };
 
   return (
@@ -74,7 +95,7 @@ export function LogPanel(props: { api: Api; runId: string; events: readonly Logg
         ))}
       </div>
       {note && <div class="hint">{note}</div>}
-      <div class="log" ref={box} role="log" aria-live="polite">
+      <div class="log" ref={box} role="log" aria-live="polite" onScroll={onScroll}>
         {tail.length === 0 && <div class="muted">{copy.log.empty}</div>}
         {tail.map((e) => (
           <div key={e.seq} class={`line ${level(e)}`}>

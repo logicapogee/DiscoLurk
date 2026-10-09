@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 import { emptyStats, EXPERIMENTS_OFF, type Category, type LevelSnapshot, type RunPlanSnapshot, type RunStats } from '@disco-lurk/core';
-import type { ActiveRun, RunRecord, ScheduleList, ServerInfo, Settings, SiteView, StoredPreset } from '@disco-lurk/server/contract';
+import type { ActiveRun, LoggedEvent, RunRecord, ScheduleList, ServerInfo, Settings, SiteView, StoredPreset } from '@disco-lurk/server/contract';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
+import { readFileSync } from 'node:fs';
 import { h } from 'preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { Api } from './api';
 import { App } from './app';
+import { LogPanel } from './components/log';
 import { copy } from './copy';
 import { RunPage } from './pages/run';
 import { SchedulesPage } from './pages/schedules';
@@ -392,3 +394,56 @@ describe('spec pages', () => {
   });
 });
 
+describe('log panel', () => {
+  const topic = (seq: number): LoggedEvent => ({ seq, type: 'topic', at: new Date().toISOString(), topicId: String(seq), phase: 'read' });
+  const events = (n: number) => Array.from({ length: n }, (_, i) => topic(i + 1));
+
+  it('scrolls only its own box: follows new lines, pauses while scrolled up, resumes at the bottom', async () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    onTestFinished(() => {
+      Element.prototype.scrollIntoView = original;
+    });
+    const api = {} as Api;
+    const view = render(h(LogPanel, { api, runId: 'run-1', events: events(10) }));
+    const box = screen.getByRole('log');
+    // happy-dom does no layout: each line is 20px tall in a 100px box.
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => box.querySelectorAll('.line').length * 20 });
+    Object.defineProperty(box, 'clientHeight', { configurable: true, get: () => 100 });
+    const bodyTop = document.body.scrollTop;
+
+    view.rerender(h(LogPanel, { api, runId: 'run-1', events: events(300) }));
+    await waitFor(() => expect(box.scrollTop).toBe(6000));
+
+    box.scrollTop = 40;
+    fireEvent.scroll(box);
+    view.rerender(h(LogPanel, { api, runId: 'run-1', events: events(320) }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(box.scrollTop).toBe(40);
+
+    box.scrollTop = 6400 - 100;
+    fireEvent.scroll(box);
+    view.rerender(h(LogPanel, { api, runId: 'run-1', events: events(340) }));
+    await waitFor(() => expect(box.scrollTop).toBe(6800));
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(document.body.scrollTop).toBe(bodyTop);
+  });
+
+  it('keeps the document fixed to the window and every scroll inside its own region', () => {
+    const css = readFileSync(`${import.meta.dirname}/styles.css`, 'utf8');
+    const rule = (selector: string) => {
+      const at = css.indexOf(`\n${selector} {`);
+      expect(at, selector).toBeGreaterThanOrEqual(0);
+      return css.slice(at, css.indexOf('}', at));
+    };
+    expect(rule('html,\nbody')).toMatch(/overflow: hidden/);
+    expect(rule('.log')).toMatch(/overflow-y: auto/);
+    expect(rule('.log')).toMatch(/max-height:/);
+    expect(rule('.content')).toMatch(/overflow-y: auto/);
+    expect(rule('.content')).toMatch(/min-height: 0/);
+    // Hidden inputs are absolutely positioned; a positioned label holds each one inside the scrolling content.
+    for (const label of ['.toggle', '.segmented label', '.chip']) expect(rule(label)).toMatch(/position: relative/);
+  });
+});

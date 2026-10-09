@@ -46,7 +46,7 @@ export class ProfileGate {
 /** The site's categories as last loaded; a discovered site's list changes after each sign-in. */
 export class SiteCatalog {
   private cache = new Map<string, Category[]>();
-  private list: Site[];
+  private readonly list: readonly Site[];
 
   constructor(
     sites: readonly Site[],
@@ -57,12 +57,6 @@ export class SiteCatalog {
 
   get sites(): readonly Site[] {
     return this.list;
-  }
-
-  /** Adds a site the user configured; a built-in site keeps its id. */
-  add(site: Site): void {
-    if (this.list.some((s) => s.id === site.id)) throw new HttpError(409, 'site-exists', `Site ${site.id} already exists`);
-    this.list = [...this.list, site];
   }
 
   site(siteId: string): Site {

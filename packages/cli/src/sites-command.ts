@@ -1,20 +1,12 @@
-import { join } from 'node:path';
 import { FileCategoryStore } from '@disco-lurk/config';
-import { DiscoLurkCoordinator, type Site } from '@disco-lurk/core';
-import { SiteStore } from '@disco-lurk/server';
+import { DiscoLurkCoordinator } from '@disco-lurk/core';
 import { proxyFromEnv } from './env';
-import { appDataDir, sitesDir } from './paths';
+import { sitesDir } from './paths';
 import { cliEnv, credentialsFromEnv, EXIT, parseOrUsageError, profileIdOf, siteCategories, UsageError } from './run';
-import { BUILTIN_SITES } from './sites';
+import { BUILTIN_SITES, findSite } from './sites';
 
 export const SITES_USAGE = `  lurk sites list [--json]
   lurk sites discover-categories --site <id> [--profile <name>] [--channel chrome|msedge] [--json]`;
-
-/** The built-in sites and the ones added in the UI. */
-export async function allSites(dataDir = appDataDir()): Promise<Site[]> {
-  const added = await new SiteStore(join(dataDir, 'custom-sites.json')).load();
-  return [...BUILTIN_SITES, ...added.filter((s) => !BUILTIN_SITES.some((b) => b.id === s.id))];
-}
 
 export async function sites(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
@@ -22,8 +14,7 @@ export async function sites(argv: string[]): Promise<number> {
   switch (sub) {
     case 'list': {
       const { json } = parseOrUsageError(rest, { json: { type: 'boolean', default: false } });
-      const list = await allSites();
-      const rows = await Promise.all(list.map(async (site) => ({ site, categories: await siteCategories(site, store).catch(() => []) })));
+      const rows = await Promise.all(BUILTIN_SITES.map(async (site) => ({ site, categories: await siteCategories(site, store).catch(() => []) })));
       if (json) console.log(JSON.stringify(rows, null, 2));
       else
         for (const { site, categories } of rows) {
@@ -38,9 +29,8 @@ export async function sites(argv: string[]): Promise<number> {
         channel: { type: 'string', default: 'chrome' },
         json: { type: 'boolean', default: false },
       });
-      const known = await allSites();
-      const site = known.find((s) => s.id === v.site);
-      if (!site) throw new UsageError(`sites discover-categories needs --site <${known.map((s) => s.id).join('|')}>`);
+      const site = findSite(v.site ?? '');
+      if (!site) throw new UsageError(`sites discover-categories needs --site <${BUILTIN_SITES.map((s) => s.id).join('|')}>`);
       if (v.channel !== 'chrome' && v.channel !== 'msedge') throw new UsageError('--channel must be chrome or msedge');
       if (site.categorySource === 'builtin') {
         console.error(`${site.id} uses its built-in category table; nothing to discover`);
@@ -49,7 +39,7 @@ export async function sites(argv: string[]): Promise<number> {
       }
       const proxy = proxyFromEnv(process.env);
       const credentials = credentialsFromEnv(site);
-      const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: v.channel, sites: known, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) }));
+      const coordinator = new DiscoLurkCoordinator(cliEnv({ channel: v.channel, sites: BUILTIN_SITES, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) }));
       // A headless health check of a signed-in Profile is where a discovered site reads its categories.
       const health = await coordinator.inspect(profileIdOf(site.id, v.profile));
       if (health.status !== 'ready') {

@@ -1,56 +1,19 @@
 import type { ProfileCreate, ProfilePatch, SiteView } from '../contract';
 import { HttpError } from '../hub';
-import { validateSite } from '@disco-lurk/config';
-import type { Site } from '@disco-lurk/core';
-import { parseBody, profileCreateSchema, profilePatchSchema, refreshCategoriesSchema, siteCreateSchema } from '../schemas';
+import { parseBody, profileCreateSchema, profilePatchSchema, refreshCategoriesSchema } from '../schemas';
 import type { Route } from '../server';
-import { splitProfileId, type SiteStore } from '../store';
+import { splitProfileId } from '../store';
 import { ok, stamp, type AppContext } from './context';
 import { defaultPreset } from './runs';
 
 /** Sites, Profiles and headed sign-ins. */
-/** A user-added Discourse site: categories are read after sign-in, and it has no progress page. */
-function customSite(req: { id?: string | undefined; displayName: string; baseUrl: string; login: 'headed' | 'password' }): Site {
-  const url = new URL(req.baseUrl);
-  const id =
-    req.id ??
-    url.hostname
-      .toLowerCase()
-      .replace(/^www\./, '')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40);
-  const checked = validateSite({
-    id,
-    displayName: req.displayName,
-    baseUrl: url.origin,
-    kind: 'discourse',
-    login: req.login,
-    categorySource: 'discovered',
-    progressSource: 'none',
-    behaviorVerified: { clickEntryRequired: 'unverified' },
-  });
-  if (!checked.ok) throw new HttpError(422, 'invalid-body', checked.issues.join('; '));
-  return checked.site;
-}
-
-export function profileRoutes(ctx: AppContext, userSites: SiteStore): Route[] {
+export function profileRoutes(ctx: AppContext): Route[] {
   const { catalog, profiles, logins } = ctx;
   return [
     {
       method: 'GET',
       path: '/sites',
       handle: async () => ok(catalog.sites.map((site): SiteView => ({ site, categories: catalog.categories(site.id) }))),
-    },
-    {
-      method: 'POST',
-      path: '/sites',
-      handle: async ({ body }) => {
-        const site = customSite(parseBody(siteCreateSchema, body));
-        catalog.add(site);
-        await userSites.add(site);
-        return ok({ site, categories: [] } satisfies SiteView, 201);
-      },
     },
     {
       method: 'GET',

@@ -36,7 +36,7 @@ describe('SITE-001 site configuration (§2.2)', () => {
     expect(docofcard?.builtinCategories).toBeUndefined();
   });
 
-  it('accepts a minimal user-added site', () => {
+  it('accepts a minimal site', () => {
     expect(validateSite(minimal()).ok).toBe(true);
   });
 

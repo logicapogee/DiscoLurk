@@ -30,22 +30,8 @@ function DoctorTable(props: { report: DoctorReport }) {
   );
 }
 
-/** The sites, and a form to add another Discourse forum by its address. */
 function SitesPanel() {
-  const [state, store] = useStore();
-  const [displayName, setDisplayName] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [login, setLogin] = useState<'headed' | 'password'>('headed');
-  const [message, setMessage] = useState<Message | null>(null);
-  const add = async (e: Event) => {
-    e.preventDefault();
-    const added = await attempt(() => store.api.addSite({ displayName: displayName.trim(), baseUrl: baseUrl.trim(), login }), setMessage);
-    if (!added) return;
-    await store.refreshSites();
-    setMessage({ kind: 'ok', text: copy.settings.siteAdded(added.site.displayName) });
-    setDisplayName('');
-    setBaseUrl('');
-  };
+  const [state] = useStore();
   return (
     <section class="panel">
       <div class="panel-head">
@@ -59,23 +45,6 @@ function SitesPanel() {
           </li>
         ))}
       </ul>
-      <form onSubmit={add} aria-label={copy.settings.addSite}>
-        <Field label={copy.settings.siteName}>
-          <input type="text" aria-label={copy.settings.siteName} value={displayName} maxLength={LIMITS.nameLength} required onInput={(e) => setDisplayName((e.currentTarget as HTMLInputElement).value)} />
-        </Field>
-        <Field label={copy.settings.siteUrl}>
-          <input type="url" aria-label={copy.settings.siteUrl} value={baseUrl} placeholder="https://forum.example.org" required onInput={(e) => setBaseUrl((e.currentTarget as HTMLInputElement).value)} />
-        </Field>
-        <Field label={copy.settings.siteLogin}>
-          <Select<'headed' | 'password'> label={copy.settings.siteLogin} value={login} options={(['headed', 'password'] as const).map((v) => ({ value: v, label: copy.settings.siteLogins[v] }))} onChange={(v) => setLogin(v)} />
-        </Field>
-        {message && <Notice kind={message.kind}>{message.text}</Notice>}
-        <div class="actions">
-          <button type="submit" class="primary">
-            {copy.settings.addSite}
-          </button>
-        </div>
-      </form>
     </section>
   );
 }

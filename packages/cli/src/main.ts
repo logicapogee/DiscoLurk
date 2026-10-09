@@ -12,7 +12,7 @@ import { browserSelftest } from './selftest';
 import { installStopHandlers } from './signals';
 import { EnvError, envWarnings, proxyFromEnv, runArgvWithEnv } from './env';
 import { schedule, SCHEDULE_USAGE } from './schedule';
-import { allSites, sites, SITES_USAGE } from './sites-command';
+import { sites, SITES_USAGE } from './sites-command';
 import { PresetStore, planFor } from '@disco-lurk/server';
 import { serve } from './serve';
 import { BUILTIN_SITES, findSite } from './sites';
@@ -216,14 +216,13 @@ async function runPreset(argv: string[]): Promise<number> {
   await presets.load();
   const preset = presets.get(args.presetId);
   if (!preset) throw new UsageError(`No preset ${args.presetId}; presets are saved on the UI's run page (${presets.list().map((p) => p.id).join(', ') || 'none yet'})`);
-  const known = await allSites();
-  const site = known.find((s) => s.id === preset.siteId);
+  const site = findSite(preset.siteId);
   if (!site) throw new UsageError(`Preset ${preset.id} names unknown site ${preset.siteId}`);
   const profile = args.profile ?? (preset.profileId ? parseProfileId(preset.profileId).name : 'default');
   const { signal, exitSignal } = installStopHandlers(() => console.error('Stopping… (Ctrl+C again skips the final progress read)'));
   const credentials = credentialsFromEnv(site);
   const proxy = proxyFromEnv(process.env);
-  const env = cliEnv({ channel: args.channel, exitSignal, sites: known, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) });
+  const env = cliEnv({ channel: args.channel, exitSignal, sites: BUILTIN_SITES, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) });
   const categories = resolveCategories(site, await siteCategories(site, env.categories), preset.categoryPaths);
   const plan = planFor(
     { ...preset, profileId: profileIdOf(site.id, profile), browserMode: args.browserMode ?? preset.browserMode },

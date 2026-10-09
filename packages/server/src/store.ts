@@ -1,7 +1,7 @@
 import { createWriteStream, type WriteStream } from 'node:fs';
 import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { JsonFile, processAlive, runPresetSchema, siteSchema } from '@disco-lurk/config';
+import { JsonFile, processAlive, runPresetSchema } from '@disco-lurk/config';
 import { DEFAULT_EXTRA_WAIT, DEFAULT_SAMPLE, emptyStats, type Profile, type ProfileHealth, type ProfileId, type RunStats, type Site } from '@disco-lurk/core';
 import { z } from 'zod';
 import type { LoggedEvent, ProfileCreate, ProfilePatch, ProfileView, RunRecord, Settings, StoredPreset } from './contract';
@@ -101,32 +101,6 @@ export class PresetStore {
     if (!this.presets.delete(id)) return false;
     await this.persist();
     return true;
-  }
-}
-
-/** Discourse sites the user added, kept beside the built-in ones. */
-const sitesFileSchema = z.object({ schemaVersion: z.literal(1), sites: z.array(siteSchema) });
-
-export class SiteStore {
-  private sites: Site[] = [];
-  private readonly file: JsonFile<typeof sitesFileSchema>;
-
-  constructor(path: string) {
-    this.file = new JsonFile(path, sitesFileSchema, 'sites file');
-  }
-
-  async load(): Promise<Site[]> {
-    this.sites = ((await this.file.load())?.sites ?? []) as Site[];
-    return this.list();
-  }
-
-  list(): Site[] {
-    return structuredClone(this.sites);
-  }
-
-  async add(site: Site): Promise<void> {
-    this.sites = [...this.sites.filter((s) => s.id !== site.id), structuredClone(site)];
-    await this.file.save({ schemaVersion: 1, sites: this.sites });
   }
 }
 

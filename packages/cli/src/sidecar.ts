@@ -7,7 +7,7 @@ import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { FileCategoryStore, FileLedgerStore, type ScheduleBook } from '@disco-lurk/config';
 import { DiscoLurkCoordinator, RunError, systemClock, systemDeps, type CoordinatorEnv, type Site } from '@disco-lurk/core';
-import { createApp, SiteStore, splitProfileId, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ServerFrame, type ShellChannel } from '@disco-lurk/server';
+import { createApp, splitProfileId, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ServerFrame, type ShellChannel } from '@disco-lurk/server';
 import { LOCK_FILE, openDiscourseForum, profileLockLive, readLock, type Credentials } from '@disco-lurk/site-discourse';
 import { runDoctor } from './doctor';
 import { exitOnCrash, SidecarLifecycle } from './lifecycle';
@@ -135,7 +135,6 @@ function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
     exitSignal: exit.signal,
     async resolveProfile(profileId) {
       const profile = await app!.services.profiles.resolve(profileId);
-      // The catalog holds the user-added sites as well as the built-in ones.
       const site = app!.services.catalog.site(profile.siteId);
       return { profile, site: withPasswordLogin(site, opts.credentials?.(site)) };
     },
@@ -297,8 +296,7 @@ export interface BootOptions {
  * waits for history to be written and then releases the schedule lock.
  */
 export async function bootServer(opts: BootOptions): Promise<LurkServer> {
-  const userSites = await new SiteStore(join(opts.dataDir, 'custom-sites.json')).load().catch(() => []);
-  await reclaimProfiles(join(opts.dataDir, 'profiles'), [...BUILTIN_SITES, ...userSites].map((s) => s.id), opts.log);
+  await reclaimProfiles(join(opts.dataDir, 'profiles'), BUILTIN_SITES.map((s) => s.id), opts.log);
   let server: LurkServer | undefined;
   const { app, exit } = createSidecarApp({
     version: opts.version,

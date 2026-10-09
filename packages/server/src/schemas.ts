@@ -81,46 +81,6 @@ export const limitedScheduleSpecSchema = scheduleSpecSchema.extend({ name: label
   cap(ctx, spec.misfire.graceMinutes, LIMITS.graceMinutes, ['misfire', 'graceMinutes']);
 });
 
-/**
- * A forum address the app may open: http(s) only, and never this machine or a private network,
- * since whoever holds the token could otherwise point a browser with the user's Profile there.
- * Names are not resolved; literal addresses and local-only names are refused.
- */
-function publicBaseUrl(raw: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return 'not a URL';
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'only http:// and https:// addresses are supported';
-  if (url.username || url.password) return 'the address must not carry a username or password';
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (!host.includes('.') && !host.includes(':')) return 'a single-label host name is local';
-  if (host === 'localhost' || /\.(localhost|local|internal|lan|home|corp)$/.test(host)) return 'local host names are not allowed';
-  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host.startsWith('::ffff:') ? host.slice(7) : host)?.slice(1).map(Number);
-  if (v4) {
-    const [a, b] = v4 as [number, number];
-    if (a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224) {
-      return 'loopback, private and link-local addresses are not allowed';
-    }
-  }
-  if (host.includes(':') && (host === '::' || host === '::1' || /^f[cd]/.test(host) || /^fe[89ab]/.test(host))) return 'loopback, private and link-local addresses are not allowed';
-  return null;
-}
-
-export const siteCreateSchema = z
-  .object({
-    id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'lowercase letters, digits and -').max(40).optional(),
-    displayName: z.string().trim().min(1).max(LIMITS.nameLength),
-    baseUrl: z.string().superRefine((v, ctx) => {
-      const problem = publicBaseUrl(v);
-      if (problem) ctx.addIssue({ code: 'custom', message: problem });
-    }),
-    login: z.enum(['headed', 'password']).default('headed'),
-  })
-  .strict();
-
 export const refreshCategoriesSchema = z.object({ profileId: z.string().min(1) }).strict();
 export const startRunSchema = z.object({ presetId: z.string().min(1) }).strict();
 export const exportLogSchema = z.object({ types: z.array(z.string()).optional() }).strict().optional();

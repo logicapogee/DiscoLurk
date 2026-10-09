@@ -382,21 +382,12 @@ describe('spec pages', () => {
     await waitFor(() => expect(api.runLog.mock.calls.length + api.raw.mock.calls.length).toBe(1));
   });
 
-  it('adds a Discourse site from the settings page', async () => {
-    const meta = { ...siteView.site, id: 'meta', displayName: 'Meta', baseUrl: 'https://meta.discourse.org', categorySource: 'discovered' as const };
-    const api = {
-      ...fakeApi(),
-      doctor: vi.fn(async () => ({ version: 'x', platform: 'p', arch: 'a', generatedAt: at, checks: [] })),
-      addSite: vi.fn(async () => ({ site: meta, categories: [] })),
-      sites: vi.fn(async () => [siteView, { site: meta, categories: [] }]),
-    };
-    const store = mount(api as never, () => h(SettingsPage, { onTokenRotated: () => {} }));
-    fireEvent.input(screen.getByRole('textbox', { name: copy.settings.siteName }), { target: { value: 'Meta' } });
-    fireEvent.input(screen.getByRole('textbox', { name: copy.settings.siteUrl }), { target: { value: 'https://meta.discourse.org' } });
-    fireEvent.click(screen.getByRole('button', { name: copy.settings.addSite }));
-    await waitFor(() => expect(api.addSite).toHaveBeenCalledWith({ displayName: 'Meta', baseUrl: 'https://meta.discourse.org', login: 'headed' }));
-    await screen.findByText(copy.settings.siteAdded('Meta'));
-    expect(store.state.sites.map((s) => s.site.id)).toEqual(['linuxdo', 'meta']);
+  it('lists the built-in sites on the settings page without a way to add one', async () => {
+    const api = { ...fakeApi(), doctor: vi.fn(async () => ({ version: 'x', platform: 'p', arch: 'a', generatedAt: at, checks: [] })) };
+    mount(api as never, () => h(SettingsPage, { onTokenRotated: () => {} }));
+    await screen.findByText(copy.settings.sitesHint);
+    expect(screen.getByText(siteView.site.displayName)).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: '地址' })).toBeNull();
     expect(screen.queryByText(/关闭窗口时隐藏到托盘/)).toBeNull();
   });
 });

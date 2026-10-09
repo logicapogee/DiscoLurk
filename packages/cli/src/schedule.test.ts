@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -158,16 +158,11 @@ describe('the lurk binary: schedule commands', () => {
     expect(lurk('frobnicate')).toMatchObject({ code: 4 });
   }, 30_000);
 
-  it('lists the built-in sites and those added in the UI', () => {
-    const dataDir = process.platform === 'darwin' ? join(home, 'Library/Application Support/disco-lurk') : process.platform === 'win32' ? join(home, 'appdata/disco-lurk') : join(home, 'data/disco-lurk');
-    mkdirSync(dataDir, { recursive: true });
-    const added = { id: 'meta', displayName: 'Meta', baseUrl: 'https://meta.discourse.org', kind: 'discourse', login: 'headed', categorySource: 'discovered', progressSource: 'none', behaviorVerified: { clickEntryRequired: 'unverified' } };
-    writeFileSync(join(dataDir, 'custom-sites.json'), JSON.stringify({ schemaVersion: 1, sites: [added] }));
+  it('lists the built-in sites', () => {
     const listed = lurkCommand('sites', 'list');
     expect(listed.code).toBe(0);
     expect(listed.out).toMatch(/^linuxdo /m);
-    expect(listed.out).toMatch(/^meta  Meta  https:\/\/meta\.discourse\.org  login headed · discovered categories \(0\) · progress none$/m);
-    expect(JSON.parse(lurkCommand('sites', 'list', '--json').out).map((r: { site: { id: string } }) => r.site.id)).toContain('meta');
+    expect(JSON.parse(lurkCommand('sites', 'list', '--json').out).map((r: { site: { id: string } }) => r.site.id)).toEqual(['linuxdo', 'docofcard']);
     expect(lurkCommand('sites', 'discover-categories', '--site', 'nowhere')).toMatchObject({ code: 4, err: expect.stringMatching(/needs --site </) });
     expect(lurkCommand('run', '--preset', 'missing')).toMatchObject({ code: 4, err: expect.stringMatching(/No preset missing/) });
     expect(lurkCommand('run', '--preset', 'missing', '--like')).toMatchObject({ code: 4, err: expect.stringMatching(/--preset combines only with/) });

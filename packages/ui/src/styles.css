@@ -374,6 +374,14 @@ pre.output {
   align-items: start;
 }
 
+.run-page > .columns {
+  margin-bottom: 16px;
+}
+
+.run-page > .columns > .panel {
+  margin-bottom: 0;
+}
+
 .run-side {
   display: flex;
   flex-direction: column;

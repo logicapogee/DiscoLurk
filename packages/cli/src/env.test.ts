@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { checkCredentialsEnv, ENV_SCHEDULE_ID, EnvError, envSchedule, proxyFromEnv, runArgvWithEnv, serveEnv } from './env';
+import { checkCredentialsEnv, ENV_SCHEDULE_ID, EnvError, envSchedule, envWarnings, proxyFromEnv, runArgvWithEnv, serveEnv } from './env';
 import { parseRunArgs } from './run';
 
 const TOKEN = 'x'.repeat(43);
@@ -52,6 +52,19 @@ describe('lurk run reads LURK_* for options the command line leaves out', () => 
   it('reads LURK_PROXY and both credentials together', () => {
     expect(proxyFromEnv({ LURK_PROXY: 'socks5://127.0.0.1:1080' })).toBe('socks5://127.0.0.1:1080');
     expect(() => checkCredentialsEnv({ LURK_USERNAME: 'me', LURK_PASSWORD: 'pw' })).not.toThrow();
+  });
+});
+
+describe('reply variables', () => {
+  it('reports LURK_REPLY* as unsupported and keeps replies off', () => {
+    expect(envWarnings({})).toEqual([]);
+    expect(envWarnings({ LURK_REPLY: '' })).toEqual([]);
+    expect(envWarnings({ LURK_REPLY: 'true', LURK_REPLY_RATE: '5' })).toEqual([
+      expect.stringMatching(/^LURK_REPLY is not supported/),
+      expect.stringMatching(/^LURK_REPLY_RATE is not supported/),
+    ]);
+    expect(parseRunArgs(runArgvWithEnv([], { LURK_REPLY: 'true' })).interaction.reply.enabled).toBe(false);
+    expect(envSchedule({ LURK_RUNS_PER_DAY: '1', LURK_REPLY: 'true' }, 'UTC')!.preset.interaction.reply).toMatchObject({ enabled: false, riskAcknowledged: false });
   });
 });
 
@@ -171,13 +184,22 @@ describe('the lurk binary with LURK_* set', () => {
   });
 
   it('serve plans the LURK_* schedule, answers /health and stops cleanly on SIGTERM', async () => {
-    const p = lurk(['serve', '--host', '127.0.0.1', '--port', '0', '--headless'], { LURK_TOKEN: TOKEN, LURK_RUNS_PER_DAY: '1', LURK_WINDOW: '00:00-23:59', LURK_RUN_ON_START: 'false', TZ: 'UTC' }, (s) =>
-      /listening on 127\.0\.0\.1:(\d+)/.test(s),
+    const p = lurk(['serve', '--host', '127.0.0.1', '--port', '0', '--headless'], { LURK_TOKEN: TOKEN, LURK_RUNS_PER_DAY: '1', LURK_WINDOW: '00:00-23:59', LURK_RUN_ON_START: 'false', LURK_REPLY: 'true', TZ: 'UTC' }, (s) =>
+      /listening on http:\/\/127\.0\.0\.1:(\d+)/.test(s),
     );
     await p.ready;
-    const port = Number(/listening on 127\.0\.0\.1:(\d+)/.exec(p.stderr())![1]);
+    const port = Number(/listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(p.stderr())![1]);
     const health = await fetch(`http://127.0.0.1:${port}/health`);
     expect(health.status).toBe(200);
+    expect(p.stderr()).toMatch(/warning: LURK_REPLY is not supported/);
+    // The same server answers the schedule API with the LURK_* schedule it plans.
+    const auth = { Authorization: `Bearer ${TOKEN}` };
+    let listed: { available: boolean; schedules: Array<{ spec: { id: string } }> } = { available: false, schedules: [] };
+    for (let i = 0; i < 50 && listed.schedules.length === 0; i++) {
+      listed = (await (await fetch(`http://127.0.0.1:${port}/schedules`, { headers: auth })).json()) as typeof listed;
+      if (listed.schedules.length === 0) await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(listed).toMatchObject({ available: true, schedules: [{ spec: { id: ENV_SCHEDULE_ID } }] });
     const stateFile = process.platform === 'darwin' ? join(p.home, 'Library/Application Support/disco-lurk/schedules/state.json') : process.platform === 'win32' ? join(p.home, 'appdata/disco-lurk/schedules/state.json') : join(p.home, 'data/disco-lurk/schedules/state.json');
     for (let i = 0; i < 50; i++) {
       try {

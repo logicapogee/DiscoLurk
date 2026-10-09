@@ -1,5 +1,5 @@
 import type { RunPreset, ScheduleSpec, Site } from '@disco-lurk/core';
-import { MIN_TOKEN_BYTES, tokenStrongEnough } from '@disco-lurk/server';
+import { isLoopback, MIN_TOKEN_BYTES, tokenStrongEnough } from '@disco-lurk/server';
 import { DEFAULT_EXTRA_WAIT, DEFAULT_INTERACTION, parseRunMode, profileIdOf, UsageError } from './run';
 import { BUILTIN_SITES, findSite } from './sites';
 
@@ -118,6 +118,18 @@ export function runArgvWithEnv(argv: readonly string[], env: Env): string[] {
   return [...argv, ...extra];
 }
 
+/**
+ * Variables the table does not define but that look like turning replies on. Unattended replies
+ * would post under the user's name with no one acknowledging the risk, so they stay off and the
+ * variable is reported instead of silently ignored.
+ */
+export function envWarnings(env: Env): string[] {
+  return Object.keys(env)
+    .filter((name) => name.startsWith('LURK_REPLY') && read(env, name) !== undefined)
+    .sort()
+    .map((name) => `${name} is not supported: automatic replies need their risk acknowledged in the UI or with lurk run --reply --i-understand-auto-reply-risk, so they stay off`);
+}
+
 export interface ServeEnv {
   token: string | undefined;
   proxy: string | undefined;
@@ -130,7 +142,7 @@ export interface ServeEnv {
 export function serveEnv(host: string, env: Env): ServeEnv {
   checkCredentialsEnv(env);
   const token = read(env, 'LURK_TOKEN');
-  const loopback = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+  const loopback = host === 'localhost' || isLoopback(host);
   if (!loopback && token === undefined) {
     throw new EnvError(`--host ${host} accepts remote connections, so LURK_TOKEN is required (at least ${MIN_TOKEN_BYTES} random bytes, e.g. \`openssl rand -base64 48\`)`);
   }

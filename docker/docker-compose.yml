@@ -29,6 +29,13 @@ services:
       - ./data:/data
     # Chrome keeps renderer memory in /dev/shm; Docker's 64 MB default makes pages crash.
     shm_size: 1gb
+    # The image's own check: the unauthenticated /health of lurk serve inside the container.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     # A run stops gracefully and reads the progress page once more before exiting.
     stop_grace_period: 30s
     deploy:

@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Category } from '@disco-lurk/core';
+import { EXPERIMENTS_OFF, type Category } from '@disco-lurk/core';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildScheduleFromArgs, formatSchedules, listSchedules, splitAddArgs } from './schedule';
@@ -84,7 +84,7 @@ describe('lurk schedule list', () => {
       siteId: 'linuxdo',
       profileId: spec.profileId,
       browserMode: 'headless' as const,
-      preset: { ...preset, presetId: preset.id, runMode: { kind: 'topics' as const, count: 23 }, categories: known('linuxdo').slice(0, 2) },
+      preset: { ...preset, presetId: preset.id, runMode: { kind: 'topics' as const, count: 23 }, categories: known('linuxdo').slice(0, 2), experiments: EXPERIMENTS_OFF },
       seed: 1,
       plannedAt: '2026-10-09T08:00:00.000Z',
       materializedAt: '2026-10-08T08:00:00.000Z',
@@ -155,5 +155,21 @@ describe('the lurk binary: schedule commands', () => {
     expect(lurk('remove', 'am')).toMatchObject({ code: 0 });
     expect(lurk('list').out).toContain('No schedules');
     expect(lurk('frobnicate')).toMatchObject({ code: 4 });
+  }, 30_000);
+
+  it('points pause, resume and run-now at the UI or API while serve owns the schedules', () => {
+    expect(lurk('add', '--name', 'noon', '--id', 'noon', '--site', 'linuxdo', '--cron', '0 12 * * *', '--timezone', 'UTC')).toMatchObject({ code: 0 });
+    const dir = process.platform === 'darwin' ? join(home, 'Library/Application Support/disco-lurk/schedules') : process.platform === 'win32' ? join(home, 'appdata/disco-lurk/schedules') : join(home, 'data/disco-lurk/schedules');
+    // This test process stands in for a running lurk serve: a live PID in the state lock.
+    writeFileSync(join(dir, '.lurk-lock'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    try {
+      for (const sub of ['pause', 'resume', 'run-now']) {
+        expect(lurk(sub, 'noon')).toMatchObject({ code: 4, err: expect.stringMatching(/lurk serve or the desktop app is running \(process \d+\).*from its UI or its API/) });
+      }
+      expect(lurk('list').out).toContain('noon  noon  [active]');
+    } finally {
+      rmSync(join(dir, '.lurk-lock'), { force: true });
+    }
+    expect(lurk('remove', 'noon')).toMatchObject({ code: 0 });
   }, 30_000);
 });

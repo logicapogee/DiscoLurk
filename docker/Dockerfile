@@ -14,7 +14,7 @@ COPY data ./data
 COPY scripts ./scripts
 COPY tsconfig.base.json tsconfig.json ./
 RUN pnpm install --frozen-lockfile --ignore-scripts
-RUN node scripts/build-docker.ts
+RUN pnpm build:ui && node scripts/build-docker.ts
 
 FROM node:24-bookworm-slim
 ARG TARGETARCH

@@ -2,9 +2,9 @@ import { execFile } from 'node:child_process';
 import { readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { FileCategoryStore } from '@disco-lurk/config';
+import { FileCategoryStore, type ScheduleBook } from '@disco-lurk/config';
 import { DiscoLurkCoordinator, RunError, systemClock, systemDeps, type CoordinatorEnv, type Site } from '@disco-lurk/core';
-import { createApp, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ShellChannel } from '@disco-lurk/server';
+import { createApp, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ServerFrame, type ShellChannel } from '@disco-lurk/server';
 import { LOCK_FILE, openDiscourseForum, processAlive, readLock, type Credentials } from '@disco-lurk/site-discourse';
 import { runDoctor } from './doctor';
 import type { SidecarLifecycle } from './lifecycle';
@@ -15,6 +15,11 @@ const execFileAsync = promisify(execFile);
 export const RELEASES_API = 'https://api.github.com/repos/logicapogee/DiscoLurk/releases/latest';
 export const RELEASES_PAGE = 'https://github.com/logicapogee/DiscoLurk/releases';
 
+/** A Linux session without X11 or Wayland cannot show a headed browser; other desktops always have one. */
+export function hasDisplay(platform = process.platform, env = process.env): boolean {
+  return platform !== 'linux' || Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
+}
+
 export interface SidecarAppOptions {
   version: string;
   dataDir: string;
@@ -22,6 +27,10 @@ export interface SidecarAppOptions {
   headlessOnly: boolean;
   shell?: ShellChannel;
   credentials?: (site: Site) => Credentials | undefined;
+  /** LURK_PROXY: used by every Profile that has no proxy of its own. */
+  proxy?: string;
+  /** `lurk serve`'s LURK_* schedule, planned beside the ones in `schedules.json`. */
+  extraSchedules?(): Promise<ScheduleBook>;
   log(message: string): void;
   /** Filled in once the server listens, so doctor reports the live port. */
   listeningPort(): number | undefined;
@@ -125,6 +134,7 @@ export function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
         throw new RunError('browser-missing', 'This server has no display; headed browsers are unavailable');
       }
       const credentials = opts.credentials?.(req.site);
+      const proxy = req.profile.proxy ?? opts.proxy;
       return openDiscourseForum({
         site: req.site,
         profileDir: app!.services.profiles.dirOf(req.profile.id),
@@ -133,8 +143,7 @@ export function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
         headless: req.browserMode === 'headless',
         deps,
         warn: req.warn,
-        ...(req.profile.executablePath ? { executablePath: req.profile.executablePath } : {}),
-        ...(req.profile.proxy ? { proxy: req.profile.proxy } : {}),
+        ...(proxy ? { proxy } : {}),
         ...(credentials ? { credentials } : {}),
       });
     },
@@ -155,11 +164,12 @@ export function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
       return runDoctor({ version: opts.version, profilesDir, ...(port !== undefined ? { listeningPort: port } : {}) });
     },
     shutdown: opts.shutdown,
-    displayAvailable: () => !opts.headlessOnly,
+    displayAvailable: () => !opts.headlessOnly && hasDisplay(),
     latestRelease,
     releasePage: RELEASES_PAGE,
     log: opts.log,
     ...(opts.shell ? { shell: opts.shell } : {}),
+    ...(opts.extraSchedules ? { extraSchedules: opts.extraSchedules } : {}),
   };
   app = createApp(appDeps);
   return { app, exit };
@@ -190,12 +200,17 @@ export interface BootOptions {
   staticDir?: string;
   shell?: ShellChannel;
   credentials?: (site: Site) => Credentials | undefined;
+  proxy?: string;
+  extraSchedules?(): Promise<ScheduleBook>;
+  /** Every frame the server pushes to its clients; `lurk serve` logs runs from them. */
+  onFrame?(frame: ServerFrame): void;
   log(message: string): void;
 }
 
 /**
- * Reclaims Profiles a dead sidecar left locked, then serves the API. Shutdown, from any trigger,
- * stops runs as an app exit, closes sign-in windows and waits for history to be written.
+ * Reclaims Profiles a dead sidecar left locked, then serves the API and runs the schedules.
+ * Shutdown, from any trigger, stops planning, stops runs as an app exit, closes sign-in windows,
+ * waits for history to be written and then releases the schedule lock.
  */
 export async function bootServer(opts: BootOptions): Promise<LurkServer> {
   await reclaimProfiles(join(opts.dataDir, 'profiles'), BUILTIN_SITES.map((s) => s.id), opts.log);
@@ -209,7 +224,10 @@ export async function bootServer(opts: BootOptions): Promise<LurkServer> {
     shutdown: () => opts.lifecycle.shutdown('/shutdown request'),
     ...(opts.shell ? { shell: opts.shell } : {}),
     ...(opts.credentials ? { credentials: opts.credentials } : {}),
+    ...(opts.extraSchedules ? { extraSchedules: opts.extraSchedules } : {}),
+    ...(opts.proxy ? { proxy: opts.proxy } : {}),
   });
+  if (opts.onFrame) app.hub.subscribe(opts.onFrame);
   await app.start();
   server = await startServer({
     host: opts.host,

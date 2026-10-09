@@ -4,22 +4,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LOCK_FILE, processAlive } from '@disco-lurk/site-discourse';
 import { describe, expect, it } from 'vitest';
-import { parseServeArgs, serveToken } from './serve';
+import { parseServeArgs, runLogLine, serveToken } from './serve';
 import { reclaimProfiles } from './sidecar';
 
 const strong = 'k'.repeat(43);
 
 describe('lurk serve access rules', () => {
   it('refuses a non-loopback host without LURK_TOKEN and a weak LURK_TOKEN anywhere', () => {
-    expect(() => serveToken('0.0.0.0', {})).toThrow(/requires LURK_TOKEN/);
-    expect(() => serveToken('192.168.1.5', {})).toThrow(/requires LURK_TOKEN/);
+    expect(() => serveToken('0.0.0.0', {})).toThrow(/LURK_TOKEN is required/);
+    expect(() => serveToken('192.168.1.5', {})).toThrow(/LURK_TOKEN is required/);
     expect(() => serveToken('0.0.0.0', { LURK_TOKEN: 'short' })).toThrow(/at least 32 bytes/);
     expect(() => serveToken('127.0.0.1', { LURK_TOKEN: 'short' })).toThrow(/at least 32 bytes/);
     expect(serveToken('0.0.0.0', { LURK_TOKEN: strong })).toEqual({ token: strong, minted: false });
   });
 
   it('mints its own token on loopback when none is given', () => {
-    for (const host of ['127.0.0.1', 'localhost', '::1']) {
+    for (const host of ['127.0.0.1', '127.0.0.2', 'localhost', '::1']) {
       const t = serveToken(host, {});
       expect(t.minted).toBe(true);
       expect(Buffer.byteLength(t.token)).toBeGreaterThanOrEqual(32);
@@ -32,6 +32,18 @@ describe('lurk serve access rules', () => {
     const b = parseServeArgs(['--host', '0.0.0.0', '--port', '9000', '--headless', '--data', '/x', '--origin', 'https://a', '--origin', 'https://b'], {});
     expect(b).toMatchObject({ host: '0.0.0.0', port: 9000, headless: true, dataDir: '/x', origins: ['https://a', 'https://b'] });
     expect(() => parseServeArgs(['--port', 'nope'], {})).toThrow(/Invalid --port/);
+  });
+});
+
+describe('lurk serve log', () => {
+  it('keeps warnings, errors and how each run ended', () => {
+    const at = '2026-10-09T00:00:00.000Z';
+    expect(runLogLine({ type: 'event', runId: 'r1', event: { type: 'warning', at, code: 'page-hidden', message: 'hidden' } })).toBe('r1 warning page-hidden: hidden');
+    expect(runLogLine({ type: 'event', runId: 'r1', event: { type: 'error', at, error: { code: 'needs-auth', message: 'signed out' } } })).toBe('r1 error needs-auth: signed out');
+    expect(runLogLine({ type: 'event', runId: 'r1', event: { type: 'floor', at, from: 1, to: 2, confirmed: true } })).toBeNull();
+    const stats = { confirmed: { topics: 3, floors: 40 } } as never;
+    const run = { runId: 'r1', presetName: 'p', plan: { profileId: 'linuxdo/default' }, state: 'completed', result: { outcome: 'completed', stopCause: 'target', stats } } as never;
+    expect(runLogLine({ type: 'run', run })).toBe('run r1 ended: completed (target), confirmed 3 topics / 40 floors');
   });
 });
 

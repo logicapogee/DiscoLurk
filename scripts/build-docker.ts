@@ -1,6 +1,7 @@
 // Bundles the CLI for the Docker image: dist/docker/lurk.cjs plus playwright-core as a real package
-// directory, run by the image's own Node. The image needs no pkg binary, since Node is already there.
-import { cpSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+// directory and the built web UI, run by the image's own Node. The image needs no pkg binary, since
+// Node is already there.
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,10 @@ mkdirSync(outDir, { recursive: true });
 const cliRequire = createRequire(join(root, 'packages/cli/package.json'));
 const playwrightDir = dirname(realpathSync(cliRequire.resolve('playwright-core/package.json')));
 cpSync(playwrightDir, join(outDir, 'node_modules/playwright-core'), { recursive: true, dereference: true });
+// `lurk serve` hands the UI to remote browsers from `<bundle dir>/ui`, as the sidecar binary does.
+const uiDist = join(root, 'packages/ui/dist');
+if (!existsSync(join(uiDist, 'index.html'))) throw new Error('packages/ui/dist is missing; run `pnpm build:ui` first');
+cpSync(uiDist, join(outDir, 'ui'), { recursive: true });
 writeFileSync(join(outDir, 'package.json'), JSON.stringify({ name: 'lurk', version, private: true, type: 'commonjs' }));
 
 const bundle = join(outDir, 'lurk.cjs');

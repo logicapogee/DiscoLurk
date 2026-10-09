@@ -1,5 +1,4 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { join } from 'node:path';
 import {
   DiscoLurkCoordinator,
   seededRandom,
@@ -14,8 +13,8 @@ import {
   type ScheduleSpec,
   type SiteId,
 } from '@disco-lurk/core';
-import { acquireSchedulerLock, FileCategoryStore, FileScheduleBook, FileScheduleStore, SchedulerLockedError, type ScheduleBook } from '@disco-lurk/config';
-import { PlanScheduler, ScheduleSkipped, type HistoryEntry, type ScheduleState, type SchedulerState } from '@disco-lurk/scheduler';
+import { acquireSchedulerLock, FileCategoryStore, FileScheduleBook, FileScheduleStore, openScheduler, SchedulerLockedError, schedulesDirOf, type OpenedScheduler, type ScheduleBook } from '@disco-lurk/config';
+import { ScheduleSkipped, type HistoryEntry, type PlanScheduler, type ScheduleState, type SchedulerState } from '@disco-lurk/scheduler';
 import { EnvError, proxyFromEnv } from './env';
 import { appDataDir, sitesDir } from './paths';
 import {
@@ -32,7 +31,7 @@ import {
 } from './run';
 import { findSite } from './sites';
 
-export const schedulesDir = (base = appDataDir()) => join(base, 'schedules');
+export const schedulesDir = (base = appDataDir()) => schedulesDirOf(base);
 
 export const SCHEDULE_USAGE = `  lurk schedule list [--json]
   lurk schedule add --name <name> [--id <id>] --site <id> [--profile <name>]
@@ -46,8 +45,10 @@ export const SCHEDULE_USAGE = `  lurk schedule list [--json]
 export class CategoryCache {
   private bySite = new Map<SiteId, Category[]>();
 
+  constructor(private readonly dir = sitesDir()) {}
+
   async refresh(siteIds: Iterable<SiteId>): Promise<void> {
-    const store = new FileCategoryStore(sitesDir());
+    const store = new FileCategoryStore(this.dir);
     for (const id of new Set(siteIds)) {
       const site = findSite(id);
       if (site) this.bySite.set(id, await siteCategories(site, store));
@@ -81,71 +82,81 @@ interface ActiveRun {
   done: Promise<RunResult | null>;
 }
 
-/** Owns the scheduler state lock and runs what the scheduler starts, one run per Profile. */
+/**
+ * Takes charge of the schedules for one CLI command (`pause`, `resume`, `run-now`) and runs what
+ * the scheduler starts, one run per Profile. `lurk serve` and the desktop app hold the same lock
+ * through the server, so these commands work only while neither is running.
+ */
 export class SchedulerHost {
-  readonly scheduler: PlanScheduler;
   private readonly runs = new Map<RunId, ActiveRun>();
   private readonly exit = new AbortController();
 
-  private constructor(
-    private readonly opts: HostOptions,
-    private readonly lock: { release(): Promise<void> },
-    store: FileScheduleStore,
-  ) {
+  private constructor(private readonly opened: OpenedScheduler) {}
+
+  get scheduler(): PlanScheduler {
+    return this.opened.scheduler;
+  }
+
+  static async open(dataDir: string, opts: HostOptions): Promise<SchedulerHost> {
     const credentialsEnv = (siteId: SiteId) => {
       const site = findSite(siteId);
       return site ? credentialsFromEnv(site) : undefined;
     };
     const proxy = proxyFromEnv(process.env);
-    this.scheduler = new PlanScheduler({
-      clock: systemClock,
-      random: seededRandom(randomBytes(4).readUInt32LE()),
-      store,
-      newId: () => `plan-${randomUUID()}`,
-      loadPreset: (presetId) => {
-        const preset = opts.presets().find((p) => p.id === presetId);
-        if (!preset) throw new Error(`Preset ${presetId} does not exist`);
-        return { preset, categories: opts.categories.resolve(preset) };
-      },
-      siteOf: (profileId) => parseProfileId(profileId).siteId,
-      profileBusy: (profileId) => [...this.runs.values()].some((r) => r.profileId === profileId),
-      displayAvailable: () => opts.displayAvailable(),
-      startRun: (plan, cause) => {
-        const runId = `run-${randomUUID()}`;
-        const credentials = credentialsEnv(plan.siteId);
-        const env = cliEnv({ channel: 'chrome', exitSignal: this.exit.signal, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) });
-        const stop = new AbortController();
-        opts.log(`run ${runId} (${cause}) for ${plan.profileId}: ${plan.preset.browseMode}, ${JSON.stringify(plan.preset.runMode)}`);
-        const done = new DiscoLurkCoordinator(env)
-          .run(plan, stop.signal, (e) => opts.emit(e, runId))
-          .then(async (result) => {
-            const c = result.stats.confirmed;
-            opts.log(`run ${runId} ended: ${result.outcome} (${result.stopCause})${result.failure ? ` ${result.failure.code}` : ''}, confirmed ${c.topics} topics / ${c.floors} floors`);
-            await this.scheduler.finish(runId, result);
-            return result;
-          })
-          .catch((err: unknown) => {
-            opts.log(`run ${runId} crashed: ${(err as Error).stack ?? String(err)}`);
-            return null;
-          })
-          .finally(() => this.runs.delete(runId));
-        this.runs.set(runId, { profileId: plan.profileId, stop, done });
-        return runId;
-      },
-    });
-  }
-
-  static async open(dir: string, opts: HostOptions): Promise<SchedulerHost> {
-    let lock;
+    let host: SchedulerHost | undefined;
+    let opened: OpenedScheduler;
     try {
-      lock = await acquireSchedulerLock(dir);
+      opened = await openScheduler({
+        dataDir,
+        deps: {
+          clock: systemClock,
+          random: seededRandom(randomBytes(4).readUInt32LE()),
+          newId: () => `plan-${randomUUID()}`,
+          loadPreset: (presetId) => {
+            const preset = opts.presets().find((p) => p.id === presetId);
+            if (!preset) throw new Error(`Preset ${presetId} does not exist`);
+            return { preset, categories: opts.categories.resolve(preset) };
+          },
+          siteOf: (profileId) => parseProfileId(profileId).siteId,
+          profileBusy: (profileId) => [...host!.runs.values()].some((r) => r.profileId === profileId),
+          displayAvailable: () => opts.displayAvailable(),
+          startRun: (plan, cause) => host!.start(plan, cause, opts, credentialsEnv(plan.siteId), proxy),
+          warn: (code, message) => opts.log(`warning ${code}: ${message}`),
+        },
+      });
     } catch (err) {
       if (err instanceof SchedulerLockedError) {
-        throw new EnvError(`${err.message}. Change schedules there, or stop it first.`);
+        throw new EnvError(
+          `lurk serve or the desktop app is running (process ${err.pid}) and owns the schedules; ` +
+            'pause, resume or run a schedule from its UI or its API (POST /schedules/<id>/pause, /resume, /trigger), or stop it first',
+        );
       }
       throw err;
     }
-    return new SchedulerHost(opts, lock, new FileScheduleStore(dir));
+    host = new SchedulerHost(opened);
+    return host;
+  }
+
+  private start(plan: RunPlanSnapshot, cause: string, opts: HostOptions, credentials: ReturnType<typeof credentialsFromEnv>, proxy: string | undefined): RunId {
+    const runId = `run-${randomUUID()}`;
+    const env = cliEnv({ channel: 'chrome', exitSignal: this.exit.signal, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) });
+    const stop = new AbortController();
+    opts.log(`run ${runId} (${cause}) for ${plan.profileId}: ${plan.preset.browseMode}, ${JSON.stringify(plan.preset.runMode)}`);
+    const done = new DiscoLurkCoordinator(env)
+      .run(plan, stop.signal, (e) => opts.emit(e, runId))
+      .then(async (result) => {
+        const c = result.stats.confirmed;
+        opts.log(`run ${runId} ended: ${result.outcome} (${result.stopCause})${result.failure ? ` ${result.failure.code}` : ''}, confirmed ${c.topics} topics / ${c.floors} floors`);
+        await this.scheduler.finish(runId, result);
+        return result;
+      })
+      .catch((err: unknown) => {
+        opts.log(`run ${runId} crashed: ${(err as Error).stack ?? String(err)}`);
+        return null;
+      })
+      .finally(() => this.runs.delete(runId));
+    this.runs.set(runId, { profileId: plan.profileId, stop, done });
+    return runId;
   }
 
   /** The run's result once it ends; null if it crashed or is unknown. */
@@ -162,7 +173,7 @@ export class SchedulerHost {
     this.stopAll('app-exit');
     this.exit.abort();
     await Promise.all([...this.runs.values()].map((r) => r.done));
-    await this.lock.release();
+    await this.opened.close();
   }
 }
 
@@ -364,13 +375,13 @@ export async function schedule(argv: string[]): Promise<number> {
     case 'pause':
     case 'resume':
     case 'run-now':
-      return controlSchedule(sub, rest, dir, book, categories);
+      return controlSchedule(sub, rest, book, categories);
     default:
       throw new UsageError(sub ? `Unknown schedule command ${sub}` : 'schedule needs a command');
   }
 }
 
-async function controlSchedule(sub: 'pause' | 'resume' | 'run-now', rest: string[], dir: string, book: FileScheduleBook, categories: CategoryCache): Promise<number> {
+async function controlSchedule(sub: 'pause' | 'resume' | 'run-now', rest: string[], book: FileScheduleBook, categories: CategoryCache): Promise<number> {
   const json = sub === 'run-now' && rest.includes('--json');
   const args = rest.filter((a) => !(json && a === '--json'));
   const [id, ...more] = args;
@@ -379,7 +390,7 @@ async function controlSchedule(sub: 'pause' | 'resume' | 'run-now', rest: string
   if (!current.schedules.some((s) => s.id === id)) throw new UsageError(`No schedule ${id}`);
   await categories.refresh(current.presets.map((p) => p.siteId));
   const reporter = createReporter(json, Date.now());
-  const host = await SchedulerHost.open(dir, {
+  const host = await SchedulerHost.open(appDataDir(), {
     displayAvailable: () => true,
     presets: () => current.presets,
     categories,

@@ -12,7 +12,7 @@ import { bootServer, stdoutShell } from './sidecar';
 import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
 import { installStopHandlers } from './signals';
-import { EnvError, proxyFromEnv, runArgvWithEnv } from './env';
+import { EnvError, envWarnings, proxyFromEnv, runArgvWithEnv } from './env';
 import { schedule, SCHEDULE_USAGE } from './schedule';
 import { serve } from './serve';
 import { BUILTIN_SITES, findSite } from './sites';
@@ -217,7 +217,7 @@ async function login(argv: string[]): Promise<number> {
 
 async function run(argv: string[]): Promise<number> {
   const args = parseRunArgs(argv);
-  for (const line of args.usageWarnings) console.error(`warning: ${line}`);
+  for (const line of [...envWarnings(process.env), ...args.usageWarnings]) console.error(`warning: ${line}`);
   const { signal, exitSignal } = installStopHandlers(() => console.error('Stopping… (Ctrl+C again skips the final progress read)'));
   const credentials = credentialsFromEnv(args.site);
   const proxy = proxyFromEnv(process.env);

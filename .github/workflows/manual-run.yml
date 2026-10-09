@@ -16,6 +16,10 @@ on:
         description: endless, topics:<n>, topics:<min>-<max> or time:<minutes>
         default: topics:10
 
+concurrency:
+  group: manual-run-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -25,13 +29,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright-core install --force chrome
+      - uses: ./.github/actions/setup
+      - name: Install Google Chrome
+        run: command -v google-chrome >/dev/null || pnpm exec playwright-core install chrome
       - name: lurk run
         env:
           LURK_SITE: ${{ inputs.site }}

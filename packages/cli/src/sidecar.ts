@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
-import { FileCategoryStore, type ScheduleBook } from '@disco-lurk/config';
+import { FileCategoryStore, FileLedgerStore, type ScheduleBook } from '@disco-lurk/config';
 import { DiscoLurkCoordinator, RunError, systemClock, systemDeps, type CoordinatorEnv, type Site } from '@disco-lurk/core';
-import { createApp, SiteStore, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ServerFrame, type ShellChannel } from '@disco-lurk/server';
+import { createApp, SiteStore, splitProfileId, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ServerFrame, type ShellChannel } from '@disco-lurk/server';
 import { LOCK_FILE, openDiscourseForum, profileLockLive, readLock, type Credentials } from '@disco-lurk/site-discourse';
 import { runDoctor } from './doctor';
 import { exitOnCrash, SidecarLifecycle } from './lifecycle';
 import { DailyLog } from './log-file';
-import { appDataDir } from './paths';
+import { appDataDir, ledgerFile } from './paths';
 import { EXIT, withPasswordLogin } from './run';
 import { BUILTIN_SITES } from './sites';
 
@@ -129,6 +129,8 @@ export function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
   const env: CoordinatorEnv = {
     deps,
     categories,
+    // Retention follows the setting, read each time a ledger is saved.
+    ledgers: new FileLedgerStore((profileId) => ledgerFile(splitProfileId(profileId), opts.dataDir), Date.now, () => app!.services.settings.get().ledgerDays),
     exitSignal: exit.signal,
     async resolveProfile(profileId) {
       const profile = await app!.services.profiles.resolve(profileId);

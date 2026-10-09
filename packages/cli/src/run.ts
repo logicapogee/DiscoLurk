@@ -230,6 +230,50 @@ export function parseRunArgs(argv: string[]): RunArgs {
   };
 }
 
+/** `--preset <id>` as given, or null; the stored UI preset then defines the run. */
+export function presetArg(argv: readonly string[]): string | null {
+  const i = argv.findIndex((a) => a === '--preset' || a.startsWith('--preset='));
+  if (i < 0) return null;
+  const v = argv[i]!.startsWith('--preset=') ? argv[i]!.slice('--preset='.length) : argv[i + 1];
+  if (!v || v.startsWith('-')) throw new UsageError('--preset needs a preset id');
+  return v;
+}
+
+export interface PresetRunArgs {
+  presetId: string;
+  /** Overrides the preset's Profile name. */
+  profile: string | undefined;
+  channel: BrowserChannel;
+  /** Overrides the preset's browser form. */
+  browserMode: BrowserMode | undefined;
+  json: boolean;
+}
+
+/** `lurk run --preset <id>`: what the run does comes from the preset, where and how from these few options. */
+export function parsePresetRunArgs(argv: string[]): PresetRunArgs {
+  let v;
+  try {
+    v = parseOrUsageError(argv, {
+      preset: { type: 'string' },
+      profile: { type: 'string' },
+      channel: { type: 'string', default: 'chrome' },
+      headed: { type: 'boolean' },
+      headless: { type: 'boolean' },
+      json: { type: 'boolean', default: false },
+    });
+  } catch (err) {
+    throw new UsageError(`${(err as Error).message}; --preset combines only with --profile, --channel, --headed/--headless and --json`);
+  }
+  if (v.headed && v.headless) throw new UsageError('--headed and --headless exclude each other');
+  return {
+    presetId: v.preset!,
+    profile: v.profile === undefined ? undefined : parseProfileName(v.profile),
+    channel: parseChannel(v.channel),
+    browserMode: v.headless ? 'headless' : v.headed ? 'headed' : undefined,
+    json: v.json,
+  };
+}
+
 export function parseLoginArgs(argv: string[]): LoginArgs {
   return loginArgsFrom(parseOrUsageError(argv, COMMON));
 }
@@ -325,6 +369,8 @@ export interface CliEnvOptions {
   credentials?: Credentials | ((site: Site) => Credentials | undefined);
   proxy?: string;
   exitSignal?: AbortSignal;
+  /** Sites beyond the built-in ones, such as those added in the UI. */
+  sites?: readonly Site[];
 }
 
 /** The bundled reply templates, checked before any run may use them. */
@@ -335,7 +381,7 @@ export function replyTemplates(file: { templates: string[] } = templatesFile): s
 }
 
 export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
-  const credentialsOf = (site: Site) => {
+  const credentialsOf = (site: Site): { credentials?: Credentials } => {
     const c = typeof opts.credentials === 'function' ? opts.credentials(site) : opts.credentials;
     return c ? { credentials: c } : {};
   };
@@ -345,9 +391,10 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
     deps,
     async resolveProfile(profileId) {
       const { siteId } = parseProfileId(profileId);
-      const site = findSite(siteId);
+      const site = opts.sites?.find((s) => s.id === siteId) ?? findSite(siteId);
       if (!site) throw new UsageError(`Unknown site ${siteId}`);
-      return { profile: { id: profileId, siteId, channel: opts.channel, ...(opts.proxy ? { proxy: opts.proxy } : {}) }, site };
+      const login = withPasswordLogin(site, credentialsOf(site).credentials);
+      return { profile: { id: profileId, siteId, channel: opts.channel, ...(opts.proxy ? { proxy: opts.proxy } : {}) }, site: login };
     },
     open(req) {
       return openDiscourseForum({
@@ -370,10 +417,19 @@ export function cliEnv(opts: CliEnvOptions): CoordinatorEnv {
   };
 }
 
-/** Unattended credentials come only from the environment, and only for password sites. */
+/**
+ * Unattended credentials come only from the environment: LURK_USERNAME and LURK_PASSWORD sign in
+ * to the LURK_SITE site (linuxdo by default), and only that one, whatever login it normally uses.
+ */
 export function credentialsFromEnv(site: Site, env: NodeJS.ProcessEnv = process.env): Credentials | undefined {
-  if (site.login !== 'password' || !env.LURK_USERNAME || !env.LURK_PASSWORD) return undefined;
+  if (!env.LURK_USERNAME || !env.LURK_PASSWORD) return undefined;
+  if ((env.LURK_SITE?.trim() || 'linuxdo') !== site.id) return undefined;
   return { username: env.LURK_USERNAME, password: env.LURK_PASSWORD };
+}
+
+/** The site as a run with `credentials` sees it: signed in by password, not by a person. */
+export function withPasswordLogin(site: Site, credentials: Credentials | undefined): Site {
+  return credentials ? { ...site, login: 'password' } : site;
 }
 
 export function siteCategories(site: Site, store: CategoryStore): Promise<Category[]> {

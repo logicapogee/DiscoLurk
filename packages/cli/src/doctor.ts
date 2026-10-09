@@ -4,8 +4,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { BrowserChannel, Category, Site } from '@disco-lurk/core';
-import { processAlive } from '@disco-lurk/config';
-import { LOCK_FILE, readLock } from '@disco-lurk/site-discourse';
+import { LOCK_FILE, profileLockLive, readLock } from '@disco-lurk/site-discourse';
 
 const run = promisify(execFile);
 
@@ -157,8 +156,9 @@ async function profileList(dir: string, siteId: string): Promise<string[]> {
   const names = await readdir(root, { withFileTypes: true }).catch(() => []);
   const out: string[] = [];
   for (const entry of names.filter((e) => e.isDirectory())) {
-    const lock = await readLock(join(root, entry.name, LOCK_FILE));
-    out.push(lock && processAlive(lock.pid) ? `${entry.name}（被 PID ${lock.pid} 占用）` : entry.name);
+    const path = join(root, entry.name, LOCK_FILE);
+    const lock = await readLock(path);
+    out.push(lock && (await profileLockLive(lock, path)) ? `${entry.name}（被 PID ${lock.pid} 占用）` : entry.name);
   }
   return out;
 }

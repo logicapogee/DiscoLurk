@@ -67,3 +67,42 @@ export class SidecarLifecycle {
     stdin.resume();
   }
 }
+
+export interface CrashWatch {
+  readonly crashed: boolean;
+  dispose(): void;
+}
+
+/**
+ * An error nothing caught still ends the process, but through the same shutdown as a signal:
+ * runs stop as an app exit, browsers and Profile locks are released and history is written, then
+ * the process exits with `exitCode`.
+ */
+export function exitOnCrash(
+  lifecycle: { shutdown(reason: string): Promise<void> },
+  log: (message: string) => void,
+  exitCode: number,
+  target: NodeJS.EventEmitter = process,
+  exit: (code: number) => void = (code) => process.exit(code),
+): CrashWatch {
+  let crashed = false;
+  const onCrash = (kind: string) => (err: unknown) => {
+    log(`${kind}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    if (crashed) return;
+    crashed = true;
+    void lifecycle.shutdown(kind).finally(() => exit(exitCode));
+  };
+  const rejection = onCrash('unhandledRejection');
+  const exception = onCrash('uncaughtException');
+  target.on('unhandledRejection', rejection);
+  target.on('uncaughtException', exception);
+  return {
+    get crashed() {
+      return crashed;
+    },
+    dispose() {
+      target.off('unhandledRejection', rejection);
+      target.off('uncaughtException', exception);
+    },
+  };
+}

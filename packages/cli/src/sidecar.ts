@@ -7,14 +7,14 @@ import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { FileCategoryStore, type ScheduleBook } from '@disco-lurk/config';
 import { DiscoLurkCoordinator, RunError, systemClock, systemDeps, type CoordinatorEnv, type Site } from '@disco-lurk/core';
-import { createApp, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ServerFrame, type ShellChannel } from '@disco-lurk/server';
-import { LOCK_FILE, openDiscourseForum, processAlive, readLock, type Credentials } from '@disco-lurk/site-discourse';
+import { createApp, SiteStore, startServer, type AppDeps, type LatestRelease, type LurkApp, type LurkServer, type ServerFrame, type ShellChannel } from '@disco-lurk/server';
+import { LOCK_FILE, openDiscourseForum, profileLockLive, readLock, type Credentials } from '@disco-lurk/site-discourse';
 import { runDoctor } from './doctor';
-import { SidecarLifecycle } from './lifecycle';
+import { exitOnCrash, SidecarLifecycle } from './lifecycle';
 import { DailyLog } from './log-file';
 import { appDataDir } from './paths';
-import { EXIT } from './run';
-import { BUILTIN_SITES, findSite } from './sites';
+import { EXIT, withPasswordLogin } from './run';
+import { BUILTIN_SITES } from './sites';
 
 const execFileAsync = promisify(execFile);
 
@@ -50,8 +50,9 @@ export interface SidecarApp {
 }
 
 const lockHolder = async (profileDir: string): Promise<number | null> => {
-  const lock = await readLock(join(profileDir, LOCK_FILE));
-  return lock && lock.pid !== process.pid && processAlive(lock.pid) ? lock.pid : null;
+  const path = join(profileDir, LOCK_FILE);
+  const lock = await readLock(path);
+  return lock && lock.pid !== process.pid && (await profileLockLive(lock, path)) ? lock.pid : null;
 };
 
 /** Chrome receives its Profile as `--user-data-dir=<dir>`, which is how its processes are found. */
@@ -91,7 +92,7 @@ export async function reclaimProfiles(profilesDir: string, siteIds: readonly str
       const dir = join(profilesDir, siteId, entry.name);
       const lockPath = join(dir, LOCK_FILE);
       const lock = await readLock(lockPath);
-      if (!lock || processAlive(lock.pid)) continue;
+      if (!lock || (await profileLockLive(lock, lockPath))) continue;
       const pids = await browserPidsUsing(dir).catch((err: unknown) => {
         log(`reclaim: cannot list processes for ${dir}: ${String(err)}`);
         return [];
@@ -131,9 +132,9 @@ export function createSidecarApp(opts: SidecarAppOptions): SidecarApp {
     exitSignal: exit.signal,
     async resolveProfile(profileId) {
       const profile = await app!.services.profiles.resolve(profileId);
-      const site = findSite(profile.siteId);
-      if (!site) throw new RunError('internal', `Unknown site ${profile.siteId}`);
-      return { profile, site };
+      // The catalog holds the user-added sites as well as the built-in ones.
+      const site = app!.services.catalog.site(profile.siteId);
+      return { profile, site: withPasswordLogin(site, opts.credentials?.(site)) };
     },
     async open(req) {
       if (opts.headlessOnly && req.browserMode === 'headed') {
@@ -279,6 +280,8 @@ export interface BootOptions {
   credentials?: (site: Site) => Credentials | undefined;
   proxy?: string;
   extraSchedules?(): Promise<ScheduleBook>;
+  /** Reverse proxies whose X-Forwarded-For names the client that auth failures are counted against. */
+  trustedProxies?: readonly string[];
   /** Every frame the server pushes to its clients; `lurk serve` logs runs from them. */
   onFrame?(frame: ServerFrame): void;
   /** The desktop shell's stdin and the stdout line writer that answers it. */
@@ -292,7 +295,8 @@ export interface BootOptions {
  * waits for history to be written and then releases the schedule lock.
  */
 export async function bootServer(opts: BootOptions): Promise<LurkServer> {
-  await reclaimProfiles(join(opts.dataDir, 'profiles'), BUILTIN_SITES.map((s) => s.id), opts.log);
+  const userSites = await new SiteStore(join(opts.dataDir, 'custom-sites.json')).load().catch(() => []);
+  await reclaimProfiles(join(opts.dataDir, 'profiles'), [...BUILTIN_SITES, ...userSites].map((s) => s.id), opts.log);
   let server: LurkServer | undefined;
   const { app, exit } = createSidecarApp({
     version: opts.version,
@@ -318,6 +322,7 @@ export async function bootServer(opts: BootOptions): Promise<LurkServer> {
     hub: app.hub,
     log: opts.log,
     ...(opts.allowedOrigins ? { allowedOrigins: opts.allowedOrigins } : {}),
+    ...(opts.trustedProxies ? { trustedProxies: opts.trustedProxies } : {}),
     ...(opts.staticDir ? { staticDir: opts.staticDir } : {}),
   });
   const listening = server;
@@ -355,6 +360,7 @@ export async function runSidecar(argv: string[], version: string): Promise<numbe
     console.error(m);
   };
   const lifecycle = new SidecarLifecycle(log);
+  const crash = exitOnCrash(lifecycle, log, EXIT.environment);
   // Reclaiming Profiles a dead sidecar left behind can take a while; this tells the shell the
   // process is up and working towards ready.
   stdoutLine({ event: 'starting' });
@@ -381,5 +387,5 @@ export async function runSidecar(argv: string[], version: string): Promise<numbe
   alive.unref();
   await lifecycle.done;
   clearInterval(alive);
-  return EXIT.ok;
+  return crash.crashed ? EXIT.environment : EXIT.ok;
 }

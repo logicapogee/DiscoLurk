@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -132,9 +132,10 @@ describe('the lurk binary: schedule commands', () => {
   }, 60_000);
   afterAll(() => rmSync(bundle, { force: true }));
 
-  const lurk = (...args: string[]) => {
+  const lurk = (...args: string[]) => lurkCommand('schedule', ...args);
+  const lurkCommand = (...args: string[]) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('LURK_')));
-    const r = spawnSync(process.execPath, [bundle, 'schedule', ...args], {
+    const r = spawnSync(process.execPath, [bundle, ...args], {
       env: { ...env, HOME: home, XDG_DATA_HOME: join(home, 'data'), APPDATA: join(home, 'appdata') },
       encoding: 'utf8',
     });
@@ -157,13 +158,28 @@ describe('the lurk binary: schedule commands', () => {
     expect(lurk('frobnicate')).toMatchObject({ code: 4 });
   }, 30_000);
 
+  it('lists the built-in sites and those added in the UI', () => {
+    const dataDir = process.platform === 'darwin' ? join(home, 'Library/Application Support/disco-lurk') : process.platform === 'win32' ? join(home, 'appdata/disco-lurk') : join(home, 'data/disco-lurk');
+    mkdirSync(dataDir, { recursive: true });
+    const added = { id: 'meta', displayName: 'Meta', baseUrl: 'https://meta.discourse.org', kind: 'discourse', login: 'headed', categorySource: 'discovered', progressSource: 'none', behaviorVerified: { clickEntryRequired: 'unverified' } };
+    writeFileSync(join(dataDir, 'custom-sites.json'), JSON.stringify({ schemaVersion: 1, sites: [added] }));
+    const listed = lurkCommand('sites', 'list');
+    expect(listed.code).toBe(0);
+    expect(listed.out).toMatch(/^linuxdo /m);
+    expect(listed.out).toMatch(/^meta  Meta  https:\/\/meta\.discourse\.org  login headed · discovered categories \(0\) · progress none$/m);
+    expect(JSON.parse(lurkCommand('sites', 'list', '--json').out).map((r: { site: { id: string } }) => r.site.id)).toContain('meta');
+    expect(lurkCommand('sites', 'discover-categories', '--site', 'nowhere')).toMatchObject({ code: 4, err: expect.stringMatching(/needs --site </) });
+    expect(lurkCommand('run', '--preset', 'missing')).toMatchObject({ code: 4, err: expect.stringMatching(/No preset missing/) });
+    expect(lurkCommand('run', '--preset', 'missing', '--like')).toMatchObject({ code: 4, err: expect.stringMatching(/--preset combines only with/) });
+  }, 30_000);
+
   it('points pause, resume and run-now at the UI or API while serve owns the schedules', () => {
     expect(lurk('add', '--name', 'noon', '--id', 'noon', '--site', 'linuxdo', '--cron', '0 12 * * *', '--timezone', 'UTC')).toMatchObject({ code: 0 });
     const dir = process.platform === 'darwin' ? join(home, 'Library/Application Support/disco-lurk/schedules') : process.platform === 'win32' ? join(home, 'appdata/disco-lurk/schedules') : join(home, 'data/disco-lurk/schedules');
     // This test process stands in for a running lurk serve: a live PID in the state lock.
     writeFileSync(join(dir, '.lurk-lock'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
     try {
-      for (const sub of ['pause', 'resume', 'run-now']) {
+      for (const sub of ['pause', 'resume', 'run-now', 'trigger']) {
         expect(lurk(sub, 'noon')).toMatchObject({ code: 4, err: expect.stringMatching(/lurk serve or the desktop app is running \(process \d+\).*from its UI or its API/) });
       }
       expect(lurk('list').out).toContain('noon  noon  [active]');

@@ -3,14 +3,18 @@ import { emptyStats, type AuthResult, type AuthSession, type Category, type RunR
 import {
   buildPlan,
   createReporter,
+  cliEnv,
   credentialsFromEnv,
+  withPasswordLogin,
   EXIT,
   exitCodeFor,
   formatSummary,
   parseLoginArgs,
   parseProfileId,
   parseRunArgs,
+  parsePresetRunArgs,
   parseRunMode,
+  presetArg,
   runModeArg,
   REPLY_RISK_NOTICE,
   replyTemplates,
@@ -144,12 +148,33 @@ describe('CLI-003 exit codes (§11.1)', () => {
   });
 });
 
-describe('B10 credentials only from the environment, only for password sites', () => {
-  it('ignores LURK_USERNAME / LURK_PASSWORD on headed-login sites', () => {
+describe('lurk run --preset', () => {
+  it('takes the preset id and only the options that say where and how it runs', () => {
+    expect(presetArg(['--json', '--preset', 'p1'])).toBe('p1');
+    expect(presetArg(['--preset=p2'])).toBe('p2');
+    expect(presetArg(['--site', 'linuxdo'])).toBeNull();
+    expect(() => presetArg(['--preset'])).toThrow(/needs a preset id/);
+    expect(parsePresetRunArgs(['--preset', 'p1', '--profile', 'alt', '--headless', '--json'])).toEqual({ presetId: 'p1', profile: 'alt', channel: 'chrome', browserMode: 'headless', json: true });
+    expect(parsePresetRunArgs(['--preset', 'p1'])).toMatchObject({ profile: undefined, browserMode: undefined });
+    expect(() => parsePresetRunArgs(['--preset', 'p1', '--run-mode', 'endless'])).toThrow(/combines only with/);
+  });
+});
+
+describe('B10 credentials only from the environment, only for the LURK_SITE site', () => {
+  it('signs in to LURK_SITE by password whatever its usual login, and to no other site', () => {
     const env = { LURK_USERNAME: 'u', LURK_PASSWORD: 'p' };
-    expect(credentialsFromEnv(linuxdo, env)).toBeUndefined();
-    expect(credentialsFromEnv({ ...linuxdo, login: 'password' }, env)).toEqual({ username: 'u', password: 'p' });
-    expect(credentialsFromEnv({ ...linuxdo, login: 'password' }, {})).toBeUndefined();
+    expect(credentialsFromEnv(linuxdo, env)).toEqual({ username: 'u', password: 'p' });
+    expect(credentialsFromEnv(linuxdo, { ...env, LURK_SITE: 'docofcard' })).toBeUndefined();
+    expect(credentialsFromEnv({ ...linuxdo, id: 'docofcard' }, { ...env, LURK_SITE: 'docofcard' })).toEqual({ username: 'u', password: 'p' });
+    expect(credentialsFromEnv(linuxdo, {})).toBeUndefined();
+    expect(withPasswordLogin(linuxdo, { username: 'u', password: 'p' }).login).toBe('password');
+    expect(withPasswordLogin(linuxdo, undefined)).toBe(linuxdo);
+  });
+
+  it('opens the run for that site with a password login', async () => {
+    const env = cliEnv({ channel: 'chrome', credentials: (site) => credentialsFromEnv(site, { LURK_USERNAME: 'u', LURK_PASSWORD: 'p', LURK_SITE: 'linuxdo' }) });
+    expect((await env.resolveProfile('linuxdo/default')).site.login).toBe('password');
+    expect((await env.resolveProfile('docofcard/default')).site.login).toBe(findSite('docofcard')!.login);
   });
 });
 

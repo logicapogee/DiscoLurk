@@ -1,9 +1,7 @@
 import { readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { currentLockOwner, lockOwnerLive, markLockHeld, markLockReleased, processAlive, type LivenessProbe, type LockOwner } from '@disco-lurk/config';
+import { currentLockOwner, lockOwnerLive, markLockHeld, markLockReleased, type LivenessProbe, type LockOwner } from '@disco-lurk/config';
 import { RunError } from '@disco-lurk/core';
-
-export { processAlive };
 
 export const LOCK_FILE = '.lurk-lock';
 

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { FileCategoryStore, type ScheduleBook } from '@disco-lurk/config';
 import { TAURI_ORIGINS, type ServerFrame } from '@disco-lurk/server';
 import { envWarnings, proxyFromEnv, serveEnv, siteFromEnv } from './env';
-import { SidecarLifecycle } from './lifecycle';
+import { exitOnCrash, SidecarLifecycle } from './lifecycle';
 import { appDataDir } from './paths';
 import { credentialsFromEnv, EXIT, parseOrUsageError, siteCategories, UsageError } from './run';
 import { envSchedule, systemTimezone } from './schedule';
@@ -109,44 +109,6 @@ export function runLogLine(frame: ServerFrame): string | null {
   return null;
 }
 
-export interface CrashWatch {
-  readonly crashed: boolean;
-  dispose(): void;
-}
-
-/**
- * An error nothing caught still ends the process, but through the same shutdown as a signal:
- * runs stop as an app exit, browsers and Profile locks are released and history is written, then
- * the process exits with the environment code.
- */
-export function exitOnCrash(
-  lifecycle: { shutdown(reason: string): Promise<void> },
-  log: (message: string) => void,
-  target: NodeJS.EventEmitter = process,
-  exit: (code: number) => void = (code) => process.exit(code),
-): CrashWatch {
-  let crashed = false;
-  const onCrash = (kind: string) => (err: unknown) => {
-    log(`${kind}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
-    if (crashed) return;
-    crashed = true;
-    void lifecycle.shutdown(kind).finally(() => exit(EXIT.environment));
-  };
-  const rejection = onCrash('unhandledRejection');
-  const exception = onCrash('uncaughtException');
-  target.on('unhandledRejection', rejection);
-  target.on('uncaughtException', exception);
-  return {
-    get crashed() {
-      return crashed;
-    },
-    dispose() {
-      target.off('unhandledRejection', rejection);
-      target.off('uncaughtException', exception);
-    },
-  };
-}
-
 /** The server, its web UI and the schedules in one process, for a NAS, Docker or a remote desktop. */
 export async function serve(argv: string[], version: string): Promise<number> {
   const args = parseServeArgs(argv);
@@ -156,7 +118,7 @@ export async function serve(argv: string[], version: string): Promise<number> {
   const log = (m: string) => console.error(`[${new Date().toISOString()}] ${m}`);
   for (const w of envWarnings(process.env)) log(`warning: ${w}`);
   const lifecycle = new SidecarLifecycle(log);
-  const crash = exitOnCrash(lifecycle, log);
+  const crash = exitOnCrash(lifecycle, log, EXIT.environment);
   const server = await bootServer({
     version,
     host: args.host,
@@ -167,6 +129,7 @@ export async function serve(argv: string[], version: string): Promise<number> {
     lifecycle,
     // The served UI is same-origin; extra origins are for a UI hosted elsewhere, such as behind a proxy.
     allowedOrigins: [...TAURI_ORIGINS, ...args.origins],
+    ...(args.trustedProxies.length ? { trustedProxies: args.trustedProxies } : {}),
     credentials: (site) => credentialsFromEnv(site),
     ...(proxy ? { proxy } : {}),
     onFrame: (frame) => {

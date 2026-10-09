@@ -5,13 +5,15 @@ import { parseArgs } from 'node:util';
 import { DiscoLurkCoordinator, isAbortError, RunError } from '@disco-lurk/core';
 import { formatDoctor, runDoctor } from './doctor';
 import { ConfigFileError, FileCategoryStore } from '@disco-lurk/config';
-import { profilesDir, sitesDir } from './paths';
+import { appDataDir, profilesDir, sitesDir } from './paths';
 import { runSidecar } from './sidecar';
 import { CAPTURE_STEPS, captureFixtures, expandSteps } from './capture';
 import { browserSelftest } from './selftest';
 import { installStopHandlers } from './signals';
 import { EnvError, envWarnings, proxyFromEnv, runArgvWithEnv } from './env';
 import { schedule, SCHEDULE_USAGE } from './schedule';
+import { allSites, sites, SITES_USAGE } from './sites-command';
+import { PresetStore, planFor } from '@disco-lurk/server';
 import { serve } from './serve';
 import { BUILTIN_SITES, findSite } from './sites';
 import {
@@ -24,7 +26,10 @@ import {
   interactionLine,
   newSeed,
   parseLoginArgs,
+  parsePresetRunArgs,
+  parseProfileId,
   parseRunArgs,
+  presetArg,
   profileIdOf,
   resolveCategories,
   siteCategories,
@@ -44,7 +49,9 @@ Usage:
            [--like [--like-rate <%>] [--reply-like-rate <%>] [--max-reply-likes <n≤4>]]
            [--reply --i-understand-auto-reply-risk [--reply-rate <%>]]
            [--extra-wait <min>-<max>|off] [--experiments useNewList,useUnreadList,refreshCategories,smartRanked]
+  lurk run --preset <id> [--profile <name>] [--headed|--headless] [--channel chrome|msedge] [--json]
 ${SCHEDULE_USAGE}
+${SITES_USAGE}
   lurk doctor [--json] [--port <n>] [--network]
   lurk serve [--host 127.0.0.1] [--port 8080] [--headless] [--origin <url>]... [--trusted-proxy <ip>]... [--ui <dir>] [--data <dir>]
              (remote web UI; a non-loopback --host requires LURK_TOKEN)
@@ -201,13 +208,47 @@ async function run(argv: string[]): Promise<number> {
   return exitCodeFor(result);
 }
 
+/** `lurk run --preset <id>`: a preset saved in the UI, run from the command line. */
+async function runPreset(argv: string[]): Promise<number> {
+  const args = parsePresetRunArgs(argv);
+  for (const line of envWarnings(process.env)) console.error(`warning: ${line}`);
+  const presets = new PresetStore(join(appDataDir(), 'presets.json'));
+  await presets.load();
+  const preset = presets.get(args.presetId);
+  if (!preset) throw new UsageError(`No preset ${args.presetId}; presets are saved on the UI's run page (${presets.list().map((p) => p.id).join(', ') || 'none yet'})`);
+  const known = await allSites();
+  const site = known.find((s) => s.id === preset.siteId);
+  if (!site) throw new UsageError(`Preset ${preset.id} names unknown site ${preset.siteId}`);
+  const profile = args.profile ?? (preset.profileId ? parseProfileId(preset.profileId).name : 'default');
+  const { signal, exitSignal } = installStopHandlers(() => console.error('Stopping… (Ctrl+C again skips the final progress read)'));
+  const credentials = credentialsFromEnv(site);
+  const proxy = proxyFromEnv(process.env);
+  const env = cliEnv({ channel: args.channel, exitSignal, sites: known, ...(credentials ? { credentials } : {}), ...(proxy ? { proxy } : {}) });
+  const categories = resolveCategories(site, await siteCategories(site, env.categories), preset.categoryPaths);
+  const plan = planFor(
+    { ...preset, profileId: profileIdOf(site.id, profile), browserMode: args.browserMode ?? preset.browserMode },
+    categories,
+    newSeed(),
+    Date.now(),
+    (code, message) => console.error(`warning ${code}: ${message}`),
+  );
+  const reporter = createReporter(args.json, Date.now());
+  reporter.plan(plan, `${site.displayName} · preset ${preset.name} · Profile ${plan.profileId} · ${plan.browserMode} ${args.channel} · ${plan.preset.browseMode} · ${JSON.stringify(plan.preset.runMode)}`);
+  const result = await new DiscoLurkCoordinator(env).run(plan, signal, reporter.event);
+  reporter.result(result);
+  return exitCodeFor(result);
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
     case 'login':
       return login(rest);
     case 'run':
-      return run(runArgvWithEnv(rest, process.env));
+      // A preset carries its own site and options, so the LURK_* defaults for them stay out.
+      return presetArg(rest) !== null ? runPreset(rest) : run(runArgvWithEnv(rest, process.env));
+    case 'sites':
+      return sites(rest);
     case 'schedule':
       return schedule(rest);
     case 'doctor':

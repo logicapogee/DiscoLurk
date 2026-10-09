@@ -3,9 +3,11 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LOCK_FILE, processAlive } from '@disco-lurk/site-discourse';
+import { processAlive } from '@disco-lurk/config';
+import { LOCK_FILE } from '@disco-lurk/site-discourse';
 import { describe, expect, it } from 'vitest';
-import { exitOnCrash, parseServeArgs, runLogLine, serveToken } from './serve';
+import { exitOnCrash } from './lifecycle';
+import { parseServeArgs, runLogLine, serveToken } from './serve';
 import { reclaimProfiles } from './sidecar';
 
 const strong = 'abcdefghijklmnopqrstuvwxyz0123456789-_ABCDE';
@@ -50,6 +52,7 @@ describe('crashes in serve and sidecar', () => {
       const watch = exitOnCrash(
         { shutdown: async (r) => void reasons.push(r) },
         (m) => logs.push(m),
+        4,
         target,
         (code) => {
           exitCode = code;
@@ -89,7 +92,8 @@ describe.skipIf(process.platform === 'win32')('reclaiming Profiles a dead sideca
     const dead = spawnSync(process.execPath, ['-e', '0']).pid!;
     expect(processAlive(dead)).toBe(false);
     writeFileSync(join(stale, LOCK_FILE), JSON.stringify({ pid: dead, startedAt: 'x', runId: 'r' }));
-    writeFileSync(join(live, LOCK_FILE), JSON.stringify({ pid: process.pid, startedAt: 'x', runId: 'r' }));
+    // A live process other than this one: a lock naming this PID that it does not hold is stale.
+    writeFileSync(join(live, LOCK_FILE), JSON.stringify({ pid: process.ppid, startedAt: 'x', runId: 'r' }));
     // Stands in for the Chrome that the dead sidecar launched on that Profile.
     const browser = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', `--user-data-dir=${stale}`], { stdio: 'ignore' });
     const exited = new Promise((r) => browser.once('exit', r));

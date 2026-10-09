@@ -1,3 +1,6 @@
+/** Milliseconds as seconds rounded to one decimal, the precision reported for topic time. */
+export const toTenthsSeconds = (ms: number): number => Math.round(ms / 100) / 10;
+
 /** One acknowledged `POST /topics/timings`: the floors it reported and the topic time it carried. */
 export interface TimingsReceipt {
   topicId: string;
@@ -19,6 +22,6 @@ export class TimingsTally {
   }
 
   snapshot(): { posts: number; topicSeconds: number } {
-    return { posts: this.floors.size, topicSeconds: Math.round(this.topicMs / 100) / 10 };
+    return { posts: this.floors.size, topicSeconds: toTenthsSeconds(this.topicMs) };
   }
 }

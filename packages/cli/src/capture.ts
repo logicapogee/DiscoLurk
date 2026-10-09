@@ -65,11 +65,6 @@ export interface CaptureReport {
 const NARROW_WIDTHS = [880, 760];
 const BIG_TOPIC_REPLIES = 100;
 const MAX_LIST_TRIES = 10;
-/**
- * Reply-count cell of a list row; a capture-only aid for picking topics, not one of the production selectors.
- * The `gf-` cell is docofcard's theme, which replaces the stock columns.
- */
-const REPLIES_CELL = 'td.posts .number, td.num.posts span.number, .posts-map .number, .gf-stat-posts .gf-stat-number';
 
 export const CAPTURE_STEPS = ['categories', 'list', 'list-sorted', 'topic', 'progress', 'liked', 'login-form'] as const;
 
@@ -91,26 +86,7 @@ export function expandSteps(requested: string[]): Set<string> {
   return out;
 }
 
-/** `1.2k` style abbreviations from Discourse's number helper. */
-function abbreviated(raw: string): number | null {
-  const m = /([\d.,]+)\s*([kKmM万])?/.exec(raw.trim());
-  if (!m) return null;
-  const base = Number(m[1]!.replace(/,/g, ''));
-  const unit = m[2]?.toLowerCase();
-  return Math.round(base * (unit === 'k' ? 1_000 : unit === 'm' ? 1_000_000 : unit === '万' ? 10_000 : 1));
-}
-
-interface Row extends ListRow {
-  replies: number | null;
-}
-
-function rowsOf(html: string): Row[] {
-  const doc = parseDocument(html);
-  return parseTopicList(doc).map((r) => ({
-    ...r,
-    replies: abbreviated(doc.querySelector(rowSelector(r.id))?.querySelector(REPLIES_CELL)?.textContent ?? ''),
-  }));
-}
+const rowsOf = (html: string): ListRow[] => parseTopicList(parseDocument(html));
 
 /**
  * Development command behind `lurk capture`: with the user's own login in an app-owned
@@ -186,9 +162,9 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
         : categories;
 
     let listPath: string | null = null;
-    let big: Row | null = null;
+    let big: ListRow | null = null;
     await step('list', async () => {
-      let best: { path: string; html: string; score: number; rows: Row[] } | null = null;
+      let best: { path: string; html: string; score: number; rows: ListRow[] } | null = null;
       for (const c of listCandidates.slice(0, MAX_LIST_TRIES)) {
         if (best) await pause(2, 5);
         await page.goto(new URL(c.path, base).href, { waitUntil: 'domcontentloaded' });
@@ -274,7 +250,7 @@ export async function captureFixtures(opts: CaptureOptions): Promise<CaptureRepo
     const counter = () => page.content().then((html) => parseFloorCounter(parseDocument(html)));
 
     await step('topic', async () => {
-      const topic = big as Row | null;
+      const topic = big as ListRow | null;
       if (!topic) return { ok: false, note: `no topic with ≥${BIG_TOPIC_REPLIES} replies on the sorted list`, files: [] };
       if (!(await enter(topic.id))) return { ok: false, note: `clicked topic ${topic.id} but the topic URL / #post_1 never appeared`, files: [] };
       const files: string[] = [];

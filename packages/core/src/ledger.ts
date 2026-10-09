@@ -37,9 +37,16 @@ export function mergeVisit(previous: VisitRecord | undefined, outcome: VisitOutc
   return { ...outcome, failures: (previous?.failures ?? 0) + (failed ? 1 : 0) };
 }
 
-export class MemoryLedger implements VisitLedger {
-  readonly records = new Map<string, VisitRecord>();
-  saves = 0;
+/** A ledger held in memory; `onSave` is where a store persists it, and without one saving keeps nothing. */
+export class MapLedger implements VisitLedger {
+  readonly records: Map<string, VisitRecord>;
+
+  constructor(
+    records: Iterable<VisitRecord> = [],
+    private readonly onSave?: (records: VisitRecord[]) => Promise<void>,
+  ) {
+    this.records = new Map(Array.from(records, (r) => [r.topicId, r]));
+  }
 
   get(topicId: string): VisitRecord | undefined {
     return this.records.get(topicId);
@@ -50,7 +57,7 @@ export class MemoryLedger implements VisitLedger {
   }
 
   async save(): Promise<void> {
-    this.saves++;
+    await this.onSave?.([...this.records.values()]);
   }
 }
 

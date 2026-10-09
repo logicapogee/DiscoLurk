@@ -16,7 +16,7 @@ import {
 import type { LevelSnapshot, MetricKey } from './metrics';
 import type { LedgerStore, VisitLedger } from './ledger';
 import { mergeDiscoveredCategories } from './plan';
-import { TimingsTally, type TimingsReceipt } from './timings';
+import { TimingsTally, toTenthsSeconds, type TimingsReceipt } from './timings';
 import type { AuthMode, AuthResult, AuthSession, ForumPort, RunCoordinator } from './ports';
 import { isAbortError, seededRandom, throwIfAborted, type RuntimeDeps } from './runtime';
 import type { BrowserMode, Category, Profile, ProfileHealth, ProfileId, RunPlanSnapshot, Site, SiteId } from './terms';
@@ -132,10 +132,11 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     let stats: RunStats = emptyStats();
     const levels: RunResult['levels'] = { initial: null, final: null };
     const tally = new TimingsTally();
-    const visits: { ledger: VisitLedger | null } = { ledger: null };
+    // Asserted rather than annotated: it is assigned inside `body`, so narrowing to the initial null must not stick.
+    let ledger = null as VisitLedger | null;
     const onTimings = (receipt: TimingsReceipt) => {
       tally.add(receipt);
-      emit({ type: 'timings', at: at(), postsReported: receipt.postNumbers.length, topicSeconds: Math.round(receipt.topicMs / 100) / 10 });
+      emit({ type: 'timings', at: at(), postsReported: receipt.postNumbers.length, topicSeconds: toTenthsSeconds(receipt.topicMs) });
     };
 
     const end = (outcome: RunOutcome, stopCause: StopCause, failure?: RunFailure): RunResult => ({
@@ -253,10 +254,10 @@ export class DiscoLurkCoordinator implements RunCoordinator {
           runSite.categorySource === 'builtin' && plan.preset.experiments.refreshCategories
             ? await this.refreshBuiltinPaths(plan.preset.categories, forum, live, warn)
             : plan.preset.categories;
-        visits.ledger = await this.openLedger(plan.profileId, warn);
+        ledger = await this.openLedger(plan.profileId, warn);
 
         state('browsing');
-        const out = await browse({ plan, forum, deps, signal: live, emit, categories, timings: tally, ...(visits.ledger ? { ledger: visits.ledger } : {}) });
+        const out = await browse({ plan, forum, deps, signal: live, emit, categories, timings: tally, ...(ledger ? { ledger } : {}) });
         stats = out.stats;
         switch (out.end) {
           case 'target-reached':
@@ -280,9 +281,9 @@ export class DiscoLurkCoordinator implements RunCoordinator {
     } finally {
       await session.close();
     }
-    if (visits.ledger) {
+    if (ledger) {
       try {
-        await visits.ledger.save();
+        await ledger.save();
       } catch (err) {
         warn('ledger-save-failed', toFailure(err).message);
       }

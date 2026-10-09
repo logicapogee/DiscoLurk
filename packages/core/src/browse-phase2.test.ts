@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { browse } from './browse';
 import type { RunEvent } from './events';
-import { MemoryLedger, rankTopics, topicScore } from './ledger';
+import { MapLedger, rankTopics, topicScore } from './ledger';
 import type { ActionPolicy, ActionReport, ReadVerification } from './ports';
 import { seededRandom } from './runtime';
 import { FixtureForum, fixtureSite, VirtualTime, type FixtureForumOptions } from './testing';
@@ -44,7 +44,7 @@ function plan(runMode: RunMode, o: PlanOpts = {}): RunPlanSnapshot {
 const unreadRows = (n: number) => (path: string, call: number): TopicCandidate[] =>
   Array.from({ length: n }, (_, i) => ({ id: `${path}#${call}#${i}`, title: 't', unread: true, pinned: false }));
 
-function run(p: RunPlanSnapshot, forumOpts: Partial<Omit<FixtureForumOptions, 'site' | 'sleeper'>> = {}, extra: { tally?: TimingsTally; ledger?: MemoryLedger } = {}) {
+function run(p: RunPlanSnapshot, forumOpts: Partial<Omit<FixtureForumOptions, 'site' | 'sleeper'>> = {}, extra: { tally?: TimingsTally; ledger?: MapLedger } = {}) {
   const time = new VirtualTime();
   const forum = new FixtureForum({ site, sleeper: time.sleeper, topics: unreadRows(4), ...forumOpts });
   if (extra.tally) forum.onTimings = (r) => extra.tally!.add(r);
@@ -273,7 +273,7 @@ describe('experiments stay off by default (§7.2)', () => {
   });
 
   it('smartRanked takes the best scored candidates from the ledger', async () => {
-    const ledger = new MemoryLedger();
+    const ledger = new MapLedger();
     const now = Date.UTC(2026, 9, 8);
     const rows: TopicCandidate[] = [
       { id: 'fresh', title: '', unread: true, pinned: false, replies: 200 },
@@ -291,7 +291,7 @@ describe('experiments stay off by default (§7.2)', () => {
 
 describe('visit ledger (§7.2)', () => {
   it('records every visit, entered or not, with floors and verification', async () => {
-    const ledger = new MemoryLedger();
+    const ledger = new MapLedger();
     let clicks = 0;
     const t = run(plan({ kind: 'topics', count: 2 }), { enters: () => clicks++ > 0, floors: () => [4, 6] }, { ledger });
     await t.go();

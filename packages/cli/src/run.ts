@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import { FileCategoryStore, FileLedgerStore, validateReplyTemplates } from '@disco-lurk/config';
 import {
+  EXPERIMENTS_OFF,
   isAbortError,
   reportedTopicsShortfall,
   resolveRunMode,
@@ -151,10 +152,10 @@ export function parseExtraWait(raw: string | undefined): WaitRange & { enabled: 
   return { enabled: true, minSec: Number(m[1]), maxSec: Number(m[2]) };
 }
 
-const EXPERIMENT_NAMES = ['useNewList', 'useUnreadList', 'refreshCategories', 'smartRanked'] as const satisfies ReadonlyArray<keyof ExperimentFlags>;
+const EXPERIMENT_NAMES = Object.keys(EXPERIMENTS_OFF) as Array<keyof ExperimentFlags>;
 
 export function parseExperiments(raw: string | undefined): ExperimentFlags {
-  const flags: ExperimentFlags = { useNewList: false, useUnreadList: false, refreshCategories: false, smartRanked: false };
+  const flags: ExperimentFlags = { ...EXPERIMENTS_OFF };
   for (const name of (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
     const known = EXPERIMENT_NAMES.find((n) => n === name);
     if (!known) throw new UsageError(`Unknown experiment ${name}; known: ${EXPERIMENT_NAMES.join(', ')}`);

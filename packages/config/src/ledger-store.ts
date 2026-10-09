@@ -1,24 +1,28 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { mergeVisit, type LedgerStore, type ProfileId, type VisitLedger, type VisitOutcome, type VisitRecord } from '@disco-lurk/core';
+import { MapLedger, type LedgerStore, type ProfileId, type VisitLedger, type VisitRecord } from '@disco-lurk/core';
 import { z } from 'zod';
 import { writeJsonAtomic } from './category-store';
 
-const recordSchema = z.object({
-  topicId: z.string(),
-  lastVisitAt: z.string(),
-  entered: z.boolean(),
-  floors: z.object({ from: z.number(), to: z.number() }).optional(),
-  verification: z.enum(['confirmed', 'still-unread', 'indeterminate', 'not-applicable']).optional(),
-  failure: z.string().optional(),
-  failures: z.number().int().nonnegative(),
-});
+const recordSchema = z
+  .object({
+    topicId: z.string(),
+    lastVisitAt: z.string(),
+    entered: z.boolean(),
+    floors: z.object({ from: z.number(), to: z.number() }).strict().optional(),
+    verification: z.enum(['confirmed', 'still-unread', 'indeterminate', 'not-applicable']).optional(),
+    failure: z.string().optional(),
+    failures: z.number().int().nonnegative(),
+  })
+  .strict();
 
-const fileSchema = z.object({
-  schemaVersion: z.literal(1),
-  profileId: z.string(),
-  records: z.array(recordSchema),
-});
+const fileSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string(),
+    records: z.array(recordSchema),
+  })
+  .strict();
 
 export const LEDGER_RETENTION_DAYS = 30;
 
@@ -45,26 +49,16 @@ export class FileLedgerStore implements LedgerStore {
     try {
       const parsed = fileSchema.safeParse(JSON.parse(await readFile(path, 'utf8')));
       if (!parsed.success || parsed.data.profileId !== profileId) throw new Error(`${path} is not a valid visit ledger for ${profileId}; fix or delete it`);
-      records = parsed.data.records.map(({ floors, verification, failure, ...rest }) => ({
-        ...rest,
-        ...(floors ? { floors } : {}),
-        ...(verification ? { verification } : {}),
-        ...(failure !== undefined ? { failure } : {}),
-      }));
+      // The strict schema admits exactly the fields of a VisitRecord.
+      records = parsed.data.records as VisitRecord[];
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
-    const cutoff = () => this.now() - this.retentionDays * 86_400_000;
-    const map = new Map(records.filter((r) => Date.parse(r.lastVisitAt) >= cutoff()).map((r) => [r.topicId, r]));
-    return {
-      get: (topicId) => map.get(topicId),
-      record: (outcome: VisitOutcome) => {
-        map.set(outcome.topicId, mergeVisit(map.get(outcome.topicId), outcome));
-      },
-      save: () => {
-        const kept = [...map.values()].filter((r) => Date.parse(r.lastVisitAt) >= cutoff());
-        return writeJsonAtomic(path, { schemaVersion: 1, profileId, records: kept });
-      },
-    };
+    return new MapLedger(this.recent(records), (all) => writeJsonAtomic(path, { schemaVersion: 1, profileId, records: this.recent(all) }));
+  }
+
+  private recent(records: readonly VisitRecord[]): VisitRecord[] {
+    const cutoff = this.now() - this.retentionDays * 86_400_000;
+    return records.filter((r) => Date.parse(r.lastVisitAt) >= cutoff);
   }
 }

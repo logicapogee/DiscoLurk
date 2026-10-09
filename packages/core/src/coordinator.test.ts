@@ -3,7 +3,7 @@ import { DiscoLurkCoordinator, reportedMetrics, type CategoryStore, type Coordin
 import { RunError, stopRequest, type RunEvent, type RunState } from './events';
 import type { LevelSnapshot } from './metrics';
 import type { AuthMode, AuthResult } from './ports';
-import { MemoryLedger } from './ledger';
+import { MapLedger } from './ledger';
 import { FixtureForum, fixtureSite, VirtualTime, type FixtureForumOptions } from './testing';
 import { EXPERIMENTS_OFF, type BrowserMode, type Category, type RunMode, type RunPlanSnapshot, type Site, type TopicCandidate } from './terms';
 
@@ -671,13 +671,14 @@ describe('TIMINGS-001 read receipts from /topics/timings (I7)', () => {
 
 describe('visit ledger through the coordinator (§7.2)', () => {
   it('opens the Profile ledger before browsing and saves it after the browser closed', async () => {
-    const ledger = new MemoryLedger();
+    let saves = 0;
+    const ledger = new MapLedger([], async () => void saves++);
     const opened: string[] = [];
     const t = setup({ ledgers: { open: async (id) => (opened.push(id), ledger) } });
     await t.run(plan({ kind: 'topics', count: 2 }));
     expect(opened).toEqual(['fixture/main']);
     expect(ledger.records.size).toBeGreaterThanOrEqual(2);
-    expect(ledger.saves).toBe(1);
+    expect(saves).toBe(1);
   });
 
   it('runs without remembering visits when the ledger cannot be opened', async () => {

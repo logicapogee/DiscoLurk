@@ -1,12 +1,15 @@
 name: CI
 
+# Also called by build.yml, so a release builds only from a tree that passes the same checks.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
+# A called workflow inherits the caller's github context, so the group names the calling workflow too.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -18,5 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+      - name: Tag matches the app version
+        if: github.ref_type == 'tag'
+        run: node .github/scripts/check-version.ts "$GITHUB_REF_NAME"
       - run: pnpm vitest run
       - run: pnpm typecheck

@@ -17,15 +17,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-      - name: Tag matches the app version
-        if: github.ref_type == 'tag'
-        run: node .github/scripts/check-version.ts "$GITHUB_REF_NAME"
-      - run: pnpm vitest run
-      - run: pnpm typecheck
+    uses: ./.github/workflows/ci.yml
 
   build:
     name: ${{ matrix.name }}

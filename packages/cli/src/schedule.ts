@@ -71,7 +71,7 @@ export interface HostOptions {
   displayAvailable(): boolean;
   presets(): RunPreset[];
   categories: CategoryCache;
-  emit(event: RunEvent): void;
+  emit(event: RunEvent, runId: RunId): void;
   log(message: string): void;
 }
 
@@ -117,9 +117,10 @@ export class SchedulerHost {
         const stop = new AbortController();
         opts.log(`run ${runId} (${cause}) for ${plan.profileId}: ${plan.preset.browseMode}, ${JSON.stringify(plan.preset.runMode)}`);
         const done = new DiscoLurkCoordinator(env)
-          .run(plan, stop.signal, opts.emit)
+          .run(plan, stop.signal, (e) => opts.emit(e, runId))
           .then(async (result) => {
-            opts.log(`run ${runId} ended: ${result.outcome} (${result.stopCause})${result.failure ? ` ${result.failure.code}` : ''}`);
+            const c = result.stats.confirmed;
+            opts.log(`run ${runId} ended: ${result.outcome} (${result.stopCause})${result.failure ? ` ${result.failure.code}` : ''}, confirmed ${c.topics} topics / ${c.floors} floors`);
             await this.scheduler.finish(runId, result);
             return result;
           })

@@ -10,17 +10,24 @@ import { DEEP, QUICK, readFloors, type FloorSurface } from './reading';
  */
 function topic(
   time: VirtualTime,
-  opts: { total: number; pxPerFloor?: number; renderAfterMs?: number; frozen?: boolean; counter?: boolean; posts?: number; floorEvery?: number },
+  opts: { total: number; pxPerFloor?: number; renderAfterMs?: number; frozen?: boolean; counter?: boolean; posts?: number; floorEvery?: number; screenFloors?: number },
 ) {
   let offset = 0;
   const scrolls: number[] = [];
+  const top = () => {
+    const climbed = opts.floorEvery ? Math.floor(scrolls.length / opts.floorEvery) : Math.floor(offset / (opts.pxPerFloor ?? 300));
+    return opts.frozen ? 1 : Math.min(opts.total, 1 + climbed);
+  };
   const surface: FloorSurface = {
     async whenVisible() {},
     async readCounter(): Promise<FloorReading | null> {
       if (opts.counter === false || time.clock.monotonic() < (opts.renderAfterMs ?? 0)) return null;
-      const climbed = opts.floorEvery ? Math.floor(scrolls.length / opts.floorEvery) : Math.floor(offset / (opts.pxPerFloor ?? 300));
-      const current = opts.frozen ? 1 : Math.min(opts.total, 1 + climbed);
-      return { layout: 'wide', current, total: opts.total };
+      return { layout: 'wide', current: top(), total: opts.total };
+    },
+    async floorsOnScreen() {
+      const first = top();
+      const last = Math.min(opts.total, first + (opts.screenFloors ?? 3) - 1);
+      return Array.from({ length: last - first + 1 }, (_, i) => first + i);
     },
     async countPosts() {
       return opts.posts ?? 0;
@@ -115,6 +122,8 @@ describe('FLOOR-003 stuck counter (F04)', () => {
       },
       async scroll() {
         scrolled++;
+      },      async floorsOnScreen() {
+        return [];
       },
     };
     const out = await read(time, surface, strategy('deep').s);
@@ -199,6 +208,28 @@ describe('QUICK-001 quick reading (Q01–Q03)', () => {
     }
   });
 
+  it('ends a topic with fewer floors than the goal once its last floor is on screen', async () => {
+    const time = new VirtualTime();
+    const { surface, scrolls } = topic(time, { total: 4, frozen: true, screenFloors: 4 });
+    await read(time, surface, strategy('quick', Infinity, { min: 10, max: 10 }).s);
+    expect(scrolls).toHaveLength(0);
+  });
+
+  it('scrolls a short topic only until its last floor comes on screen', async () => {
+    const time = new VirtualTime();
+    const { surface, scrolls } = topic(time, { total: 6, pxPerFloor: 500, screenFloors: 3 });
+    await read(time, surface, strategy('quick', Infinity, { min: 10, max: 10 }).s);
+    expect(scrolls.length).toBeLessThanOrEqual(5);
+    expect(scrolls.length).toBeLessThan(5 * QUICK.scrollsPerFloor);
+  });
+
+  it('reads a topic already at its last floor without scrolling', async () => {
+    const time = new VirtualTime();
+    const { surface, scrolls } = topic(time, { total: 1 });
+    await read(time, surface, strategy('quick').s);
+    expect(scrolls).toHaveLength(0);
+  });
+
   it('gives up after two scrolls per goal floor with 400–800 px steps', async () => {
     const time = new VirtualTime();
     const { surface, scrolls } = topic(time, { total: 200, frozen: true });
@@ -209,18 +240,27 @@ describe('QUICK-001 quick reading (Q01–Q03)', () => {
 });
 
 describe('QUICK-002 quick without a counter (Q04)', () => {
-  it('blind-scrolls at most 3 times and credits one estimated floor, not one per scroll', async () => {
+  it('blind-scrolls at most 3 times and credits the rendered posts once, not once per scroll', async () => {
     const time = new VirtualTime();
-    const { surface, scrolls } = topic(time, { total: 1, counter: false });
+    const { surface, scrolls } = topic(time, { total: 5, counter: false, posts: 5 });
     const { s, advances } = strategy('quick');
     await read(time, surface, s);
     expect(scrolls).toHaveLength(QUICK.blindScrolls);
+    expect(advances).toEqual([{ from: 0, to: 5, confirmed: false }]);
+  });
+
+  it('reads a one-floor topic without scrolling and credits one estimated floor', async () => {
+    const time = new VirtualTime();
+    const { surface, scrolls } = topic(time, { total: 1, counter: false, posts: 1 });
+    const { s, advances } = strategy('quick');
+    await read(time, surface, s);
+    expect(scrolls).toHaveLength(0);
     expect(advances).toEqual([{ from: 0, to: 1, confirmed: false }]);
   });
 
   it('a stop interrupts blind scrolling at once', async () => {
     const time = new VirtualTime();
-    const { surface, scrolls } = topic(time, { total: 50, counter: false });
+    const { surface, scrolls } = topic(time, { total: 50, counter: false, posts: 20 });
     const controller = new AbortController();
     time.at(7_000, () => controller.abort());
     await expect(read(time, surface, strategy('quick').s, controller.signal)).rejects.toThrow(/abort/i);

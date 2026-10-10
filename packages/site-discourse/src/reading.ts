@@ -9,6 +9,8 @@ export interface FloorSurface {
   /** Rendered posts on the page; 0 when none can be counted. */
   countPosts(): Promise<number>;
   scroll(dy: number, signal: AbortSignal): Promise<void>;
+  /** Floor numbers of the posts at least partly on screen. */
+  floorsOnScreen(): Promise<number[]>;
 }
 
 /** Every value is a field-tested default, not a tuning knob. */
@@ -107,17 +109,28 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
 
   if (strategy.browseMode === 'quick') {
     if (!first) {
-      for (let i = 0; i < QUICK.blindScrolls; i++) {
+      // A one-floor topic renders no counter and has nothing below its first post.
+      const blindScrolls = (await surface.countPosts()) > 1 ? QUICK.blindScrolls : 0;
+      if (blindScrolls === 0) await dwell(QUICK.dwellSec);
+      for (let i = 0; i < blindScrolls; i++) {
         await dwell(QUICK.dwellSec);
         await scroll(px(QUICK.stepPx));
       }
       await estimateFromPosts();
       return t.result;
     }
-    const goal = randomInt(deps.random, strategy.quickFloors.min, strategy.quickFloors.max);
+    const goal = Math.min(randomInt(deps.random, strategy.quickFloors.min, strategy.quickFloors.max), first.total - first.current);
+    if (goal <= 0) {
+      await dwell(QUICK.dwellSec);
+      return t.result;
+    }
+    // The counter names the floor at the top of the screen, so it stays below the total once the last floors fit
+    // on screen together; the last floor being on screen is what marks the end of the topic.
+    const lastFloorShown = async () => (await surface.floorsOnScreen()).includes(first.total);
     const maxScrolls = goal * QUICK.scrollsPerFloor;
     while (t.result.scrolls < maxScrolls) {
       await dwell(QUICK.dwellSec);
+      if (await lastFloorShown()) break;
       await scroll(px(QUICK.stepPx));
       await sleep(QUICK.settleMs);
       const r = await surface.readCounter();

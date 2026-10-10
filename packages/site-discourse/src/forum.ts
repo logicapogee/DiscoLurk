@@ -205,6 +205,10 @@ class PageFloorSurface implements FloorSurface {
     return this.page.count(TOPIC_POST).catch(fallbackUnlessUnexpected(0));
   }
 
+  floorsOnScreen(): Promise<number[]> {
+    return this.page.postsInViewport().catch(fallbackUnlessUnexpected([]));
+  }
+
   async scroll(dy: number, signal: AbortSignal): Promise<void> {
     // Real wheel input over the post stream: Discourse's screen tracker pauses when it sees no scroll events.
     if (!this.pointed) {

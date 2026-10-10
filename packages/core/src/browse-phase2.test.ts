@@ -37,6 +37,7 @@ function plan(runMode: RunMode, o: PlanOpts = {}): RunPlanSnapshot {
       interaction: o.interaction ?? OFF,
       extraWait: { enabled: o.extraWait ?? true, minSec: 1, maxSec: 3 },
       samplePerCategory: { min: 3, max: 8 },
+      quickFloors: { min: 3, max: 5 },
       experiments: o.experiments ?? { ...EXPERIMENTS_OFF },
     },
   };

@@ -1,5 +1,5 @@
 import { randomInt, type RandomSource } from './runtime';
-import { EXPERIMENTS_OFF, MAX_REPLY_LIKES, type Category, type InteractionPolicy, type ResolvedPreset, type RunMode, type RunModeSpec, type RunPreset } from './terms';
+import { DEFAULT_QUICK_FLOORS, EXPERIMENTS_OFF, MAX_REPLY_LIKES, type Category, type InteractionPolicy, type ResolvedPreset, type RunMode, type RunModeSpec, type RunPreset } from './terms';
 
 /** Fixes a run mode's random range, so the snapshot states exactly what will run. */
 function resolveRunMode(spec: RunModeSpec, random: RandomSource): RunMode {
@@ -30,6 +30,7 @@ export function resolvePreset(preset: RunPreset, categories: readonly Category[]
     interaction: boundInteraction(preset.interaction, warn),
     extraWait: preset.extraWait,
     samplePerCategory: preset.samplePerCategory,
+    quickFloors: preset.quickFloors ?? DEFAULT_QUICK_FLOORS,
     experiments: preset.experiments ?? EXPERIMENTS_OFF,
   });
 }

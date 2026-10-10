@@ -1,6 +1,6 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ERROR_CODES, type RunPreset, type ScheduleSpec } from '@disco-lurk/core';
+import { DEFAULT_QUICK_FLOORS, ERROR_CODES, type RunPreset, type ScheduleSpec } from '@disco-lurk/core';
 import { PlanScheduler, validateTrigger, type SchedulerDeps, type SchedulerState, type ScheduleStore } from '@disco-lurk/scheduler';
 import { z } from 'zod';
 import { ConfigFileError, JsonFile, readJson } from './json-file';
@@ -125,6 +125,7 @@ const snapshotSchema = z
         interaction: interactionSchema,
         extraWait: extraWaitSchema,
         samplePerCategory: sampleSchema,
+        quickFloors: sampleSchema.default(() => ({ ...DEFAULT_QUICK_FLOORS })),
         experiments: experimentsSchema.optional(),
       })
       .strict(),

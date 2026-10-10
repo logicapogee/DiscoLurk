@@ -101,6 +101,7 @@ export function buildScheduleFromArgs(argv: readonly string[], known: (siteId: S
     interaction: run.interaction,
     extraWait: run.extraWait,
     samplePerCategory: { ...DEFAULT_SAMPLE },
+    quickFloors: run.quickFloors,
     experiments: run.experiments,
   };
   return { spec, preset };

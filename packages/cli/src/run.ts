@@ -3,6 +3,7 @@ import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import { FileCategoryStore, FileLedgerStore, validateReplyTemplates } from '@disco-lurk/config';
 import {
   DEFAULT_EXTRA_WAIT,
+  DEFAULT_QUICK_FLOORS,
   DEFAULT_INTERACTION,
   DEFAULT_RUN_MODE,
   DEFAULT_SAMPLE,
@@ -121,6 +122,7 @@ interface RunArgs extends LoginArgs {
   json: boolean;
   interaction: InteractionPolicy;
   extraWait: WaitRange & { enabled: boolean };
+  quickFloors: { min: number; max: number };
   experiments: ExperimentFlags;
   /** Options that were given but have no effect as combined, for stderr. */
   usageWarnings: string[];
@@ -162,6 +164,16 @@ function parseExtraWait(raw: string | undefined): WaitRange & { enabled: boolean
   return { enabled: true, minSec: Number(m[1]), maxSec: Number(m[2]) };
 }
 
+/** `--quick-floors <n>` or `<min>-<max>`. */
+function parseQuickFloors(raw: string | undefined): { min: number; max: number } {
+  if (raw === undefined) return { ...DEFAULT_QUICK_FLOORS };
+  const m = /^(\d+)(?:-(\d+))?$/.exec(raw);
+  const min = Number(m?.[1]);
+  const max = Number(m?.[2] ?? m?.[1]);
+  if (!m || min < 1 || min > max || max > LIMITS.quickFloors) throw new UsageError(`--quick-floors must be <n> or <min>-<max>, from 1 to ${LIMITS.quickFloors}`);
+  return { min, max };
+}
+
 const EXPERIMENT_NAMES = Object.keys(EXPERIMENTS_OFF) as Array<keyof ExperimentFlags>;
 
 function parseExperiments(raw: string | undefined): ExperimentFlags {
@@ -191,6 +203,7 @@ export function parseRunArgs(argv: string[]): RunArgs {
     'reply-rate': { type: 'string' },
     [REPLY_RISK_FLAG]: { type: 'boolean', default: false },
     'extra-wait': { type: 'string' },
+    'quick-floors': { type: 'string' },
     experiments: { type: 'string' },
   });
   if (v.headed && v.headless) throw new UsageError('--headed and --headless exclude each other');
@@ -200,6 +213,7 @@ export function parseRunArgs(argv: string[]): RunArgs {
   const usageWarnings: string[] = [];
   const likeOptions = (['like-rate', 'reply-like-rate', 'max-reply-likes'] as const).filter((f) => v[f] !== undefined);
   if (!v.like && likeOptions.length > 0) usageWarnings.push(`${likeOptions.map((f) => `--${f}`).join(', ')} take effect only with --like`);
+  if (v['browse-mode'] !== 'quick' && v['quick-floors'] !== undefined) usageWarnings.push('--quick-floors takes effect only with --browse-mode quick');
   if (!v.reply && v['reply-rate'] !== undefined) usageWarnings.push('--reply-rate takes effect only with --reply');
   if (!v.reply && v[REPLY_RISK_FLAG]) usageWarnings.push(`--${REPLY_RISK_FLAG} takes effect only with --reply`);
   let maxReplies = parseCount(v['max-reply-likes'], 'max-reply-likes', d.like.maxReplies);
@@ -224,6 +238,7 @@ export function parseRunArgs(argv: string[]): RunArgs {
       reply: { enabled: v.reply, rate: parsePercent(v['reply-rate'], 'reply-rate', d.reply.rate), riskAcknowledged: v[REPLY_RISK_FLAG] },
     },
     extraWait: parseExtraWait(v['extra-wait']),
+    quickFloors: parseQuickFloors(v['quick-floors']),
     experiments: parseExperiments(v.experiments),
     usageWarnings,
   };
@@ -305,6 +320,7 @@ export function buildPlan(args: RunArgs, categories: Category[], seed: number, n
     interaction: args.interaction,
     extraWait: args.extraWait,
     samplePerCategory: { ...DEFAULT_SAMPLE },
+    quickFloors: args.quickFloors,
     experiments: args.experiments,
   };
   return {

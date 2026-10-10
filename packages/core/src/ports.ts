@@ -60,6 +60,8 @@ export interface FloorAdvance {
 
 export interface ReadStrategy {
   browseMode: BrowseMode;
+  /** Quick mode's per-topic floor goal is drawn from this range. */
+  quickFloors: { min: number; max: number };
   /**
    * Called on every floor change. Returning `'stop'` ends the topic: the target was reached,
    * so further scrolling and interaction must not happen.

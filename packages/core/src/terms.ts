@@ -89,6 +89,7 @@ export const MAX_REPLY_LIKES = 4;
 export const LIMITS = Object.freeze({
   extraWaitSec: 60,
   samplePerCategory: 50,
+  quickFloors: 50,
   /** Topic targets; far beyond any day's browsing. */
   topicsTarget: 10_000,
   runsPerDay: 24,
@@ -138,6 +139,9 @@ export const DEFAULT_EXTRA_WAIT: Readonly<WaitRange & { enabled: boolean }> = Ob
 
 export const DEFAULT_SAMPLE: Readonly<{ min: number; max: number }> = Object.freeze({ min: 3, max: 8 });
 
+/** Floors quick mode reads past the one it enters on, drawn per topic. */
+export const DEFAULT_QUICK_FLOORS: Readonly<{ min: number; max: number }> = Object.freeze({ min: 3, max: 5 });
+
 /** Runs end by themselves unless `endless` is chosen explicitly. */
 export const DEFAULT_RUN_MODE: Readonly<RunModeSpec> = Object.freeze({ kind: 'topics', min: 15, max: 40 });
 
@@ -151,6 +155,8 @@ export interface RunPreset {
   interaction: InteractionPolicy;
   extraWait: WaitRange & { enabled: boolean };
   samplePerCategory: { min: number; max: number };
+  /** Absent means `DEFAULT_QUICK_FLOORS`. */
+  quickFloors?: { min: number; max: number };
   /** Absent means every experiment is off. */
   experiments?: ExperimentFlags;
 }
@@ -163,6 +169,7 @@ export interface ResolvedPreset {
   interaction: InteractionPolicy;
   extraWait: WaitRange & { enabled: boolean };
   samplePerCategory: { min: number; max: number };
+  quickFloors: { min: number; max: number };
   experiments: ExperimentFlags;
 }
 

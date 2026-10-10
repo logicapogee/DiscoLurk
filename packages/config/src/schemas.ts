@@ -82,6 +82,7 @@ export const runPresetSchema = z
     interaction: interactionSchema,
     extraWait: extraWaitSchema,
     samplePerCategory: sampleSchema,
+    quickFloors: sampleSchema.exactOptional(),
     experiments: experimentsSchema.exactOptional(),
   })
   .strict();

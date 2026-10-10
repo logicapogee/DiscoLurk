@@ -36,6 +36,7 @@ const storedPresetSchema = runPresetSchema
     cap(ctx, p.interaction.like.maxReplies, MAX_REPLY_LIKES, ['interaction', 'like', 'maxReplies']);
     cap(ctx, p.extraWait.maxSec, LIMITS.extraWaitSec, ['extraWait', 'maxSec']);
     cap(ctx, p.samplePerCategory.max, LIMITS.samplePerCategory, ['samplePerCategory', 'max']);
+    if (p.quickFloors) cap(ctx, p.quickFloors.max, LIMITS.quickFloors, ['quickFloors', 'max']);
     if (p.runMode.kind === 'topics') cap(ctx, p.runMode.max, LIMITS.topicsTarget, ['runMode', 'max']);
     if (p.runMode.kind === 'time') cap(ctx, p.runMode.minutes, LIMITS.timeModeMax, ['runMode', 'minutes']);
   });

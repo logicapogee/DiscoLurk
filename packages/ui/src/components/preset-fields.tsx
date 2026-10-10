@@ -96,3 +96,11 @@ export function SampleField(props: { value: StoredPreset['samplePerCategory']; o
     </Field>
   );
 }
+
+export function QuickFloorsField(props: { value: { min: number; max: number }; onChange(f: { min: number; max: number }): void }) {
+  return (
+    <label>
+      {copy.run.quickFloors} <RangeInput label={copy.run.quickFloors} value={props.value} lo={1} hi={LIMITS.quickFloors} onChange={props.onChange} />
+    </label>
+  );
+}

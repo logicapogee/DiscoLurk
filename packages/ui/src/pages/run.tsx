@@ -1,9 +1,9 @@
-import type { BrowseMode, BrowserMode } from '@disco-lurk/core';
+import { DEFAULT_QUICK_FLOORS, type BrowseMode, type BrowserMode } from '@disco-lurk/core';
 import type { ActiveRun, StoredPreset } from '@disco-lurk/server/contract';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Field, Notice, Segmented, Select } from '../components/fields';
 import { LogPanel } from '../components/log';
-import { ExtraWaitField, InteractionField, RunModeField, SampleField } from '../components/preset-fields';
+import { ExtraWaitField, InteractionField, QuickFloorsField, RunModeField, SampleField } from '../components/preset-fields';
 import { LevelTable, StatsPanel } from '../components/stats';
 import { apiMessage, attempt, copy, errorText, type Message } from '../copy';
 import { duration, remainingText, runModeSpecText, runModeText } from '../format';
@@ -225,6 +225,11 @@ export function RunPage() {
             <RunModeField value={draft.runMode} browseMode={draft.browseMode} onChange={(runMode) => update({ runMode })} />
             <Field label={copy.run.browseMode}>
               <Segmented label={copy.run.browseMode} value={draft.browseMode} options={(['deep', 'quick'] as BrowseMode[]).map((m) => ({ value: m, label: copy.run.browseModes[m] }))} onChange={(browseMode) => update({ browseMode })} />
+              {draft.browseMode === 'quick' && (
+                <div class="sub">
+                  <QuickFloorsField value={draft.quickFloors ?? DEFAULT_QUICK_FLOORS} onChange={(quickFloors) => update({ quickFloors })} />
+                </div>
+              )}
             </Field>
             <Field label={copy.run.interaction}>
               <InteractionField value={interaction} onChange={(i) => update({ interaction: i })} />

@@ -84,7 +84,7 @@ describe('lurk schedule list', () => {
       siteId: 'linuxdo',
       profileId: spec.profileId,
       browserMode: 'headless' as const,
-      preset: { ...preset, presetId: preset.id, runMode: { kind: 'topics' as const, count: 23 }, categories: known('linuxdo').slice(0, 2), experiments: EXPERIMENTS_OFF },
+      preset: { ...preset, presetId: preset.id, runMode: { kind: 'topics' as const, count: 23 }, categories: known('linuxdo').slice(0, 2), quickFloors: { min: 3, max: 5 }, experiments: EXPERIMENTS_OFF },
       seed: 1,
       plannedAt: '2026-10-09T08:00:00.000Z',
       materializedAt: '2026-10-08T08:00:00.000Z',

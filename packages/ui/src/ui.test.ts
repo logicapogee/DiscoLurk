@@ -72,7 +72,7 @@ function activeRun(over: Partial<ActiveRun> = {}): ActiveRun {
     seed: 1,
     plannedAt: new Date().toISOString(),
     materializedAt: new Date().toISOString(),
-    preset: { presetId: preset.id, browseMode: 'deep', runMode: { kind: 'endless' }, categories, interaction: preset.interaction, extraWait: preset.extraWait, samplePerCategory: preset.samplePerCategory, experiments: EXPERIMENTS_OFF },
+    preset: { presetId: preset.id, browseMode: 'deep', runMode: { kind: 'endless' }, categories, interaction: preset.interaction, extraWait: preset.extraWait, samplePerCategory: preset.samplePerCategory, quickFloors: { min: 3, max: 5 }, experiments: EXPERIMENTS_OFF },
   };
   return { runId: 'run-1', presetId: preset.id, presetName: preset.name, plan, startedAt: new Date().toISOString(), state: 'queued', stopping: false, ...over };
 }

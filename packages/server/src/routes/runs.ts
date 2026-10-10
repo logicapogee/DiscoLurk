@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { DEFAULT_INTERACTION, DEFAULT_RUN_MODE, type Category, type Site } from '@disco-lurk/core';
+import { DEFAULT_INTERACTION, DEFAULT_QUICK_FLOORS, DEFAULT_RUN_MODE, type Category, type Site } from '@disco-lurk/core';
 import type { PresetSave, Settings, StoredPreset } from '../contract';
 import { HttpError } from '../hub';
 import { exportLogSchema, parseBody, presetSaveSchema, startRunSchema } from '../schemas';
@@ -22,6 +22,7 @@ export function defaultPreset(site: Site, categories: readonly Category[], readi
     interaction: structuredClone(DEFAULT_INTERACTION),
     extraWait: structuredClone(reading.extraWait),
     samplePerCategory: structuredClone(reading.samplePerCategory),
+    quickFloors: { ...DEFAULT_QUICK_FLOORS },
   };
 }
 

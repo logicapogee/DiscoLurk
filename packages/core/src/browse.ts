@@ -178,6 +178,7 @@ async function read(ctx: BrowseContext, visit: TopicVisit): Promise<ReadResult |
       visit,
       {
         browseMode: ctx.preset.browseMode,
+        quickFloors: ctx.preset.quickFloors,
         onFloor: (advance) => {
           const delta = Math.max(0, advance.to - advance.from);
           stats.attempted.floors += delta;

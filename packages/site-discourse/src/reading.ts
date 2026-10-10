@@ -28,7 +28,8 @@ export const DEEP = {
   shortTopicFloors: 10,
 } as const;
 const TRADITIONAL = { durationSec: [8, 15], stepPx: [150, 400], intervalSec: { minSec: 1, maxSec: 3 } } as const;
-export const QUICK = { floors: [3, 5], dwellSec: { minSec: 1, maxSec: 2 }, stepPx: [400, 800], settleMs: 300, maxScrolls: 10, blindScrolls: 3 } as const;
+/** `scrollsPerFloor` bounds the scrolls a topic gets for its floor goal, so a stalled counter cannot scroll forever. */
+export const QUICK = { dwellSec: { minSec: 1, maxSec: 2 }, stepPx: [400, 800], settleMs: 300, scrollsPerFloor: 2, blindScrolls: 3 } as const;
 
 interface Tracker {
   result: ReadResult;
@@ -113,8 +114,9 @@ export async function readFloors(surface: FloorSurface, strategy: ReadStrategy, 
       await estimateFromPosts();
       return t.result;
     }
-    const goal = randomInt(deps.random, QUICK.floors[0], QUICK.floors[1]);
-    while (t.result.scrolls < QUICK.maxScrolls) {
+    const goal = randomInt(deps.random, strategy.quickFloors.min, strategy.quickFloors.max);
+    const maxScrolls = goal * QUICK.scrollsPerFloor;
+    while (t.result.scrolls < maxScrolls) {
       await dwell(QUICK.dwellSec);
       await scroll(px(QUICK.stepPx));
       await sleep(QUICK.settleMs);

@@ -419,6 +419,7 @@ describe('B10 password login keeps the credentials out of every report', () => {
         interaction: { like: { enabled: false, topicRate: 0, replyRate: 0, maxReplies: 0 }, reply: { enabled: false, rate: 0, riskAcknowledged: false } },
         extraWait: { enabled: false, minSec: 1, maxSec: 3 },
         samplePerCategory: { min: 1, max: 1 },
+        quickFloors: { min: 3, max: 5 },
         experiments: { useNewList: false, useUnreadList: false, refreshCategories: false, smartRanked: false },
       },
     } as const satisfies RunPlanSnapshot;
@@ -489,7 +490,7 @@ describe('VIS-001 a hidden headed window pauses reading (I6)', () => {
     const reading = new AbortController();
     const until = t.time.clock.monotonic() + 90_000;
     t.time.at(until, () => reading.abort());
-    await expect(t.time.drive(t.forum.readTopic(visit, { browseMode: 'deep', onFloor: () => 'continue' }, reading.signal))).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(t.time.drive(t.forum.readTopic(visit, { browseMode: 'deep', quickFloors: { min: 3, max: 5 }, onFloor: () => 'continue' }, reading.signal))).rejects.toMatchObject({ name: 'AbortError' });
     expect(t.time.clock.monotonic()).toBe(until);
   });
 

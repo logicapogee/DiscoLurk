@@ -33,11 +33,12 @@ function topic(
   return { surface, scrolls };
 }
 
-function strategy(browseMode: 'deep' | 'quick', stopAt = Infinity) {
+function strategy(browseMode: 'deep' | 'quick', stopAt = Infinity, quickFloors = { min: 3, max: 5 }) {
   const advances: FloorAdvance[] = [];
   let confirmed = 0;
   const s: ReadStrategy = {
     browseMode,
+    quickFloors,
     onFloor(a) {
       advances.push(a);
       if (a.confirmed) confirmed += a.to - a.from;
@@ -187,11 +188,22 @@ describe('QUICK-001 quick reading (Q01–Q03)', () => {
     }
   });
 
-  it('gives up after 10 scrolls with 400–800 px steps', async () => {
+  it('reads the configured floor range', async () => {
+    for (const seed of [1, 2, 3]) {
+      const time = new VirtualTime();
+      const { surface } = topic(time, { total: 200, pxPerFloor: 500 });
+      const out = await time.drive(readFloors(surface, strategy('quick', Infinity, { min: 10, max: 12 }).s, time.deps(seed), new AbortController().signal));
+      const climbed = (out.endFloor ?? 0) - (out.startFloor ?? 0);
+      expect(climbed).toBeGreaterThanOrEqual(10);
+      expect(climbed).toBeLessThanOrEqual(12 + 1);
+    }
+  });
+
+  it('gives up after two scrolls per goal floor with 400–800 px steps', async () => {
     const time = new VirtualTime();
     const { surface, scrolls } = topic(time, { total: 200, frozen: true });
-    await read(time, surface, strategy('quick').s);
-    expect(scrolls).toHaveLength(QUICK.maxScrolls);
+    await read(time, surface, strategy('quick', Infinity, { min: 5, max: 5 }).s);
+    expect(scrolls).toHaveLength(5 * QUICK.scrollsPerFloor);
     for (const dy of scrolls) expect(dy >= 400 && dy <= 800).toBe(true);
   });
 });

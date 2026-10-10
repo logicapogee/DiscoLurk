@@ -38,6 +38,7 @@ function plan(runMode: RunMode, browserMode: BrowserMode = 'headless', cats = ca
       },
       extraWait: { enabled: true, minSec: 1, maxSec: 3 },
       samplePerCategory: { min: 3, max: 8 },
+      quickFloors: { min: 3, max: 5 },
       experiments: { ...EXPERIMENTS_OFF },
     },
   };

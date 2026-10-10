@@ -44,7 +44,7 @@ const USAGE = `lurk ${VERSION}
 
 Usage:
   lurk login --site <id> [--profile <name>] [--channel chrome|msedge]
-  lurk run --site <id> [--profile <name>] [--browse-mode deep|quick] [--run-mode endless|topics:<n>[-<max>]|time:<min≤1440>]
+  lurk run --site <id> [--profile <name>] [--browse-mode deep|quick [--quick-floors <n>[-<max>]]] [--run-mode endless|topics:<n>[-<max>]|time:<min≤1440>]
            [--categories <slug|path,...>] [--headed|--headless] [--channel chrome|msedge] [--json]
            [--like [--like-rate <%>] [--reply-like-rate <%>] [--max-reply-likes <n≤4>]]
            [--reply --i-understand-auto-reply-risk [--reply-rate <%>]]

@@ -3,7 +3,7 @@ name: CI
 # Also called by build.yml, so a release builds only from a tree that passes the same checks.
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
   workflow_call:
 

@@ -74,7 +74,7 @@ function activeRun(over: Partial<ActiveRun> = {}): ActiveRun {
     materializedAt: new Date().toISOString(),
     preset: { presetId: preset.id, browseMode: 'deep', runMode: { kind: 'endless' }, categories, interaction: preset.interaction, extraWait: preset.extraWait, samplePerCategory: preset.samplePerCategory, quickFloors: { min: 3, max: 5 }, experiments: EXPERIMENTS_OFF },
   };
-  return { runId: 'run-1', presetId: preset.id, presetName: preset.name, plan, startedAt: new Date().toISOString(), state: 'queued', stopping: false, ...over };
+  return { runId: 'run-1', presetId: preset.id, presetName: preset.name, plan, startedAt: new Date().toISOString(), state: 'queued', stopping: false, skippingWait: false, ...over };
 }
 
 function fakeApi() {
@@ -144,6 +144,18 @@ describe('run page', () => {
     });
     await screen.findByRole('button', { name: copy.run.start });
     expect(screen.getByText(copy.stopCauses.user!)).toBeTruthy();
+  });
+
+  it('offers to skip the wait for site statistics once a stopped run is verifying', async () => {
+    const api = fakeApi();
+    const store = mount(api);
+    fireEvent.click(screen.getByRole('button', { name: copy.run.start }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalled());
+    store.apply({ type: 'run', run: activeRun({ state: 'verifying', stopping: true }) });
+    fireEvent.click(await screen.findByRole('button', { name: copy.run.skipWait }));
+    await waitFor(() => expect(api.stopRun).toHaveBeenCalledWith('run-1'));
+    store.apply({ type: 'run', run: activeRun({ state: 'verifying', stopping: true, skippingWait: true }) });
+    expect(((await screen.findByRole('button', { name: copy.run.stopping })) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('keeps automatic replies off when the risk dialog is cancelled', async () => {

@@ -118,7 +118,7 @@ export function reportedTopicsShortfall(stats: Pick<RunStats, 'confirmed' | 'rep
 export class DiscoLurkCoordinator implements RunCoordinator {
   constructor(private readonly env: CoordinatorEnv) {}
 
-  async run(plan: RunPlanSnapshot, signal: AbortSignal, emit: (e: RunEvent) => void): Promise<RunResult> {
+  async run(plan: RunPlanSnapshot, signal: AbortSignal, emit: (e: RunEvent) => void, skipWait?: AbortSignal): Promise<RunResult> {
     // The snapshot's seed fixes this run's choices, so the same snapshot replays the same picks.
     const deps: RuntimeDeps = { ...this.env.deps, random: seededRandom(plan.seed) };
     const at = () => new Date(deps.clock.now()).toISOString();
@@ -195,7 +195,7 @@ export class DiscoLurkCoordinator implements RunCoordinator {
           warn('final-progress-failed', `${f.code}: ${f.message}`);
         }
         if (levels.final && runSite.progressSource === 'connect-linuxdo' && reportedTopicsShortfall(stats) !== null) {
-          const exited = await this.awaitSiteLag(stats, deps, { exit: this.env.exitSignal, closed: session.closed, user: signal }, readFinal, warn);
+          const exited = await this.awaitSiteLag(stats, deps, { exit: this.env.exitSignal, closed: session.closed, user: signal, skip: skipWait }, readFinal, warn);
           if (exited) return end('cancelled', 'app-exit', failure);
         }
       }
@@ -352,20 +352,26 @@ export class DiscoLurkCoordinator implements RunCoordinator {
   /**
    * The browser stays open while connect catches up, then the final read runs once more and
    * its numbers replace the first ones. A user stop or a closed browser during the wait keeps the
-   * first read; only the app exiting cancels the run, which the `true` result reports.
+   * first read, as does the skip request a person sends after stopping; only the app exiting
+   * cancels the run, which the `true` result reports.
    */
   private async awaitSiteLag(
     stats: RunStats,
     deps: RuntimeDeps,
-    signals: { exit: AbortSignal | undefined; closed: AbortSignal; user: AbortSignal },
+    signals: { exit: AbortSignal | undefined; closed: AbortSignal; user: AbortSignal; skip: AbortSignal | undefined },
     readFinal: () => Promise<void>,
     warn: (code: string, message: string) => void,
   ): Promise<boolean> {
     const exited = () => signals.exit?.aborted === true;
     const missing = () => `${reportedTopicsShortfall(stats) ?? 0} of ${stats.confirmed.topics} confirmed topics`;
     warn('site-lag', `Site statistics are missing ${missing()}; reading again in ${TIMEOUTS.siteLagMs / 60_000} minutes`);
-    // A run already stopped by the user still waits; only a second request (the exit signal) cuts it short.
-    const waitSignal = AbortSignal.any([signals.closed, ...(signals.exit ? [signals.exit] : []), ...(signals.user.aborted ? [] : [signals.user])]);
+    // A run already stopped by the user still waits; only a second request (skip or exit) cuts it short.
+    const waitSignal = AbortSignal.any([
+      signals.closed,
+      ...(signals.exit ? [signals.exit] : []),
+      ...(signals.skip ? [signals.skip] : []),
+      ...(signals.user.aborted ? [] : [signals.user]),
+    ]);
     try {
       await deps.sleeper.sleep(TIMEOUTS.siteLagMs, waitSignal);
     } catch (err) {

@@ -100,6 +100,7 @@ export const copy = {
     start: '开始',
     stop: '停止',
     stopping: '正在安全停止…',
+    skipWait: '不等站点统计，立即结束',
     starting: '正在启动…',
     elapsed: '已运行',
     remaining: '剩余',

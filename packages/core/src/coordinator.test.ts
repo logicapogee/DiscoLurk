@@ -114,9 +114,10 @@ function setup(opts: Setup = {}) {
   };
   const coordinator = new DiscoLurkCoordinator(env);
   const controller = new AbortController();
-  const run = (p: RunPlanSnapshot) => time.drive(coordinator.run(p, controller.signal, (e) => events.push(e)));
+  const skipWait = new AbortController();
+  const run = (p: RunPlanSnapshot) => time.drive(coordinator.run(p, controller.signal, (e) => events.push(e), skipWait.signal));
   const states = () => events.filter((e) => e.type === 'state').map((e) => (e as { state: RunState }).state);
-  return { time, forum, coordinator, events, controller, browser, run, states, categoryStore, closed: () => closed, eventsAtClose: () => eventsAtClose };
+  return { time, forum, coordinator, events, controller, skipWait, browser, run, states, categoryStore, closed: () => closed, eventsAtClose: () => eventsAtClose };
 }
 
 /** A headed login that only succeeds once the virtual clock passes `atMs`; it polls like B04. */
@@ -634,6 +635,26 @@ describe('S07 connect lag: one interruptible re-read of the final progress', () 
     expect(out.stats.confirmed.topics).toBeGreaterThan(0);
     expect(finalReadsAt).toHaveLength(1);
     expect(out).toMatchObject({ outcome: 'cancelled', stopCause: 'app-exit' });
+  });
+  it('a run the user already stopped ends the wait on a skip request and completes with the first final read', async () => {
+    const finalReadsAt: number[] = [];
+    const t: ReturnType<typeof setup> = setup({
+      site: connect,
+      forum: {
+        progress: async (kind) => {
+          if (kind === 'initial') return viewed(100);
+          finalReadsAt.push(t.time.clock.monotonic());
+          t.time.at(t.time.clock.monotonic() + 30_000, () => t.skipWait.abort());
+          return viewed(100);
+        },
+      },
+    });
+    t.time.at(40_000, () => t.controller.abort(stopRequest('user')));
+    const out = await t.run(plan({ kind: 'endless' }));
+    expect(finalReadsAt).toHaveLength(1);
+    expect(out).toMatchObject({ outcome: 'completed', stopCause: 'user' });
+    expect(out.stats.reported?.topicsViewed).toEqual({ initial: 100, final: 100 });
+    expect(t.events.some((e) => e.type === 'warning' && /Stopped while waiting/.test(e.message))).toBe(true);
   });
 });
 

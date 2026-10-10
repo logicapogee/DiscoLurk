@@ -33,6 +33,8 @@ export function RunPage() {
   const profile = profiles.find((p) => p.id === draft?.profileId);
   const run = draft ? runFor(state.runs, draft.id) : undefined;
   const running = run !== undefined && !run.result;
+  // A stopped run may still wait minutes for the site's statistics; a second press ends that wait.
+  const canSkipWait = running && run.stopping && !run.skippingWait && run.state === 'verifying';
   const events = run ? (state.events[run.runId] ?? []) : [];
   const live = run ? state.live[run.runId] : undefined;
   const stats = run?.result?.stats ?? live?.stats;
@@ -259,8 +261,8 @@ export function RunPage() {
             {message && <Notice kind={message.kind}>{message.text}</Notice>}
             <div class="actions">
               {running ? (
-                <button type="button" class="danger big" onClick={stop} disabled={run.stopping}>
-                  {run.stopping ? copy.run.stopping : copy.run.stop}
+                <button type="button" class="danger big" onClick={stop} disabled={run.stopping && !canSkipWait}>
+                  {canSkipWait ? copy.run.skipWait : run.stopping ? copy.run.stopping : copy.run.stop}
                 </button>
               ) : (
                 <button type="button" class="primary big" onClick={start} disabled={pending === 'start'}>

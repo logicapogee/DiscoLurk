@@ -74,6 +74,8 @@ export interface ActiveRun {
   startedAt: string;
   state: RunState;
   stopping: boolean;
+  /** A second stop asked to skip the wait for site statistics. */
+  skippingWait: boolean;
   /** Settled once the run has ended; the record then moves to history. */
   result?: RunResult;
 }

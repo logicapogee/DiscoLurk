@@ -147,7 +147,11 @@ export interface AuthSession {
 }
 
 export interface RunCoordinator {
-  run(plan: RunPlanSnapshot, signal: AbortSignal, emit: (e: RunEvent) => void): Promise<RunResult>;
+  /**
+   * `signal` asks for a graceful stop. `skipWait` is the second request a person makes once that
+   * stop is under way: it ends the wait for connect's statistics and keeps the first final read.
+   */
+  run(plan: RunPlanSnapshot, signal: AbortSignal, emit: (e: RunEvent) => void, skipWait?: AbortSignal): Promise<RunResult>;
   inspect(profileId: ProfileId): Promise<ProfileHealth>;
   beginAuth(profileId: ProfileId): Promise<AuthSession>;
 }

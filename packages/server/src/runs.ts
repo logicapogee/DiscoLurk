@@ -115,6 +115,7 @@ interface RunManagerDeps {
 interface Live {
   view: ActiveRun;
   controller: AbortController;
+  skipWait: AbortController;
   done: Promise<void>;
 }
 
@@ -165,6 +166,7 @@ export class RunManager {
     if (this.live.has(plan.id)) throw new HttpError(409, 'run-exists', `Run ${plan.id} is already running`);
     const release = this.deps.gate.claim(plan.profileId, `run ${plan.id}`);
     const controller = new AbortController();
+    const skipWait = new AbortController();
     const view: ActiveRun = {
       runId: plan.id,
       presetId: plan.preset.presetId,
@@ -173,6 +175,7 @@ export class RunManager {
       startedAt: new Date(this.deps.clock.now()).toISOString(),
       state: 'queued',
       stopping: false,
+      skippingWait: false,
     };
     let askedToSignIn = false;
     let seq = 0;
@@ -222,11 +225,11 @@ export class RunManager {
       await onEnded?.(result).catch((err: unknown) => this.deps.log?.(`run ${plan.id}: recording its end for the scheduler failed: ${String(err)}`));
     };
     this.deps.history.openRun({ runId: plan.id, presetId: view.presetId, presetName, plan: view.plan, startedAt: view.startedAt });
-    const done = this.deps.coordinator.run(plan, controller.signal, emit).then(finish, (err: unknown) =>
+    const done = this.deps.coordinator.run(plan, controller.signal, emit, skipWait.signal).then(finish, (err: unknown) =>
       // The coordinator turns every run failure into a result; reaching here is a bug worth a record.
       finish({ outcome: 'failed', stopCause: 'error', stats: emptyStats(), failure: toFailure(err), baseline: 'missing', levels: { initial: null, final: null } }),
     );
-    this.live.set(plan.id, { view, controller, done });
+    this.live.set(plan.id, { view, controller, skipWait, done });
     this.deps.notify('run-started', '开始运行', `${presetName}：${plan.profileId} · ${plan.browserMode === 'headless' ? '无头' : '有头'}`);
     this.deps.hub.publish({ type: 'run', run: structuredClone(view) });
     this.deps.onActiveChange?.(this.live.size);
@@ -246,6 +249,11 @@ export class RunManager {
   stop(runId: string, reason: StopRequest = 'user'): ActiveRun {
     const l = this.live.get(runId);
     if (!l) throw new HttpError(404, 'unknown-run', `Run ${runId} is not running`);
+    // A second stop from the person ends the wait for site statistics that a graceful stop keeps.
+    if (l.view.stopping && reason === 'user') {
+      l.view.skippingWait = true;
+      l.skipWait.abort();
+    }
     l.view.stopping = true;
     l.controller.abort(stopRequest(reason));
     this.deps.hub.publish({ type: 'run', run: structuredClone(l.view) });

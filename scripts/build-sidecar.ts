@@ -74,9 +74,11 @@ await build({
 });
 
 const binary = join(outDir, `lurk-${triple}${exe}`);
+// pkg's JS entry runs under this same Node; `node_modules/.bin/pkg` is a shell script that Windows can only run as `pkg.cmd`.
+const pkgCli = join(dirname(createRequire(join(root, 'package.json')).resolve('@yao-pkg/pkg/package.json')), 'lib-es5/bin.js');
 execFileSync(
-  join(root, 'node_modules/.bin/pkg'),
-  [stage, '--targets', pkgTarget, '--output', binary, '--no-bytecode', '--public', '--public-packages', '*'],
+  process.execPath,
+  [pkgCli, stage, '--targets', pkgTarget, '--output', binary, '--no-bytecode', '--public', '--public-packages', '*'],
   { stdio: 'inherit' },
 );
 

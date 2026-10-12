@@ -53,7 +53,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Linux build dependencies
         if: runner.os == 'Linux'
@@ -130,7 +130,7 @@ jobs:
       - name: Collect artifacts
         run: node scripts/ci-collect.ts --triple ${{ matrix.triple }} --name ${{ matrix.name }} --out out
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: disco-lurk-${{ matrix.name }}
           path: out/
@@ -143,18 +143,18 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: disco-lurk-*
           merge-multiple: true
       - name: Updater manifest
         run: node .github/scripts/updater-manifest.ts artifacts "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           # A `-` suffix (v1.2.0-rc.1) marks a pre-release; the updater only follows full releases.
           prerelease: ${{ contains(github.ref_name, '-') }}

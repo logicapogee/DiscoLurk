@@ -27,9 +27,10 @@ describe('SITE-001 site configuration (§2.2)', () => {
     ]);
     expect(docofcard).toMatchObject({
       id: 'docofcard',
+      baseUrl: 'https://time.fly',
       categorySource: 'discovered',
       progressSource: 'trust-level-docofcard',
-      progressUrl: 'https://forum.docofcard.com/my/trust-level',
+      progressUrl: 'https://time.fly/my/trust-level',
       // Phase 1 T1: opening topics by address also raised 进入过的主题 on docofcard.
       behaviorVerified: { clickEntryRequired: false },
     });

@@ -16,12 +16,12 @@
     {
       "id": "docofcard",
       "displayName": "卡粉论坛",
-      "baseUrl": "https://forum.docofcard.com",
+      "baseUrl": "https://time.fly",
       "kind": "discourse",
       "login": "headed",
       "categorySource": "discovered",
       "progressSource": "trust-level-docofcard",
-      "progressUrl": "https://forum.docofcard.com/my/trust-level",
+      "progressUrl": "https://time.fly/my/trust-level",
       "behaviorVerified": { "clickEntryRequired": false }
     }
   ]

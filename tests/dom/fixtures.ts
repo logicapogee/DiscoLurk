@@ -10,7 +10,7 @@ export const SITE_IDS: readonly SiteId[] = ['linuxdo', 'docofcard'];
 
 export const BASE_URL: Readonly<Record<SiteId, string>> = {
   linuxdo: 'https://linux.do',
-  docofcard: 'https://forum.docofcard.com',
+  docofcard: 'https://time.fly',
 };
 
 const cache = new Map<string, Document>();

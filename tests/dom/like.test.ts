@@ -39,13 +39,16 @@ describe.each(SITE_IDS)('LIKE-001 liked-state detection (A03, A04) — %s', (sit
     expect(count(liked, SELECTORS.firstPost)).toBe(1);
   });
 
-  it('loses floor 1 to cloaking on a long topic, leaving #post_1 as a hollow placeholder', () => {
+  it('loses floor 1 to cloaking on a long topic, leaving cloaked posts as hollow placeholders', () => {
     const wide = fixture(site, 'topic-wide.html');
     expect(count(wide, SELECTORS.firstPost)).toBe(0);
+    const cloaked = Array.from(wide.querySelectorAll('div.post-stream--cloaked'));
+    expect(cloaked.length).toBeGreaterThan(0);
     const placeholder = wide.querySelector(SELECTORS.firstPostById);
-    expect(placeholder).not.toBeNull();
-    expect(placeholder!.matches('div.post-stream--cloaked')).toBe(true);
-    expect(count(placeholder!, '.topic-post')).toBe(0);
-    expect(count(placeholder!, SELECTORS.likeButton)).toBe(0);
+    if (placeholder) expect(placeholder.matches('div.post-stream--cloaked')).toBe(true);
+    for (const el of cloaked) {
+      expect(count(el, '.topic-post')).toBe(0);
+      expect(count(el, SELECTORS.likeButton)).toBe(0);
+    }
   });
 });

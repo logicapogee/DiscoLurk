@@ -7,7 +7,7 @@ import { BASE_URL, SITE_IDS, fixture, textOf } from './fixtures';
 const appendixC = (readData('categories.json') as { categories: Category[] }).categories;
 
 /** docofcard's ten top-level categories as its category-box headings name them. */
-const DOCOFCARD_NAMES = ['卡片交流', '运营反馈', '人工智能', '号码交流', 'General', 'Feed', '卡友活动', '交易拼车', '热点消息', '行旅常客'];
+const DOCOFCARD_NAMES = ['综合讨论', '卡片交流', '号码交流', '人工智能', '茶余饭后', '交易拼车', '行旅常客', '卡友活动', '运营反馈', '资讯'];
 
 describe.each(SITE_IDS)('CAT-001 category discovery from /categories (§7.1 step 2, Appendix A) — %s', (site) => {
   const doc = fixture(site, 'categories.html');

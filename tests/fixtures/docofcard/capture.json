@@ -1,7 +1,7 @@
 {
   "siteId": "docofcard",
-  "capturedAt": "2026-10-08T14:34:22.613Z",
-  "discourseVersion": "Discourse 2026.10.0-latest - https://github.com/discourse/discourse version 1cb76a9fd1d64e5e07fde8d39b33c97ec7ca3d26",
+  "capturedAt": "2026-11-27T07:24:24.470Z",
+  "discourseVersion": "Discourse 2026.12.0-latest - https://github.com/discourse/discourse version 980e6777a39d27f450dd07af9ebb93a84467c303",
   "steps": {
     "categories": {
       "ok": true,
@@ -18,76 +18,85 @@
         "list.html"
       ],
       "path": "/c/general/4",
-      "rows": 22,
+      "rows": 26,
       "pinned": 1,
       "newTopic": 0,
-      "unreadPosts": 0
+      "unreadPosts": 1
     },
     "list-sorted": {
-      "ok": false,
-      "sortedVia": "list URL (no sort button)",
-      "note": "sorted via list URL (no sort button); topic 1111 has 477 replies",
+      "ok": true,
+      "note": "opened ?order=posts to sort by replies; topic 1111 has 477 replies",
       "files": [
         "list-sorted.html"
       ],
-      "url": "https://forum.docofcard.com/c/general/4?order=posts"
+      "url": "https://time.fly/c/general/4?order=posts"
     },
     "topic": {
       "ok": true,
-      "note": "wide {\"layout\":\"wide\",\"current\":4,\"total\":478}, narrow at 880px {\"layout\":\"narrow\",\"current\":4,\"total\":478}",
+      "note": "wide {\"layout\":\"wide\",\"current\":468,\"total\":478}, narrow at 760px {\"layout\":\"narrow\",\"current\":467,\"total\":478}",
       "files": [
         "topic-wide.html",
         "topic-narrow.html"
       ],
       "topicId": "1111",
       "replies": 477,
-      "narrowWidth": 880,
-      "returnedUrl": "https://forum.docofcard.com/c/general/4?order=posts"
-    },
-    "reply-editor": {
-      "ok": true,
-      "note": "editor d-editor-input; closed by #reply-control .discard-button",
-      "files": [
-        "reply-editor.html"
-      ],
-      "topicId": "688"
+      "narrowWidth": 760,
+      "returnedUrl": "https://time.fly/c/general/4?order=posts"
     },
     "progress": {
       "ok": true,
-      "note": "4 rows; loader captured",
+      "note": "14 rows; loader captured",
       "files": [
         "trust-level.html",
         "trust-level-loader.html"
       ],
-      "redirectedTo": "https://forum.docofcard.com/u/user1/trust-level",
+      "redirectedTo": "https://time.fly/u/user1/trust-level",
       "timings": {
         "firstLoad": {
-          "loaderMs": 288.3822919999948,
-          "tableMs": 476.206124999997,
-          "loaderGone": false
+          "loaderMs": 404.8445000000065,
+          "tableMs": 823.976874999993
         },
         "afterReload": {
-          "loaderMs": 374.5411250000034,
-          "tableMs": 642.0113750000019,
-          "loaderGone": false
+          "loaderMs": 381.7422089999891,
+          "tableMs": 668.9762089999858
         }
       },
       "beforeReload": {
-        "进入过的主题": 25,
-        "已读帖子": 193,
-        "阅读时间（分钟）": 19,
-        "注册时长（分钟）": 31008
+        "回复的话题": 15,
+        "浏览的话题": 229,
+        "浏览的话题（所有时间）": 229,
+        "已读帖子": 7797,
+        "连续有效活跃天数": 1212100,
+        "已读帖子（所有时间）": 7797,
+        "被举报的帖子": 0,
+        "发起举报的用户": 0,
+        "点赞": 7,
+        "获赞": 8,
+        "获赞：被点赞的天数": 4,
+        "获赞：点赞用户数量": 7,
+        "被禁言（过去 6 个月）": 0,
+        "被封禁（过去 6 个月）": 0
       },
       "afterReload": {
-        "进入过的主题": 25,
-        "已读帖子": 193,
-        "阅读时间（分钟）": 19,
-        "注册时长（分钟）": 31008
+        "回复的话题": 15,
+        "浏览的话题": 229,
+        "浏览的话题（所有时间）": 229,
+        "已读帖子": 7797,
+        "连续有效活跃天数": 1212100,
+        "已读帖子（所有时间）": 7797,
+        "被举报的帖子": 0,
+        "发起举报的用户": 0,
+        "点赞": 7,
+        "获赞": 8,
+        "获赞：被点赞的天数": 4,
+        "获赞：点赞用户数量": 7,
+        "被禁言（过去 6 个月）": 0,
+        "被封禁（过去 6 个月）": 0
       }
     },
     "liked": {
       "ok": true,
-      "note": "floor 2; Appendix A liked markers on page {\"hasLike\":0,\"myLikes\":0,\"hasUsed\":0,\"container\":0}",
+      "note": "floor 2; liked-state markers on that floor {\"reacted\":2,\"likedIcon\":1}",
       "files": [
         "liked.html"
       ],
@@ -104,11 +113,11 @@
         "div.discourse-reactions-reaction-button[title=\"移除此赞\"]",
         "button.btn.no-text.btn-icon.btn-toggle-reaction-like.btn-flat.reaction-button[title=\"移除此赞\"]",
         "svg.fa.d-icon.d-icon-d-liked.svg-icon.fa-width-auto.svg-string",
-        "button.btn.no-text.btn-icon.post-action-menu__copy-link.btn-flat.post-action-feedback-button[title=\"将此帖子的链接复制到剪贴板\"]",
-        "button.btn.no-text.btn-icon.fk-d-menu__trigger.bookmark-menu-trigger.post-action-menu__bookmark.btn-flat.bookmark.widget-button.bookmark-menu__trigger[title=\"将此帖子添加为书签\"]",
+        "button.btn.no-text.btn-icon.post-action-menu__copy-link.btn-flat[title=\"将此帖子的链接复制到剪贴板\"]",
+        "button.btn.no-text.btn-icon.post-action-menu__show-more.show-more-actions.btn-flat[title=\"显示更多\"]",
         "button.btn.btn-icon-text.post-action-menu__reply.reply.create.fade-out.btn-flat[title=\"开始撰写对此帖子的回复\"]"
       ],
-      "url": "https://forum.docofcard.com/t/topic/872"
+      "url": "https://time.fly/t/topic/2363"
     },
     "login-form": {
       "ok": true,

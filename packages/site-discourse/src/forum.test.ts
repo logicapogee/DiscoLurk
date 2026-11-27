@@ -12,12 +12,12 @@ import { WHEEL } from './wheel';
 import { loginForm, timingsReceipt, timingsUrlOf } from './session';
 import { parseTimingsBody } from './parse';
 
-const site = { baseUrl: 'https://forum.docofcard.com' };
+const site = { baseUrl: 'https://time.fly' };
 
 describe('LIST-001 list entry per browse mode (T02)', () => {
   it('deep mode opens the category sorted by replies through the URL; quick mode uses the plain list', () => {
-    expect(listUrlFor(site, { path: '/c/bank/6' }, 'deep')).toBe('https://forum.docofcard.com/c/bank/6?order=posts');
-    expect(listUrlFor(site, { path: '/c/bank/6' }, 'quick')).toBe('https://forum.docofcard.com/c/bank/6');
+    expect(listUrlFor(site, { path: '/c/bank/6' }, 'deep')).toBe('https://time.fly/c/bank/6?order=posts');
+    expect(listUrlFor(site, { path: '/c/bank/6' }, 'quick')).toBe('https://time.fly/c/bank/6');
     expect(listUrlFor({ baseUrl: 'https://linux.do' }, { path: '/c/resource/cloud-asset/94' }, 'deep')).toBe(
       'https://linux.do/c/resource/cloud-asset/94?order=posts',
     );
@@ -86,7 +86,7 @@ describe('page reads that may come up empty', () => {
 
 describe('username from the /my redirect (B04)', () => {
   it('reads and decodes the /u/<name> segment, and nothing else', () => {
-    expect(usernameFromUrl('https://forum.docofcard.com/u/alice/summary')).toBe('alice');
+    expect(usernameFromUrl('https://time.fly/u/alice/summary')).toBe('alice');
     expect(usernameFromUrl('https://linux.do/u/%E5%BC%A0%E4%B8%89/activity')).toBe('张三');
     expect(usernameFromUrl('https://linux.do/my/activity')).toBeNull();
   });
@@ -94,7 +94,7 @@ describe('username from the /my redirect (B04)', () => {
 
 describe('DiscourseForum.readUsername (B04)', () => {
   const fixture = (siteId: string, file: string) => readFileSync(fileURLToPath(new URL(`../../../tests/fixtures/${siteId}/${file}`, import.meta.url)), 'utf8');
-  const docofcard = fixtureSite({ baseUrl: 'https://forum.docofcard.com' });
+  const docofcard = fixtureSite({ baseUrl: 'https://time.fly' });
   const capturedRedirect: string = JSON.parse(fixture('docofcard', 'capture.json')).steps.progress.redirectedTo;
   const signedIn = '<header><a id="current-user"><img class="avatar" title="" alt=""></a></header>';
 
@@ -108,10 +108,10 @@ describe('DiscourseForum.readUsername (B04)', () => {
   }
 
   it('docofcard: reads the name from the captured /u/<name>/... redirect', async () => {
-    const page = redirecting('https://forum.docofcard.com/', capturedRedirect, fixture('docofcard', 'trust-level.html'));
+    const page = redirecting('https://time.fly/', capturedRedirect, fixture('docofcard', 'trust-level.html'));
     const { forum } = forumWith(page, { site: docofcard });
     expect(await forum.readUsername(new AbortController().signal)).toBe('user1');
-    expect(page.navigations).toEqual(['goto https://forum.docofcard.com/my/activity']);
+    expect(page.navigations).toEqual(['goto https://time.fly/my/activity']);
   });
 
   it('linux.do: reads and decodes the name from the /u/<name>/activity redirect', async () => {
@@ -122,7 +122,7 @@ describe('DiscourseForum.readUsername (B04)', () => {
   });
 
   it('falls back to the profile header when the address shows no /u/<name>', async () => {
-    const page = redirecting('https://forum.docofcard.com/', 'https://forum.docofcard.com/my/activity', fixture('docofcard', 'trust-level.html'));
+    const page = redirecting('https://time.fly/', 'https://time.fly/my/activity', fixture('docofcard', 'trust-level.html'));
     const { forum } = forumWith(page, { site: docofcard });
     expect(await forum.readUsername(new AbortController().signal)).toBe('user1');
   });
@@ -212,8 +212,8 @@ describe('connect OAuth authorization page (§5.1)', () => {
 });
 
 describe('docofcard trust level page while signed out', () => {
-  const TRUST = 'https://forum.docofcard.com/my/trust-level';
-  const site = fixtureSite({ baseUrl: 'https://forum.docofcard.com', progressSource: 'trust-level-docofcard', progressUrl: TRUST });
+  const TRUST = 'https://time.fly/my/trust-level';
+  const site = fixtureSite({ baseUrl: 'https://time.fly', progressSource: 'trust-level-docofcard', progressUrl: TRUST });
   const read = (page: StaticPage) => {
     const t = forumWith(page, { site });
     return t.time.drive(t.forum.readProgress('final', new AbortController().signal));
@@ -221,7 +221,25 @@ describe('docofcard trust level page while signed out', () => {
 
   it('reports needs-auth when the site shows its login page instead of the table', async () => {
     const login = '<html><body><header class="d-header"><button class="login-button">登录</button></header><input id="login-account-name"></body></html>';
-    await expect(read(new StaticPage('https://forum.docofcard.com/login', login))).rejects.toMatchObject({ code: 'needs-auth' });
+    await expect(read(new StaticPage('https://time.fly/login', login))).rejects.toMatchObject({ code: 'needs-auth' });
+  });
+
+  it('reports needs-auth immediately on the /pub public-news landing page without waiting out the sign-in timeout', async () => {
+    const pubHtml =
+      '<html><body class="published-page docofcard-public-news"><header class="docofcard-public-news-header">' +
+      '<nav class="docofcard-public-news-header__actions"><a class="docofcard-public-news-header__action docofcard-public-news-header__guest" href="/login?redirect=%2F" aria-label="登录"></a></nav>' +
+      '</header></body></html>';
+    const page = new StaticPage('about:blank', '');
+    page.onNavigate = (kind) => {
+      if (kind === 'goto') {
+        page.address = 'https://time.fly/pub';
+        page.html = pubHtml;
+      }
+    };
+    const t = forumWith(page, { site });
+    const start = t.time.clock.monotonic();
+    await expect(t.time.drive(t.forum.ensureAuthenticated('headless-check', new AbortController().signal))).resolves.toEqual({ status: 'needs-auth' });
+    expect(t.time.clock.monotonic()).toBe(start);
   });
 
   it('reports needs-auth when the table is gone after the reload because the session ended', async () => {
@@ -372,8 +390,8 @@ describe('B10 password login keeps the credentials out of every report', () => {
   const SECRET = 'hunter2-Sup3rSecret';
 
   it('a failing login form yields a RunResult and events that never contain the password', async () => {
-    const site = fixtureSite({ baseUrl: 'https://forum.docofcard.com', login: 'password' });
-    const page = new StaticPage('https://forum.docofcard.com/', '<header><button class="login-button"></button></header><input id="login-account-name">');
+    const site = fixtureSite({ baseUrl: 'https://time.fly', login: 'password' });
+    const page = new StaticPage('https://time.fly/', '<header><button class="login-button"></button></header><input id="login-account-name">');
     // Playwright quotes the value it was asked to type in some failures.
     const leaky = (value: string) => Object.assign(new Error(`locator.fill: Element is not an <input> while filling "${value}"`), { name: 'Error' });
     const fakePage = {

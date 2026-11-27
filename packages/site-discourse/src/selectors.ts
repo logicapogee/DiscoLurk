@@ -108,8 +108,11 @@ export const topicUrlPattern = (topicId: string) => new RegExp(`/t/[^/?#]+/${top
 export const CHALLENGE_SELECTOR = '#challenge-form, #challenge-stage, #cf-challenge-running, iframe[src*="challenges.cloudflare.com"]';
 export const CHALLENGE_TITLE = /just a moment|attention required|请稍候/i;
 
-/** Not from the selector table: the header's sign-in button, which Discourse renders only for anonymous visitors. */
-export const ANONYMOUS_HEADER = '.d-header .login-button';
+/**
+ * Not from the selector table: the header's sign-in control rendered only for anonymous visitors
+ * (standard Discourse `.d-header .login-button`, or docofcard's `/pub` public-news landing page guest link).
+ */
+export const ANONYMOUS_HEADER = '.d-header .login-button, .docofcard-public-news-header__guest';
 
 /** Connect's progress page is ready once any of its four metric groups renders. */
 export const CONNECT_READY = '.tl3-ring, .tl3-bar-item, .tl3-quota-card, .tl3-veto-item';

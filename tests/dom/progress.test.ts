@@ -26,12 +26,25 @@ const CONNECT_KEYS: Record<string, MetricKey> = {
   举报用户: 'other',
 };
 
-/** §5.1b mapping. */
+/** §5.1b mapping (TL0→1 and TL2→3 labels on docofcard). */
 const TRUST_LEVEL_KEYS: Record<string, MetricKey> = {
   进入过的主题: 'topicsViewed',
   已读帖子: 'postsRead',
   '阅读时间（分钟）': 'readingTime',
   '注册时长（分钟）': 'other',
+  回复的话题: 'repliesPosted',
+  浏览的话题: 'topicsViewed',
+  '浏览的话题（所有时间）': 'other',
+  连续有效活跃天数: 'other',
+  '已读帖子（所有时间）': 'other',
+  被举报的帖子: 'flagged',
+  发起举报的用户: 'other',
+  点赞: 'likesGiven',
+  获赞: 'likesReceived',
+  '获赞：被点赞的天数': 'other',
+  '获赞：点赞用户数量': 'other',
+  '被禁言（过去 6 个月）': 'silenced',
+  '被封禁（过去 6 个月）': 'suspended',
 };
 
 /** Values on tests/fixtures/linuxdo/connect.html, in page order. */
@@ -50,12 +63,22 @@ const CONNECT_ROWS: Array<[label: string, current: number, required: number]> = 
   ['被封禁', 0, 0],
 ];
 
-/** Values on tests/fixtures/docofcard/trust-level.html, in page order. */
-const TRUST_LEVEL_ROWS: Array<[label: string, indicator: '✓' | '×', current: number, required: number, complete: boolean]> = [
-  ['进入过的主题', '✓', 25, 5, true],
-  ['已读帖子', '✓', 193, 30, true],
-  ['阅读时间（分钟）', '×', 19, 30, false],
-  ['注册时长（分钟）', '✓', 31008, 30, true],
+/** Values on tests/fixtures/docofcard/trust-level.html (TL2→3), in page order. */
+const TRUST_LEVEL_ROWS: Array<[label: string, indicator: '✓' | '×', current: number, required: number, complete: boolean, limit?: true]> = [
+  ['回复的话题', '×', 15, 100, false],
+  ['浏览的话题', '✓', 229, 196, true],
+  ['浏览的话题（所有时间）', '×', 229, 300, false],
+  ['已读帖子', '✓', 7797, 2000, true],
+  ['连续有效活跃天数', '×', 12, 100, false],
+  ['已读帖子（所有时间）', '✓', 7797, 1000, true],
+  ['被举报的帖子', '✓', 0, 5, true, true],
+  ['发起举报的用户', '✓', 0, 5, true, true],
+  ['点赞', '×', 7, 30, false],
+  ['获赞', '×', 8, 20, false],
+  ['获赞：被点赞的天数', '×', 4, 7, false],
+  ['获赞：点赞用户数量', '✓', 7, 5, true],
+  ['被禁言（过去 6 个月）', '✓', 0, 0, true, true],
+  ['被封禁（过去 6 个月）', '✓', 0, 0, true, true],
 ];
 
 const EMPTY = () => parseDocument('<!doctype html><html><body><main></main></body></html>');
@@ -124,7 +147,7 @@ describe('CONNECT-002 metric keys and estimation (§5.2)', () => {
     expect(parseConnect(fixture('linuxdo', 'connect.html')).metrics.find((m) => m.label === label)?.key).toBe(key);
   });
 
-  it('holds exactly the 12 §5.1 labels for connect and the 4 §5.1b labels for the trust level page', () => {
+  it('holds the 12 §5.1 labels for connect and the TL0→1 + TL2→3 labels for the trust level page', () => {
     expect(LABEL_MAP['connect-linuxdo']).toEqual(CONNECT_KEYS);
     expect(LABEL_MAP['trust-level-docofcard']).toEqual(TRUST_LEVEL_KEYS);
   });
@@ -161,9 +184,37 @@ describe('CONNECT-002 metric keys and estimation (§5.2)', () => {
     });
   });
 
-  it('leaves readingTime unestimated on the trust level page', () => {
+  it('estimates the four countable keys on docofcard TL2→3 and leaves readingTime and other labels unestimated', () => {
     const estimated = estimateMetrics(readProgress('docofcard'), stats);
     expect(Object.fromEntries(estimated.map((m) => [m.label, m.estimated]))).toEqual({
+      回复的话题: 15 + 1,
+      浏览的话题: 229 + 5,
+      '浏览的话题（所有时间）': null,
+      已读帖子: 7797 + 40,
+      连续有效活跃天数: null,
+      '已读帖子（所有时间）': null,
+      被举报的帖子: null,
+      发起举报的用户: null,
+      点赞: 7 + 2 + 3,
+      获赞: null,
+      '获赞：被点赞的天数': null,
+      '获赞：点赞用户数量': null,
+      '被禁言（过去 6 个月）': null,
+      '被封禁（过去 6 个月）': null,
+    });
+    const tl0 = parseTrustLevel(
+      parseDocument(
+        '<table class="docofcard-tools-trust-level-progress__table"><tbody>' +
+          '<tr class="is-complete"><th scope="row">进入过的主题</th><td>✓</td><td>25</td><td>5</td></tr>' +
+          '<tr class="is-complete"><th scope="row">已读帖子</th><td>✓</td><td>193</td><td>30</td></tr>' +
+          '<tr class="is-incomplete"><th scope="row">阅读时间（分钟）</th><td>×</td><td>19</td><td>30</td></tr>' +
+          '<tr class="is-complete"><th scope="row">注册时长（分钟）</th><td>✓</td><td>31008</td><td>30</td></tr>' +
+          '</tbody></table>',
+      ),
+    );
+    expect(tl0.state).toBe('ready');
+    if (tl0.state !== 'ready') return;
+    expect(Object.fromEntries(estimateMetrics(tl0.snapshot, stats).map((m) => [m.label, m.estimated]))).toEqual({
       进入过的主题: 25 + 5,
       已读帖子: 193 + 40,
       '阅读时间（分钟）': null,
@@ -186,34 +237,48 @@ describe('TRUSTLEVEL-001 docofcard trust level page (§5.1b)', () => {
     const page = parseTrustLevel(ready);
     expect(page.state).toBe('ready');
     if (page.state !== 'ready') return;
-    expect(page.snapshot.level).toBe('初窥命运之人');
-    expect(page.snapshot.percent).toBe(91);
-    expect(page.snapshot.nextLevel).toBe('荣耀加身之人');
+    expect(page.snapshot.level).toBe('被历史铭记之人');
+    expect(page.snapshot.percent).toBe(73);
+    expect(page.snapshot.nextLevel).toBe('世界意志承载者');
   });
 
-  it('reads the four requirement rows: th[scope=row] name, indicator, current, required, completion class', () => {
+  it('reads every requirement row: th[scope=row] name, indicator, current, required, completion class and limits', () => {
     const rows = Array.from(ready.querySelectorAll(S.rows)).map((tr) => {
       const cells = Array.from(tr.children);
       expect(cells.map((c) => c.tagName)).toEqual(['TH', 'TD', 'TD', 'TD']);
       expect(cells[0]!.getAttribute('scope')).toBe('row');
       expect(cells[1]!.matches(S.indicator)).toBe(true);
       expect(tr.matches('.is-complete') !== tr.matches('.is-incomplete')).toBe(true);
-      return [textOf(cells[0]), textOf(cells[1]), Number(textOf(cells[2])), Number(textOf(cells[3])), tr.matches('.is-complete')];
+      const reqText = textOf(cells[3]);
+      return [
+        textOf(cells[0]),
+        textOf(cells[1]),
+        Number(/\d[\d,]*/.exec(textOf(cells[2]))![0].replace(/,/g, '')),
+        Number(/\d[\d,]*/.exec(reqText)![0].replace(/,/g, '')),
+        tr.matches('.is-complete'),
+        ...(reqText.includes('最多') ? ([true] as const) : []),
+      ];
     });
     expect(rows).toEqual(TRUST_LEVEL_ROWS);
   });
 
-  it('turns each row into a metric with its MetricKey', () => {
+  it('turns each row into a metric with its MetricKey and limit flag', () => {
     const page = parseTrustLevel(ready);
     if (page.state !== 'ready') throw new Error('not ready');
     expect(page.snapshot.metrics).toEqual(
-      TRUST_LEVEL_ROWS.map(([label, , current, required]) => ({ label, key: TRUST_LEVEL_KEYS[label], current, required })),
+      TRUST_LEVEL_ROWS.map(([label, , current, required, , limit]) => ({
+        label,
+        key: TRUST_LEVEL_KEYS[label],
+        current,
+        required,
+        ...(limit ? { limit: true } : {}),
+      })),
     );
   });
 
   it('keeps the loader in the DOM after the table renders, so readiness rests on table rows', () => {
     expect(ready.querySelectorAll(S.loader).length).toBe(1);
-    expect(ready.querySelectorAll(S.rows).length).toBe(4);
+    expect(ready.querySelectorAll(S.rows).length).toBe(14);
   });
 
   it('reports the loader-only page as not ready rather than a broken contract', () => {

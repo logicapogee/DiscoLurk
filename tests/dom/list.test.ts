@@ -14,8 +14,8 @@ const BADGES: Readonly<Record<SiteId, Record<ListFile, { newTopic: number; unrea
     'list-sorted.html': { newTopic: 0, unreadPosts: 3, pinned: 0 },
   },
   docofcard: {
-    'list.html': { newTopic: 0, unreadPosts: 0, pinned: 1 },
-    'list-sorted.html': { newTopic: 0, unreadPosts: 0, pinned: 1 },
+    'list.html': { newTopic: 0, unreadPosts: 1, pinned: 1 },
+    'list-sorted.html': { newTopic: 0, unreadPosts: 1, pinned: 1 },
   },
 };
 
